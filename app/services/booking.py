@@ -192,6 +192,46 @@ class BookingService:
 
     # ---------- Тренировки ----------
 
+    async def recent_locations(self, limit: int = 4) -> list[str]:
+        """Недавно использованные места (для быстрых кнопок при создании)."""
+        from sqlalchemy import select
+        from app.models.entities import Training
+        stmt = (select(Training.location)
+                .where(Training.tenant_id == self.tenant_id,
+                       Training.location != "")
+                .order_by(Training.id.desc()))
+        rows = (await self.session.execute(stmt)).scalars().all()
+        seen, result = set(), []
+        for loc in rows:
+            if loc not in seen:
+                seen.add(loc); result.append(loc)
+            if len(result) >= limit:
+                break
+        return result
+
+    async def times_for_weekday(self, weekday: int, limit: int = 3) -> list[str]:
+        """
+        Времена (ЧЧ:ММ) прошлых тренировок в указанный день недели
+        (0=Пн ... 6=Вс) — для подсказок «как обычно в этот день».
+        """
+        from sqlalchemy import select
+        from app.models.entities import Training
+        stmt = (select(Training.start_at)
+                .where(Training.tenant_id == self.tenant_id)
+                .order_by(Training.id.desc()))
+        rows = (await self.session.execute(stmt)).scalars().all()
+        seen, result = set(), []
+        for start in rows:
+            local = start.astimezone(self.tz) if start.tzinfo else start
+            if local.weekday() != weekday:
+                continue
+            hhmm = local.strftime("%H:%M")
+            if hhmm not in seen:
+                seen.add(hhmm); result.append(hhmm)
+            if len(result) >= limit:
+                break
+        return result
+
     async def create_training(self, *, title: str, start_at: dt.datetime,
                               location: str, max_participants: int,
                               platform: str, user_id: int,
