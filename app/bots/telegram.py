@@ -16,7 +16,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile, CallbackQuery, InlineKeyboardButton,
-    InlineKeyboardMarkup, Message, Update,
+    InlineKeyboardMarkup, KeyboardButton, Message,
+    ReplyKeyboardMarkup, Update,
 )
 
 from app.bots import views
@@ -58,6 +59,32 @@ def _username(x) -> str | None:
     return x.from_user.username  # без @ (может быть None)
 
 
+# Тексты кнопок постоянного меню (внизу экрана)
+BTN_LIST = "🏸 Тренировки"
+BTN_PROFILE = "👤 Профиль"
+BTN_STATS = "📊 Статистика"
+BTN_NEW = "➕ Создать"
+BTN_ATTEND = "✅ Явка/оплата"
+BTN_GUESTS = "👥 Гости"
+BTN_DRAFTS = "📋 Черновики"
+BTN_BROADCAST = "📢 Рассылка"
+
+
+def _menu(is_admin: bool) -> ReplyKeyboardMarkup:
+    """Постоянное меню внизу экрана. У админа — расширенное."""
+    rows = [[KeyboardButton(text=BTN_LIST), KeyboardButton(text=BTN_PROFILE)]]
+    if features.statistics:
+        rows[0].append(KeyboardButton(text=BTN_STATS))
+    if is_admin:
+        rows.append([KeyboardButton(text=BTN_NEW),
+                     KeyboardButton(text=BTN_ATTEND)])
+        rows.append([KeyboardButton(text=BTN_GUESTS),
+                     KeyboardButton(text=BTN_DRAFTS),
+                     KeyboardButton(text=BTN_BROADCAST)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True,
+                               input_field_placeholder="Выберите действие")
+
+
 async def _upsert_user(svc: BookingService, user) -> None:
     """
     Сохраняет имя и username участника. Аватар подтягивается фоново —
@@ -66,6 +93,7 @@ async def _upsert_user(svc: BookingService, user) -> None:
     uid = user.id
     name = user.full_name or (user.username or f"id{uid}")
     uname = user.username
+    tenant_id = svc.tenant_id  # сохраняем заранее, не держим ссылку на svc
 
     # сохраняем сразу с тем, что есть
     await svc.repo.upsert_subscriber(PLATFORM, uid, name, username=uname)
@@ -73,15 +101,18 @@ async def _upsert_user(svc: BookingService, user) -> None:
 
     # аватар запрашиваем фоново — не задерживаем ответ пользователю
     if _bot:
-        async def _bg():
-            photo = await fetch_tg_photo_url(_bot, uid)
-            if photo:
+        async def _bg(tid: int = tenant_id) -> None:
+            try:
+                photo = await fetch_tg_photo_url(_bot, uid)
+                if not photo:
+                    return
                 async with SessionLocal() as s2:
-                    tid = svc.tenant_id
                     svc2 = BookingService(s2, tid)
                     await svc2.repo.upsert_subscriber(
                         PLATFORM, uid, name, username=uname, photo_url=photo)
                     await s2.commit()
+            except Exception as e:
+                logger.debug("Фоновое обновление аватара не удалось: %s", e)
         asyncio.create_task(_bg())
 
 
@@ -122,20 +153,57 @@ async def cmd_start(message: Message) -> None:
         await _upsert_user(svc, message.from_user)
         await svc.repo.set_subscription(PLATFORM, message.from_user.id, True)
         await session.commit()
-    text = ("Привет! Бот записи на тренировки. 🏸\n/list — тренировки и запись\n"
-            "/profile — моя статистика")
-    if features.statistics:
-        text += "\n/stats — рейтинг и график"
+    text = (
+        "🏸 <b>Добро пожаловать!</b>\n\n"
+        "Это бот для записи на тренировки. Через меню внизу можно "
+        "посмотреть тренировки, записаться и увидеть свою статистику.\n\n"
+        "👇 Используйте кнопки меню под полем ввода."
+    )
     if is_admin:
-        admin = ["\n\nАдмин:\n/new — создать\n/drafts — запустить черновик",
-                 "/attend — явка и оплата\n/guests — подтвердить гостей",
-                 "/setmax — лимит\n/cancel — отменить\n/broadcast — рассылка"]
-        if features.statistics:
-            admin.append("/debtors — должники")
-        if features.exports:
-            admin.append("/export — выгрузить список")
-        text += "\n" + "\n".join(admin)
-    await message.answer(text)
+        text += ("\n\n🛠 <b>Вы администратор клуба.</b>\n"
+                 "Вам доступны кнопки создания тренировок, отметки явки, "
+                 "подтверждения гостей, черновиков и рассылки.")
+    await message.answer(text, reply_markup=_menu(is_admin), parse_mode="HTML")
+
+
+@router.message(F.text == BTN_LIST)
+async def btn_list(message: Message) -> None:
+    await cmd_list(message)
+
+
+@router.message(F.text == BTN_PROFILE)
+async def btn_profile(message: Message) -> None:
+    await cmd_profile(message)
+
+
+@router.message(F.text == BTN_STATS)
+async def btn_stats(message: Message) -> None:
+    await cmd_stats(message)
+
+
+@router.message(F.text == BTN_NEW)
+async def btn_new(message: Message, state: FSMContext) -> None:
+    await cmd_new(message, state)
+
+
+@router.message(F.text == BTN_ATTEND)
+async def btn_attend(message: Message) -> None:
+    await cmd_attend(message)
+
+
+@router.message(F.text == BTN_GUESTS)
+async def btn_guests(message: Message) -> None:
+    await cmd_guests(message)
+
+
+@router.message(F.text == BTN_DRAFTS)
+async def btn_drafts(message: Message) -> None:
+    await cmd_drafts(message)
+
+
+@router.message(F.text == BTN_BROADCAST)
+async def btn_broadcast(message: Message, state: FSMContext) -> None:
+    await cmd_broadcast(message, state)
 
 
 @router.message(Command("list"))
