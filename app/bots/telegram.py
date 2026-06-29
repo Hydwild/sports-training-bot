@@ -62,6 +62,7 @@ def _username(x) -> str | None:
 
 # Тексты кнопок постоянного меню (внизу экрана)
 BTN_LIST = "🏸 Тренировки"
+BTN_MY = "📅 Моя тренировка"
 BTN_PROFILE = "👤 Профиль"
 BTN_STATS = "📊 Статистика"
 BTN_NEW = "➕ Создать"
@@ -73,9 +74,10 @@ BTN_BROADCAST = "📢 Рассылка"
 
 def _menu(is_admin: bool) -> ReplyKeyboardMarkup:
     """Постоянное меню внизу экрана. У админа — расширенное."""
-    rows = [[KeyboardButton(text=BTN_LIST), KeyboardButton(text=BTN_PROFILE)]]
+    rows = [[KeyboardButton(text=BTN_LIST), KeyboardButton(text=BTN_MY)],
+            [KeyboardButton(text=BTN_PROFILE)]]
     if features.statistics:
-        rows[0].append(KeyboardButton(text=BTN_STATS))
+        rows[1].append(KeyboardButton(text=BTN_STATS))
     if is_admin:
         rows.append([KeyboardButton(text=BTN_NEW),
                      KeyboardButton(text=BTN_ATTEND)])
@@ -117,13 +119,23 @@ async def _upsert_user(svc: BookingService, user) -> None:
         asyncio.create_task(_bg())
 
 
-def _kb(tid: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
+def _kb(tid: int, is_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [[
         InlineKeyboardButton(text="✅ Записаться", callback_data=f"su:{tid}"),
         InlineKeyboardButton(text="❌ Отменить", callback_data=f"cx:{tid}"),
     ], [
         InlineKeyboardButton(text="👤 Записать гостя", callback_data=f"gu:{tid}"),
-    ]])
+    ]]
+    if is_admin:
+        rows.append([
+            InlineKeyboardButton(text="✏️ Изменить", callback_data=f"ed:{tid}"),
+            InlineKeyboardButton(text="🔁 Повторить", callback_data=f"rep:{tid}"),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="🗑 Отменить тренировку",
+                                 callback_data=f"trcx:{tid}"),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 class NewTraining(StatesGroup):
@@ -185,6 +197,22 @@ async def btn_list(message: Message) -> None:
     await cmd_list(message)
 
 
+@router.message(F.text == BTN_MY)
+async def btn_my(message: Message) -> None:
+    async with SessionLocal() as session:
+        tid, is_admin = await _resolve_tenant(session, message.chat.id, message.from_user.id)
+        if tid is None:
+            await message.answer("Чат не привязан к клубу."); return
+        svc = BookingService(session, tid)
+        t = await svc.next_training_for_user(PLATFORM, message.from_user.id)
+        if not t:
+            await message.answer("📭 Вы не записаны ни на одну предстоящую тренировку.\n"
+                                 "Нажмите «🏸 Тренировки», чтобы записаться."); return
+        card = await views.training_card(svc, t)
+    await message.answer("📅 <b>Ваша ближайшая тренировка:</b>\n\n" + card,
+                         reply_markup=_kb(t.id, is_admin), parse_mode="HTML")
+
+
 @router.message(F.text == BTN_PROFILE)
 async def btn_profile(message: Message) -> None:
     await cmd_profile(message)
@@ -223,7 +251,7 @@ async def btn_broadcast(message: Message, state: FSMContext) -> None:
 @router.message(Command("list"))
 async def cmd_list(message: Message) -> None:
     async with SessionLocal() as session:
-        tid, _ = await _resolve_tenant(session, message.chat.id, message.from_user.id)
+        tid, is_admin = await _resolve_tenant(session, message.chat.id, message.from_user.id)
         if tid is None:
             await message.answer("Чат не привязан к клубу."); return
         svc = BookingService(session, tid)
@@ -231,7 +259,9 @@ async def cmd_list(message: Message) -> None:
         if not trainings:
             await message.answer("Ближайших тренировок нет."); return
         for t in trainings:
-            await message.answer(await views.training_card(svc, t), reply_markup=_kb(t.id))
+            await message.answer(await views.training_card(svc, t),
+                                 reply_markup=_kb(t.id, is_admin),
+                                 parse_mode="HTML")
 
 
 @router.message(Command("profile"))
@@ -297,6 +327,130 @@ async def cb_cancel(query: CallbackQuery) -> None:
             f"Свяжитесь с тренером.", show_alert=True)
         return
     await query.answer("Запись отменена." if res["cancelled"] else "Вы не были записаны.", show_alert=True)
+
+
+# ---------- Управление тренировкой (админ) ----------
+
+class EditTraining(StatesGroup):
+    field = State()
+    value = State()
+
+
+async def _is_admin_cb(session, query) -> int | None:
+    tid, is_admin = await _resolve_tenant(session, query.message.chat.id,
+                                          query.from_user.id)
+    if tid is None or not is_admin:
+        await query.answer("Только для администратора.", show_alert=True)
+        return None
+    return tid
+
+
+@router.callback_query(F.data.startswith("rep:"))
+async def cb_repeat(query: CallbackQuery) -> None:
+    train_id = int(query.data.split(":")[1])
+    async with SessionLocal() as session:
+        tid = await _is_admin_cb(session, query)
+        if tid is None:
+            return
+        svc = BookingService(session, tid)
+        new_t = await svc.repeat_training(train_id, days_ahead=7)
+        if not new_t:
+            await query.answer("Не найдено", show_alert=True); return
+        card = await views.training_card(svc, new_t)
+    await query.answer("Создана копия на +7 дней ✅", show_alert=True)
+    await query.message.answer("🔁 <b>Повтор тренировки:</b>\n\n" + card,
+                               reply_markup=_kb(new_t.id, True), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("trcx:"))
+async def cb_cancel_training(query: CallbackQuery) -> None:
+    train_id = int(query.data.split(":")[1])
+    # подтверждение
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Да, отменить", callback_data=f"trcxyes:{train_id}"),
+        InlineKeyboardButton(text="Нет", callback_data="trcxno"),
+    ]])
+    await query.answer()
+    await query.message.answer("⚠️ Отменить тренировку? Все записанные получат "
+                               "уведомление.", reply_markup=kb)
+
+
+@router.callback_query(F.data == "trcxno")
+async def cb_cancel_training_no(query: CallbackQuery) -> None:
+    await query.answer("Отмена отменена 🙂")
+    await query.message.edit_text("Отмена тренировки прервана.")
+
+
+@router.callback_query(F.data.startswith("trcxyes:"))
+async def cb_cancel_training_yes(query: CallbackQuery) -> None:
+    train_id = int(query.data.split(":")[1])
+    async with SessionLocal() as session:
+        tid = await _is_admin_cb(session, query)
+        if tid is None:
+            return
+        svc = BookingService(session, tid)
+        await svc.cancel_training(train_id)
+    await query.answer("Тренировка отменена, все уведомлены.", show_alert=True)
+    await query.message.edit_text("🗑 Тренировка отменена. Участники получили уведомление.")
+
+
+@router.callback_query(F.data.startswith("ed:"))
+async def cb_edit(query: CallbackQuery, state: FSMContext) -> None:
+    train_id = int(query.data.split(":")[1])
+    async with SessionLocal() as session:
+        tid = await _is_admin_cb(session, query)
+        if tid is None:
+            return
+    await state.update_data(tenant_id=tid, train_id=train_id)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🕐 Время", callback_data="edf:time"),
+         InlineKeyboardButton(text="📍 Место", callback_data="edf:loc")],
+        [InlineKeyboardButton(text="👥 Лимит", callback_data="edf:max"),
+         InlineKeyboardButton(text="⏱ Длительность", callback_data="edf:dur")],
+    ])
+    await query.answer()
+    await query.message.answer("Что изменить?", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("edf:"))
+async def cb_edit_field(query: CallbackQuery, state: FSMContext) -> None:
+    field = query.data.split(":")[1]
+    await state.update_data(edit_field=field)
+    await state.set_state(EditTraining.value)
+    prompts = {
+        "time": "Новые дата и время: ДД.ММ.ГГГГ ЧЧ:ММ (напр. 20.07.2026 19:00)",
+        "loc": "Новое место:",
+        "max": "Новый лимит участников (число):",
+        "dur": "Новая длительность в минутах (число):",
+    }
+    await query.answer()
+    await query.message.answer(prompts[field])
+
+
+@router.message(EditTraining.value)
+async def edit_value(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    field = data["edit_field"]
+    async with SessionLocal() as session:
+        svc = BookingService(session, data["tenant_id"])
+        tid = data["train_id"]
+        if field == "time":
+            parsed = svc.parse_local(message.text)
+            if not parsed:
+                await message.answer("Неверный формат. Пример: 20.07.2026 19:00"); return
+            await svc.update_field(tid, "start_at", parsed)
+        elif field == "loc":
+            await svc.update_field(tid, "location", message.text.strip())
+        elif field in ("max", "dur"):
+            if not message.text.isdigit() or int(message.text) < 1:
+                await message.answer("Введите положительное число."); return
+            f = "max_participants" if field == "max" else "duration_min"
+            await svc.update_field(tid, f, int(message.text))
+        training = await svc.repo.get_training(tid)
+        card = await views.training_card(svc, training)
+    await state.clear()
+    await message.answer("✅ Изменено:\n\n" + card,
+                         reply_markup=_kb(tid, True), parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("gu:"))

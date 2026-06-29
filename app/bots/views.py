@@ -7,24 +7,43 @@ from app.services.booking import BookingService
 async def training_card(svc: BookingService, t) -> str:
     active = await svc.repo.get_signups(t.id, "active")
     queue = await svc.repo.get_signups(t.id, "queue")
-    lines = [f"🏸 {t.title}", f"📅 {svc.format_local(t.start_at)}"]
+
+    # прогресс-бар заполнения мест
+    filled = len(active)
+    total = t.max_participants
+    bar = _progress_bar(filled, total)
+
+    lines = [f"🏸 <b>{t.title}</b>", f"📅 {svc.format_local(t.start_at)}"]
     if t.location:
         lines.append(f"📍 {t.location}")
     h = t.duration_min / 60
     lines.append(f"⏱ {('%.1f' % h).rstrip('0').rstrip('.')} ч")
-    lines.append(f"👥 {len(active)}/{t.max_participants}")
+    lines.append(f"👥 {filled}/{total}  {bar}")
+
     if t.state == "draft":
         if t.publish_at:
-            lines.append(f"📝 Черновик — запись откроется {svc.format_local(t.publish_at)}")
+            lines.append(f"📝 <i>Черновик — запись откроется {svc.format_local(t.publish_at)}</i>")
         else:
-            lines.append("📝 Черновик — запись не открыта")
+            lines.append("📝 <i>Черновик — запись не открыта</i>")
+
     if active:
-        lines.append("\nЗаписаны:")
+        lines.append("\n<b>Записаны:</b>")
         lines += [f"  {i}. {_label(s)}" for i, s in enumerate(active, 1)]
     if queue:
-        lines.append("\nОчередь:")
+        lines.append("\n<b>⏳ Очередь:</b>")
         lines += [f"  {i}. {_label(s)}" for i, s in enumerate(queue, 1)]
+    if not active and not queue:
+        lines.append("\n<i>Пока никто не записан — будь первым!</i>")
     return "\n".join(lines)
+
+
+def _progress_bar(filled: int, total: int, width: int = 10) -> str:
+    """Текстовый прогресс-бар заполнения мест: ▰▰▰▱▱▱▱▱▱▱"""
+    if total <= 0:
+        return ""
+    ratio = min(1.0, filled / total)
+    full = round(ratio * width)
+    return "▰" * full + "▱" * (width - full)
 
 
 def _label(s) -> str:
