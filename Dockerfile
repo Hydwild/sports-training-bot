@@ -16,10 +16,11 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-# Каталог для данных (SQLite-файл, логи) — монтируется как volume
-RUN mkdir -p /data
+# Каталог для данных (SQLite-файл, логи)
+RUN mkdir -p /data && chmod +x start.sh
 
 EXPOSE 8000
 
-# Прод: миграции применяются отдельно (alembic upgrade head в entrypoint/compose).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Старт через скрипт: слушает $PORT (Railway) или 8000 (локально),
+# для Pro применяет миграции.
+CMD ["sh", "start.sh"]
