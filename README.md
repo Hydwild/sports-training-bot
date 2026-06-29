@@ -1,139 +1,44 @@
-# 🏸 Бот записи на тренировки по бадминтону
+"""Изоляция тенантов: клуб не видит данные другого клуба."""
+import datetime as dt
+import pytest
+from app.repositories.repo import GlobalRepository
+from app.services.booking import BookingService
 
-Бот для Telegram и ВКонтакте, который ведёт запись на тренировки: участники
-записываются сами, при заполнении мест встают в очередь, получают напоминания.
-Есть две версии — **Lite** (для одного тренера) и **Pro** (для клуба).
 
----
+async def _make_club(session, name):
+    g = GlobalRepository(session)
+    t = await g.create_tenant(name=name)
+    await session.commit()
+    return t.id
 
-## Какую версию выбрать
 
-### 🟢 Lite — для одного тренера
-Простая версия, всё необходимое для ведения своих тренировок:
-- **Запись** на тренировку через бота (кнопкой).
-- **Очередь** — когда мест нет, человек встаёт в очередь и автоматически
-  занимает место, если кто-то отменил запись.
-- **Напоминания** — участникам приходит напоминание перед тренировкой.
-- **Посещаемость** — после тренировки отмечаете, кто реально пришёл.
+async def test_trainings_isolated(session):
+    a = await _make_club(session, "A")
+    b = await _make_club(session, "B")
+    now = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)
+    svc_a = BookingService(session, a)
+    tr = await svc_a.create_training(title="TA", start_at=now, location="",
+                                     max_participants=5, platform="tg", user_id=1)
+    svc_b = BookingService(session, b)
+    assert await svc_b.repo.get_training(tr.id) is None  # B не видит тренировку A
+    assert await svc_a.repo.get_training(tr.id) is not None
 
-Работает на лёгкой базе (SQLite), не требует отдельного сервера базы данных.
 
-### 🔵 Pro — для клуба
-Всё из Lite, плюс:
-- **Статистика** — рейтинг посещаемости, графики, профиль участника.
-- **Оплаты** — участник платит онлайн (ЮKassa), после оплаты автоматически
-  отмечается как оплативший.
-- **Несколько групп** — отдельные клубы и группы внутри клуба (дети/взрослые).
-- **Веб-админка** — панель управления в браузере с ролями
-  (владелец / тренер / ассистент), настройками и экспортом в Excel/PDF.
-- **Должники** — список не оплативших и рассылка напоминаний.
+async def test_queue_and_promotion(session):
+    a = await _make_club(session, "A")
+    now = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)
+    svc = BookingService(session, a)
+    tr = await svc.create_training(title="T", start_at=now, location="",
+                                   max_participants=1, platform="tg", user_id=1)
+    r1 = await svc.sign_up(tr.id, "tg", 100, "Аня")
+    r2 = await svc.sign_up(tr.id, "vk", 200, "Боря")
+    assert r1.result == "active" and r2.result == "queue"
+    res = await svc.cancel_signup(tr.id, "tg", 100)
+    assert res["promoted"].name == "Боря"
 
-Работает на PostgreSQL (поднимается автоматически).
 
----
-
-## Быстрое развёртывание на сервере (одной командой)
-
-Нужен только сервер с Linux (например, обычный VPS). Всё остальное скрипт
-сделает сам.
-
-```bash
-# 1. Скопируйте проект на сервер и зайдите в папку
-cd badminton_bot_v2
-
-# 2. Запустите развёртывание нужной версии:
-./deploy.sh lite     # для одного тренера
-#   или
-./deploy.sh pro      # для клуба
-```
-
-Скрипт сам:
-1. поставит Docker, если его нет;
-2. создаст файл настроек `.env` (для Pro сразу сгенерирует секретные ключи);
-3. попросит вписать **токен бота** (получить — у @BotFather в Telegram);
-4. соберёт и запустит всё в контейнерах;
-5. покажет адрес и статус.
-
-После запуска бот работает. Проверить: откройте `http://АДРЕС_СЕРВЕРА:8000/health`.
-Для Pro админка — `http://АДРЕС_СЕРВЕРА:8000/admin`.
-
-**Полезные команды после запуска:**
-```bash
-docker compose -f docker-compose.pro.yml logs -f app   # смотреть логи
-docker compose -f docker-compose.pro.yml down          # остановить
-docker compose -f docker-compose.pro.yml up -d          # запустить снова
-```
-(для Lite — замените `pro` на `lite`)
-
----
-
-## Что вписать в настройки (.env)
-
-Минимум для запуска:
-- **TG_TOKEN** — токен Telegram-бота от @BotFather. Обязательно.
-
-Для ВКонтакте (необязательно): **VK_TOKEN** — ключ сообщества.
-
-Для Pro дополнительно:
-- **JWT_SECRET**, **ADMIN_API_TOKEN** — секреты (скрипт генерирует сам).
-- **YOOKASSA_SHOP_ID**, **YOOKASSA_SECRET_KEY** — для приёма оплат
-  (из личного кабинета ЮKassa).
-- **TG_BOT_USERNAME** — имя бота для входа в админку через Telegram.
-
----
-
-## Как пользоваться ботом
-
-**Участники** (в чате клуба или в личке с ботом):
-- `/list` — список тренировок, запись и отмена кнопками.
-- `/profile` — личная статистика (в Pro).
-- кнопка «Записать гостя» — записать того, кто сейчас не в сети; тренер
-  потом подтвердит.
-
-**Тренер / админ:**
-- `/new` — создать тренировку (пошагово: название, дата, место,
-  длительность, лимит, в Pro — цена).
-- `/attend` — отметить, кто пришёл и кто оплатил.
-- `/guests` — подтвердить или отклонить записанных гостей.
-- `/drafts` — открыть запись на отложенную тренировку.
-- `/cancel`, `/setmax`, `/broadcast` — отменить, изменить лимит, рассылка.
-- (Pro) `/stats`, `/debtors`, `/export` — статистика, должники, выгрузка списка.
-
----
-
-## Веб-админка (только Pro)
-
-Откройте `/admin`, войдите через Telegram. Доступ — у тех, кому назначена роль:
-- **Владелец (owner)** — всё, включая настройки и роли.
-- **Тренер (coach)** — тренировки, отметки, экспорт, настройки.
-- **Ассистент (assistant)** — только отметки явки/оплаты и просмотр.
-
-На странице **⚙️ Настройки** (владелец и тренер) настраиваются:
-брендинг (название, цвет, логотип), таймеры напоминаний, напоминание о
-неподтверждённых гостях, авто-снятие неподтверждённых гостей, уведомление об
-открытии записи, окно отмены (за сколько минут до тренировки запретить отписку).
-
----
-
-## Для разработчиков
-
-Запуск локально без Docker:
-```bash
-pip install -r requirements.txt
-cp .env.lite.example .env       # или .env.pro.example
-uvicorn app.main:app --reload
-```
-
-Тесты:
-```bash
-pytest -q
-```
-
-Структура и архитектура подробно описаны в комментариях кода. Кратко:
-`app/core` (конфиг, безопасность, редакции), `app/models` (БД),
-`app/repositories` (доступ к данным с изоляцией клубов), `app/services`
-(логика: запись, оплаты, экспорт, фоновые задачи), `app/bots` (Telegram/VK),
-`app/admin` (веб-панель), `app/api` (REST). Миграции — Alembic.
-
-Разница версий задаётся одной переменной `EDITION=lite|pro` — код общий,
-Pro-функции включаются флагами (`app/core/features.py`).
+async def test_service_exposes_tenant_id(session):
+    """BookingService должен хранить tenant_id (использует бот для аватаров)."""
+    a = await _make_club(session, "A")
+    svc = BookingService(session, a)
+    assert svc.tenant_id == a

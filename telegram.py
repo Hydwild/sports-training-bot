@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .avatar { width:36px; height:36px; border-radius:50%; object-fit:cover; vertical-align:middle; }
+  .avatar-init { width:36px; height:36px; border-radius:50%; background:var(--brand);
+                 color:#fff; font-size:14px; font-weight:600; display:inline-flex;
+                 align-items:center; justify-content:center; vertical-align:middle; }
+  .user-cell { display:flex; align-items:center; gap:10px; }
+  .user-cell a { color:inherit; text-decoration:none; font-weight:500; }
+  .user-cell a:hover { text-decoration:underline; }
+  .at { color:#889; font-size:12px; }
+</style>
+
+<div class="card">
+  <h2>{{ t.title }}</h2>
+  <p class="muted">{{ t.when }} · {{ t.location or '—' }} ·
+     {{ summary.attended }}/{{ summary.signed }} пришло · оплатило {{ summary.paid }}</p>
+
+  <div style="margin:10px 0">
+    <a class="btn sm" href="/admin/trainings/{{ t.id }}/export.xlsx">Excel</a>
+    <a class="btn sm" href="/admin/trainings/{{ t.id }}/export.pdf">PDF</a>
+    <a class="btn sm" href="/admin/trainings/{{ t.id }}/export.csv">CSV</a>
+  </div>
+
+  <table>
+    <tr>
+      <th></th>
+      <th>Участник</th>
+      <th>Платф.</th>
+      <th>Статус</th>
+      <th>Пришёл</th>
+      <th>Оплата</th>
+      {% if can_edit %}<th>Действия</th>{% endif %}
+    </tr>
+    {% for s in signups %}
+    <tr>
+      <td>
+        {% if s.photo_url %}
+          <img class="avatar" src="{{ s.photo_url }}" alt=""
+               onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex'">
+          <span class="avatar-init" style="display:none">
+            {{ s.name[0]|upper if s.name else '?' }}
+          </span>
+        {% else %}
+          <span class="avatar-init">{{ s.name[0]|upper if s.name else '?' }}</span>
+        {% endif %}
+      </td>
+
+      <!-- Имя + @username + ссылка + платформа -->
+      <td>
+        <div class="user-cell">
+          <div>
+            {% if s.profile_url %}
+              <a href="{{ s.profile_url }}" target="_blank">{{ s.name }}</a>
+            {% else %}
+              {{ s.name }}
+            {% endif %}
+            {% if s.username %}
+              <br><span class="at">
+                {% if s.platform == "vk" %}vk.com/{% else %}@{% endif %}{{ s.username }}
+              </span>
+            {% endif %}
+            {% if s.is_guest %}
+              <br><span class="tag {% if s.confirmed %}ok{% else %}no{% endif %}">
+                {% if s.confirmed %}гость ✅{% else %}гость ⏳{% endif %}
+              </span>
+            {% endif %}
+          </div>
+        </div>
+      </td>
+
+      <td>
+        {% if s.platform == "tg" %}
+          <span title="Telegram">✈️</span>
+        {% elif s.platform == "vk" %}
+          <span title="ВКонтакте">🅱️</span>
+        {% else %}
+          {{ s.platform }}
+        {% endif %}
+      </td>
+      <td>{{ "основной" if s.status == "active" else "очередь" }}</td>
+      <td>{% if s.attended %}<span class="tag ok">✅</span>{% else %}<span class="tag no">—</span>{% endif %}</td>
+      <td>{% if s.paid %}<span class="tag ok">💰</span>{% else %}<span class="tag no">—</span>{% endif %}</td>
+
+      {% if can_edit %}
+      <td>
+        <form method="post" action="/admin/signups/{{ s.id }}/toggle_attend" style="display:inline">
+          <button class="btn sm" type="submit">явка</button>
+        </form>
+        <form method="post" action="/admin/signups/{{ s.id }}/toggle_pay" style="display:inline">
+          <button class="btn sm" type="submit">оплата</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+
+  <p style="margin-top:14px"><a href="/admin">← к списку</a></p>
+</div>
+{% endblock %}
