@@ -1,38 +1,26 @@
-"""Страница настроек админки и проверка прав (один TestClient на сессию)."""
+FROM python:3.12-slim
 
-from fastapi.testclient import TestClient
-from app.main import app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
-H = {"X-Admin-Token": "tok"}
+WORKDIR /code
 
+# системные зависимости для asyncpg/matplotlib
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-def test_settings_panel_flow():
-    with TestClient(app) as c:
-        # клуб + coach + assistant
-        tid = c.post("/api/tenants", json={"name": "К"}, headers=H).json()["id"]
-        c.post(f"/api/tenants/{tid}/members",
-               json={"tg_user_id": 777, "role": "coach"}, headers=H)
-        c.post(f"/api/tenants/{tid}/members",
-               json={"tg_user_id": 888, "role": "assistant"}, headers=H)
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 
-        # coach открывает и сохраняет настройки
-        login = c.post("/admin/auth/dev", data={"tg_user_id": 777},
-                       follow_redirects=False)
-        c.cookies.set("access_token", login.cookies["access_token"])
-        assert c.get("/admin/settings").status_code == 200
-        r = c.post("/admin/settings", data={
-            "brand_name": "Брендовый Клуб", "brand_color": "#112233",
-            "reminder_enabled": "on", "reminder_minutes": "90",
-            "guest_reminder_minutes": "180",
-            "guest_expire_enabled": "on", "guest_expire_minutes": "45",
-            "publish_notify_enabled": "on", "cancel_lock_minutes": "120",
-        })
-        assert r.status_code == 200 and "Сохранено" in r.text
-        r = c.get("/admin/settings")
-        assert "90" in r.text and "120" in r.text and "Брендовый Клуб" in r.text
+COPY . .
 
-        # assistant не имеет доступа к настройкам
-        login2 = c.post("/admin/auth/dev", data={"tg_user_id": 888},
-                        follow_redirects=False)
-        c.cookies.set("access_token", login2.cookies["access_token"])
-        assert c.get("/admin/settings").status_code == 403
+# Каталог для данных (SQLite-файл, логи)
+RUN mkdir -p /data && chmod +x start.sh
+
+EXPOSE 8000
+
+# Старт через скрипт: слушает $PORT (Railway) или 8000 (локально),
+# для Pro применяет миграции.
+CMD ["sh", "start.sh"]
