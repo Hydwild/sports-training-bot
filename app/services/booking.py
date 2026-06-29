@@ -246,6 +246,53 @@ class BookingService:
         await self.session.commit()
         return training
 
+    async def next_training_for_user(self, platform: str, user_id: int):
+        """Ближайшая будущая тренировка, на которую записан пользователь."""
+        from sqlalchemy import select
+        from app.models.entities import Training, Signup
+        now = dt.datetime.now(dt.timezone.utc)
+        stmt = (select(Training)
+                .join(Signup, Signup.training_id == Training.id)
+                .where(Training.tenant_id == self.tenant_id,
+                       Training.is_cancelled.is_(False),
+                       Training.start_at > now,
+                       Signup.platform == platform,
+                       Signup.user_id == user_id,
+                       Signup.status == "active")
+                .order_by(Training.start_at.asc()))
+        return (await self.session.execute(stmt)).scalars().first()
+
+    async def update_field(self, training_id: int, field: str, value) -> Training | None:
+        """Редактирование одного поля тренировки (time/location/maxp/duration)."""
+        training = await self.repo.get_training(training_id)
+        if not training:
+            return None
+        if field == "start_at":
+            training.start_at = value
+        elif field == "location":
+            training.location = value
+        elif field == "duration_min":
+            training.duration_min = value
+        elif field == "max_participants":
+            training.max_participants = value
+            await self.session.flush()
+            await self._rebalance(training_id)
+        await self.session.commit()
+        return training
+
+    async def repeat_training(self, training_id: int,
+                              days_ahead: int = 7) -> Training | None:
+        """Создаёт копию тренировки со сдвигом даты (по умолчанию +7 дней)."""
+        src = await self.repo.get_training(training_id)
+        if not src:
+            return None
+        new_start = src.start_at + dt.timedelta(days=days_ahead)
+        return await self.create_training(
+            title=src.title, start_at=new_start, location=src.location,
+            max_participants=src.max_participants, duration_min=src.duration_min,
+            state="published", publish_at=None, platform="api", user_id=0,
+        )
+
     async def cancel_training(self, training_id: int) -> None:
         training = await self.repo.get_training(training_id)
         if not training:
