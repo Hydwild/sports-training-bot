@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
@@ -126,8 +127,17 @@ def _kb(tid: int) -> InlineKeyboardMarkup:
 
 
 class NewTraining(StatesGroup):
-    title = State(); when = State(); location = State()
-    duration = State(); maxp = State(); pubmode = State(); publish_at = State()
+    title = State()
+    date = State()          # выбор даты кнопками
+    date_manual = State()   # ручной ввод даты
+    time = State()          # выбор времени кнопками
+    time_manual = State()   # ручной ввод времени
+    location = State()      # выбор места кнопками
+    location_manual = State()
+    duration = State()
+    maxp = State()
+    pubmode = State()
+    publish_at = State()
 
 
 class SetMax(StatesGroup):
@@ -349,26 +359,158 @@ async def cmd_new(message: Message, state: FSMContext) -> None:
 @router.message(NewTraining.title)
 async def new_title(message: Message, state: FSMContext) -> None:
     await state.update_data(title=message.text)
-    await state.set_state(NewTraining.when)
-    await message.answer("Дата и время: ДД.ММ.ГГГГ ЧЧ:ММ (напр. 20.06.2026 19:00)")
+    await _ask_date(message, state)
 
 
-@router.message(NewTraining.when)
-async def new_when(message: Message, state: FSMContext) -> None:
-    parsed = BookingService(None, 0).parse_local(message.text)
-    if not parsed:
-        await message.answer("Неверный формат. Пример: 20.06.2026 19:00"); return
-    await state.update_data(start_at=parsed.isoformat())
+_WD_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+_WD_FULL = ["понедельник", "вторник", "среда", "четверг",
+            "пятница", "суббота", "воскресенье"]
+
+
+async def _ask_date(message: Message, state: FSMContext) -> None:
+    """Показывает кнопки выбора даты."""
+    tz = ZoneInfo("Europe/Moscow")
+    today = dt.datetime.now(tz).date()
+    rows = [[
+        InlineKeyboardButton(text="Сегодня", callback_data=f"nd:{today.isoformat()}"),
+        InlineKeyboardButton(text="Завтра",
+                             callback_data=f"nd:{(today+dt.timedelta(days=1)).isoformat()}"),
+    ]]
+    # ближайшие 5 дней недели с подписями
+    day_row = []
+    for i in range(2, 7):
+        d = today + dt.timedelta(days=i)
+        day_row.append(InlineKeyboardButton(
+            text=f"{_WD_RU[d.weekday()]} {d.day:02d}.{d.month:02d}",
+            callback_data=f"nd:{d.isoformat()}"))
+        if len(day_row) == 2:
+            rows.append(day_row); day_row = []
+    if day_row:
+        rows.append(day_row)
+    rows.append([InlineKeyboardButton(text="📅 Другая дата", callback_data="nd:manual")])
+    await state.set_state(NewTraining.date)
+    await message.answer("📅 Выберите дату тренировки:",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(NewTraining.date, F.data.startswith("nd:"))
+async def new_date_cb(query: CallbackQuery, state: FSMContext) -> None:
+    val = query.data.split(":", 1)[1]
+    await query.answer()
+    if val == "manual":
+        await state.set_state(NewTraining.date_manual)
+        await query.message.answer("Введите дату: ДД.ММ.ГГГГ (напр. 20.07.2026)")
+        return
+    await state.update_data(date=val)
+    await _ask_time(query.message, state)
+
+
+@router.message(NewTraining.date_manual)
+async def new_date_manual(message: Message, state: FSMContext) -> None:
+    txt = message.text.strip()
+    try:
+        d = dt.datetime.strptime(txt, "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer("Неверный формат. Пример: 20.07.2026"); return
+    await state.update_data(date=d.isoformat())
+    await _ask_time(message, state)
+
+
+async def _ask_time(message: Message, state: FSMContext) -> None:
+    """Кнопки выбора времени: подсказки по дню недели + частые."""
+    data = await state.get_data()
+    chosen = dt.date.fromisoformat(data["date"])
+    weekday = chosen.weekday()
+
+    suggested: list[str] = []
+    async with SessionLocal() as session:
+        svc = BookingService(session, data["tenant_id"])
+        suggested = await svc.times_for_weekday(weekday)
+
+    rows = []
+    if suggested:
+        rows.append([InlineKeyboardButton(text=f"⭐ {t}", callback_data=f"nt:{t}")
+                     for t in suggested])
+    # частые времена
+    common = ["18:00", "19:00", "20:00", "21:00"]
+    row = [InlineKeyboardButton(text=t, callback_data=f"nt:{t}") for t in common]
+    rows.append(row)
+    rows.append([InlineKeyboardButton(text="🕐 Другое время", callback_data="nt:manual")])
+
+    hint = (f"🕐 Время в {_WD_FULL[weekday]}, {chosen.day:02d}.{chosen.month:02d}.\n"
+            + ("⭐ — как в прошлые разы." if suggested else "Выберите время:"))
+    await state.set_state(NewTraining.time)
+    await message.answer(hint, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(NewTraining.time, F.data.startswith("nt:"))
+async def new_time_cb(query: CallbackQuery, state: FSMContext) -> None:
+    val = query.data.split(":", 1)[1] if query.data.count(":") == 1 else query.data[3:]
+    await query.answer()
+    if val == "manual":
+        await state.set_state(NewTraining.time_manual)
+        await query.message.answer("Введите время: ЧЧ:ММ (напр. 19:30)")
+        return
+    await _set_datetime(query.message, state, val)
+
+
+@router.message(NewTraining.time_manual)
+async def new_time_manual(message: Message, state: FSMContext) -> None:
+    txt = message.text.strip()
+    try:
+        dt.datetime.strptime(txt, "%H:%M")
+    except ValueError:
+        await message.answer("Неверный формат. Пример: 19:30"); return
+    await _set_datetime(message, state, txt)
+
+
+async def _set_datetime(message: Message, state: FSMContext, hhmm: str) -> None:
+    data = await state.get_data()
+    tz = ZoneInfo("Europe/Moscow")
+    d = dt.date.fromisoformat(data["date"])
+    h, m = map(int, hhmm.split(":"))
+    start = dt.datetime(d.year, d.month, d.day, h, m, tzinfo=tz)
+    await state.update_data(start_at=start.isoformat())
+    await _ask_location(message, state)
+
+
+async def _ask_location(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    async with SessionLocal() as session:
+        svc = BookingService(session, data["tenant_id"])
+        places = await svc.recent_locations()
+    rows = []
+    for p in places:
+        rows.append([InlineKeyboardButton(text=f"📍 {p}", callback_data=f"nl:{p[:50]}")])
+    rows.append([InlineKeyboardButton(text="✏️ Другое место", callback_data="nl:manual")])
+    rows.append([InlineKeyboardButton(text="➖ Без места", callback_data="nl:none")])
     await state.set_state(NewTraining.location)
-    await message.answer("Место? (или «-»)")
+    await message.answer("📍 Место тренировки:",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-@router.message(NewTraining.location)
-async def new_location(message: Message, state: FSMContext) -> None:
-    loc = "" if message.text.strip() == "-" else message.text.strip()
+@router.callback_query(NewTraining.location, F.data.startswith("nl:"))
+async def new_location_cb(query: CallbackQuery, state: FSMContext) -> None:
+    val = query.data[3:]
+    await query.answer()
+    if val == "manual":
+        await state.set_state(NewTraining.location_manual)
+        await query.message.answer("Введите название места:")
+        return
+    loc = "" if val == "none" else val
     await state.update_data(location=loc)
+    await _ask_duration(query.message, state)
+
+
+@router.message(NewTraining.location_manual)
+async def new_location_manual(message: Message, state: FSMContext) -> None:
+    await state.update_data(location=message.text.strip())
+    await _ask_duration(message, state)
+
+
+async def _ask_duration(message: Message, state: FSMContext) -> None:
     await state.set_state(NewTraining.duration)
-    await message.answer("Длительность в минутах? (напр. 120)")
+    await message.answer("⏱ Длительность в минутах? (напр. 120)")
 
 
 @router.message(NewTraining.duration)
