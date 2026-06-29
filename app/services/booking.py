@@ -26,6 +26,7 @@ class BookingService:
     def __init__(self, session: AsyncSession, tenant_id: int,
                  tz: str = "Europe/Moscow") -> None:
         self.session = session
+        self.tenant_id = tenant_id
         self.repo = TenantRepository(session, tenant_id)
         self.tz = ZoneInfo(tz)
 

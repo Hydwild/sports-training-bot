@@ -149,10 +149,14 @@ async def cmd_start(message: Message) -> None:
         if tid is None:
             await message.answer("Этот чат не привязан к клубу. Обратитесь к администратору платформы.")
             return
-        svc = BookingService(session, tid)
-        await _upsert_user(svc, message.from_user)
-        await svc.repo.set_subscription(PLATFORM, message.from_user.id, True)
-        await session.commit()
+        # обновление профиля не должно мешать приветствию
+        try:
+            svc = BookingService(session, tid)
+            await _upsert_user(svc, message.from_user)
+            await svc.repo.set_subscription(PLATFORM, message.from_user.id, True)
+            await session.commit()
+        except Exception as e:
+            logger.warning("Не удалось обновить профиль при /start: %s", e)
     text = (
         "🏸 <b>Добро пожаловать!</b>\n\n"
         "Это бот для записи на тренировки. Через меню внизу можно "

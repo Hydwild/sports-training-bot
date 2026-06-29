@@ -35,3 +35,10 @@ async def test_queue_and_promotion(session):
     assert r1.result == "active" and r2.result == "queue"
     res = await svc.cancel_signup(tr.id, "tg", 100)
     assert res["promoted"].name == "Боря"
+
+
+async def test_service_exposes_tenant_id(session):
+    """BookingService должен хранить tenant_id (использует бот для аватаров)."""
+    a = await _make_club(session, "A")
+    svc = BookingService(session, a)
+    assert svc.tenant_id == a
