@@ -130,6 +130,22 @@ async def update_brand(tenant_id: int, body: BrandUpdate,
     return {"ok": True}
 
 
+@router.patch("/tenants/{tenant_id}/chat", dependencies=[Depends(require_admin)])
+async def update_chat(tenant_id: int,
+                      tg_chat_id: int | None = None,
+                      vk_group_id: int | None = None,
+                      session: AsyncSession = Depends(get_session)):
+    """Привязать клуб к группе Telegram (tg_chat_id) или сообществу VK."""
+    tenant = await _ensure_tenant(session, tenant_id)
+    if tg_chat_id is not None:
+        tenant.tg_chat_id = tg_chat_id
+    if vk_group_id is not None:
+        tenant.vk_group_id = vk_group_id
+    await session.commit()
+    return {"ok": True, "tg_chat_id": tenant.tg_chat_id,
+            "vk_group_id": tenant.vk_group_id}
+
+
 # ---------- Старт платежа ----------
 
 @router.post("/tenants/{tenant_id}/payments/start")
