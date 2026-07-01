@@ -53,6 +53,30 @@ async def _ensure_tenant(session: AsyncSession, tenant_id: int):
     return tenant
 
 
+@router.delete("/tenants/{tenant_id}", dependencies=[Depends(require_admin)])
+async def delete_tenant(tenant_id: int,
+                        session: AsyncSession = Depends(get_session)):
+    """
+    Полностью удаляет клуб и все связанные данные (тренировки, записи,
+    подписчиков, платежи и т.д.). Необратимо. Нужен для удаления дубликатов.
+    """
+    from sqlalchemy import delete, text
+    tenant = await _ensure_tenant(session, tenant_id)
+    # удаляем зависимые записи в безопасном порядке
+    for table in ("signups", "payments", "outbox", "subscribers",
+                  "trainings", "memberships", "groups"):
+        try:
+            await session.execute(
+                text(f"DELETE FROM {table} WHERE tenant_id = :tid"),
+                {"tid": tenant_id})
+        except Exception:
+            pass  # таблицы может не быть в этой редакции — пропускаем
+    await session.execute(
+        text("DELETE FROM tenants WHERE id = :tid"), {"tid": tenant_id})
+    await session.commit()
+    return {"ok": True, "deleted_tenant_id": tenant_id}
+
+
 @router.get("/tenants/{tenant_id}/trainings", response_model=list[TrainingOut])
 async def tenant_trainings(tenant_id: int,
                            include_drafts: bool = False,
