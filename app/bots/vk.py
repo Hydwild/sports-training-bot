@@ -336,33 +336,171 @@ async def _delete_training(user_id: int, tid: int, group_id=None) -> str:
     return f"🗑 Тренировка «{title}» отменена, участники уведомлены."
 
 
-# ─────────── Пошаговое создание тренировки (только админ) ───────────
-_STEPS = ["title", "date", "location", "duration", "price", "max"]
-_PROMPTS = {
-    "title": "📝 Введите название тренировки:",
-    "date": "📅 Введите дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ\n(например 05.07.2026 19:00):",
-    "location": "📍 Введите место (зал/адрес):",
-    "duration": "⏱ Введите длительность в минутах (например 90):",
-    "price": "💰 Введите цену в рублях (например 500, или 0 если бесплатно):",
-    "max": "👥 Введите максимум участников (например 6):",
-}
+# ─────────── Пошаговое создание тренировки (кнопки, только админ) ───────────
+import datetime as _dt
+
+_WD_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+def _kb_from(options: list[tuple[str, dict]], add_manual: bool = True,
+             per_row: int = 2) -> str:
+    """Строит inline-клавиатуру из списка (label, payload). +«Ввести вручную»."""
+    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    kb = Keyboard(inline=True)
+    for i, (label, payload) in enumerate(options):
+        kb.add(Callback(label, payload=payload))
+        if (i + 1) % per_row == 0 and i + 1 < len(options):
+            kb.row()
+    if add_manual:
+        kb.row()
+        kb.add(Callback("✏️ Ввести вручную", payload={"a": "cr_manual"}),
+               color=KeyboardButtonColor.SECONDARY)
+    kb.row()
+    kb.add(Callback("❌ Отмена", payload={"a": "create_cancel"}),
+           color=KeyboardButtonColor.NEGATIVE)
+    return kb.get_json()
+
+
+def _date_options(tz) -> list[tuple[str, dict]]:
+    today = _dt.datetime.now(tz).date()
+    opts = [("Сегодня", {"a": "cr_date", "v": today.isoformat()}),
+            ("Завтра", {"a": "cr_date", "v": (today + _dt.timedelta(1)).isoformat()})]
+    for i in range(2, 7):
+        d = today + _dt.timedelta(days=i)
+        opts.append((f"{_WD_RU[d.weekday()]} {d.day:02d}.{d.month:02d}",
+                     {"a": "cr_date", "v": d.isoformat()}))
+    return opts
+
+
+def _time_options() -> list[tuple[str, dict]]:
+    return [(t, {"a": "cr_time", "v": t})
+            for t in ("18:00", "19:00", "20:00", "21:00", "10:00", "12:00")]
+
+
+def _duration_options() -> list[tuple[str, dict]]:
+    return [("1 ч", {"a": "cr_dur", "v": 60}), ("1.5 ч", {"a": "cr_dur", "v": 90}),
+            ("2 ч", {"a": "cr_dur", "v": 120}), ("3 ч", {"a": "cr_dur", "v": 180})]
+
+
+def _price_options() -> list[tuple[str, dict]]:
+    return [("Бесплатно", {"a": "cr_price", "v": 0}),
+            ("300₽", {"a": "cr_price", "v": 300}), ("500₽", {"a": "cr_price", "v": 500}),
+            ("700₽", {"a": "cr_price", "v": 700}), ("800₽", {"a": "cr_price", "v": 800})]
+
+
+def _max_options() -> list[tuple[str, dict]]:
+    return [(str(n), {"a": "cr_max", "v": n}) for n in (2, 4, 6, 8, 10, 12)]
+
+
+async def _location_options(svc) -> list[tuple[str, dict]]:
+    """Последние использованные места (до 4)."""
+    try:
+        places = await svc.recent_locations(limit=4)
+    except Exception:
+        places = []
+    return [(p[:24], {"a": "cr_loc", "v": p}) for p in places]
 
 
 async def _start_create(user_id: int, group_id=None) -> None:
-    """Начинает диалог создания тренировки (проверяет права админа)."""
+    """Начинает диалог создания (проверяет права админа)."""
     async with SessionLocal() as session:
         if not await _is_admin_vk(session, user_id, group_id):
             await _send(user_id, "⛔ Создавать тренировки может только тренер.")
             return
-    _fsm[user_id] = {"step": 0, "data": {}, "gid": group_id}
-    await _send(user_id, _PROMPTS["title"], keyboard=_cancel_kb())
+    _fsm[user_id] = {"step": "title", "data": {}, "gid": group_id, "manual": False}
+    await _send(user_id, "📝 Введите название тренировки:", keyboard=_cancel_kb())
+
+
+async def _cr_ask(user_id: int, step: str, gid) -> None:
+    """Показывает вопрос текущего шага с кнопками вариантов."""
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, gid)
+        tz = tenant.timezone if tenant else "Europe/Moscow"
+        svc = BookingService(session, tenant.id, tz=tz)
+        if step == "date":
+            await _send(user_id, "📅 Выберите дату:",
+                        keyboard=_kb_from(_date_options(svc.tz)))
+        elif step == "time":
+            await _send(user_id, "🕐 Выберите время:",
+                        keyboard=_kb_from(_time_options(), per_row=4))
+        elif step == "location":
+            opts = await _location_options(svc)
+            if opts:
+                await _send(user_id, "📍 Выберите место или введите вручную:",
+                            keyboard=_kb_from(opts, per_row=1))
+            else:
+                _fsm[user_id]["manual"] = True
+                await _send(user_id, "📍 Введите место (зал/адрес):",
+                            keyboard=_cancel_kb())
+        elif step == "duration":
+            await _send(user_id, "⏱ Выберите длительность:",
+                        keyboard=_kb_from(_duration_options(), per_row=4))
+        elif step == "price":
+            await _send(user_id, "💰 Выберите цену:",
+                        keyboard=_kb_from(_price_options(), per_row=3))
+        elif step == "max":
+            await _send(user_id, "👥 Максимум участников:",
+                        keyboard=_kb_from(_max_options(), per_row=3))
+
+
+# порядок шагов
+_CR_ORDER = ["title", "date", "time", "location", "duration", "price", "max"]
+
+
+async def _cr_advance(user_id: int, gid) -> None:
+    """Переходит к следующему шагу или финализирует."""
+    state = _fsm.get(user_id)
+    if not state:
+        return
+    cur = state["step"]
+    nxt = _CR_ORDER[_CR_ORDER.index(cur) + 1] if cur in _CR_ORDER[:-1] else None
+    if nxt is None:
+        await _finalize_create(user_id, state)
+        return
+    state["step"] = nxt
+    state["manual"] = False
+    await _cr_ask(user_id, nxt, gid)
+
+
+async def _cr_callback(user_id: int, payload: dict, gid) -> None:
+    """Обработка нажатий кнопок в мастере создания."""
+    state = _fsm.get(user_id)
+    if not state:
+        return
+    a = payload.get("a")
+    v = payload.get("v")
+    data = state["data"]
+
+    if a == "cr_manual":
+        state["manual"] = True
+        prompts = {
+            "date": "Введите дату: ДД.ММ.ГГГГ (напр. 20.07.2026)",
+            "time": "Введите время: ЧЧ:ММ (напр. 19:30)",
+            "location": "Введите место (зал/адрес):",
+            "duration": "Введите длительность в минутах (напр. 90):",
+            "price": "Введите цену в рублях (напр. 500 или 0):",
+            "max": "Введите максимум участников (напр. 6):",
+        }
+        await _send(user_id, prompts.get(state["step"], "Введите значение:"),
+                    keyboard=_cancel_kb())
+        return
+    if a == "cr_date":
+        data["date"] = v
+    elif a == "cr_time":
+        data["time"] = v
+    elif a == "cr_loc":
+        data["location"] = v
+    elif a == "cr_dur":
+        data["duration_min"] = int(v)
+    elif a == "cr_price":
+        data["price_minor"] = int(v) * 100
+    elif a == "cr_max":
+        data["max_participants"] = int(v)
+    await _cr_advance(user_id, gid)
 
 
 async def _fsm_process(user_id: int, text: str) -> bool:
-    """
-    Обрабатывает шаг диалога создания. Возвращает True, если сообщение
-    было частью диалога (и обработано здесь).
-    """
+    """Обрабатывает ТЕКСТОВЫЙ ввод в мастере (название и «вручную»)."""
     state = _fsm.get(user_id)
     if state is None:
         return False
@@ -377,9 +515,7 @@ async def _fsm_process(user_id: int, text: str) -> bool:
     if state.get("kind") == "guest":
         _fsm.pop(user_id, None)
         if not text:
-            await _send(user_id, "Имя пустое, попробуйте снова.",
-                        keyboard=_menu_kb(True))
-            return True
+            await _send(user_id, "Имя пустое.", keyboard=_menu_kb(True)); return True
         async with SessionLocal() as session:
             tenant = await _resolve_tenant(session, state["gid"])
             svc = BookingService(session, tenant.id, tz=tenant.timezone)
@@ -392,53 +528,60 @@ async def _fsm_process(user_id: int, text: str) -> bool:
         await _send(user_id, msg, keyboard=_menu_kb(True))
         return True
 
-    step_name = _STEPS[state["step"]]
+    step = state["step"]
+    gid = state["gid"]
     data = state["data"]
 
-    # валидация текущего шага
-    if step_name == "title":
+    # название — всегда текстом
+    if step == "title":
         if not text:
-            await _send(user_id, "Название не может быть пустым. Введите ещё раз:",
+            await _send(user_id, "Название пустое. Введите ещё раз:",
                         keyboard=_cancel_kb()); return True
         data["title"] = text
-    elif step_name == "date":
-        # проверим формат через сервис
-        async with SessionLocal() as session:
-            tenant = await _resolve_tenant(session, state["gid"])
-            svc = BookingService(session, tenant.id, tz=tenant.timezone)
-            when = svc.parse_local(text)
-        if when is None:
-            await _send(user_id, "Не понял дату. Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n"
-                        "например 05.07.2026 19:00. Введите ещё раз:",
+        state["step"] = "date"
+        await _cr_ask(user_id, "date", gid)
+        return True
+
+    # остальные шаги текстом — только если выбран режим «вручную»
+    if not state.get("manual"):
+        # пользователь пишет текст, хотя ждём кнопку — подскажем
+        await _send(user_id, "Пожалуйста, выберите вариант кнопкой "
+                    "или нажмите «✏️ Ввести вручную».")
+        return True
+
+    if step == "date":
+        try:
+            d = _dt.datetime.strptime(text, "%d.%m.%Y").date()
+        except ValueError:
+            await _send(user_id, "Формат даты: ДД.ММ.ГГГГ (напр. 20.07.2026)",
                         keyboard=_cancel_kb()); return True
-        data["start_at"] = when
-    elif step_name == "location":
+        data["date"] = d.isoformat()
+    elif step == "time":
+        try:
+            _dt.datetime.strptime(text, "%H:%M")
+        except ValueError:
+            await _send(user_id, "Формат времени: ЧЧ:ММ (напр. 19:30)",
+                        keyboard=_cancel_kb()); return True
+        data["time"] = text
+    elif step == "location":
         data["location"] = text or "—"
-    elif step_name == "duration":
+    elif step == "duration":
         if not text.isdigit() or int(text) <= 0:
-            await _send(user_id, "Введите число минут (например 90):",
+            await _send(user_id, "Введите число минут (напр. 90):",
                         keyboard=_cancel_kb()); return True
         data["duration_min"] = int(text)
-    elif step_name == "price":
+    elif step == "price":
         if not text.isdigit():
-            await _send(user_id, "Введите число рублей (например 500 или 0):",
+            await _send(user_id, "Введите число рублей (напр. 500 или 0):",
                         keyboard=_cancel_kb()); return True
         data["price_minor"] = int(text) * 100
-    elif step_name == "max":
+    elif step == "max":
         if not text.isdigit() or int(text) <= 0:
-            await _send(user_id, "Введите число участников (например 6):",
+            await _send(user_id, "Введите число участников (напр. 6):",
                         keyboard=_cancel_kb()); return True
         data["max_participants"] = int(text)
 
-    # переход к следующему шагу или финал
-    state["step"] += 1
-    if state["step"] < len(_STEPS):
-        nxt = _STEPS[state["step"]]
-        await _send(user_id, _PROMPTS[nxt], keyboard=_cancel_kb())
-        return True
-
-    # все шаги пройдены — создаём тренировку
-    await _finalize_create(user_id, state)
+    await _cr_advance(user_id, gid)
     return True
 
 
@@ -451,9 +594,12 @@ async def _finalize_create(user_id: int, state: dict) -> None:
         if tenant is None:
             await _send(user_id, "Клуб не привязан."); return
         svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        # собираем дату+время
+        start_at = svc.parse_local(f"{_fmt_date(data['date'])} {data['time']}")
         training = await svc.create_training(
-            title=data["title"], start_at=data["start_at"],
-            location=data["location"], max_participants=data["max_participants"],
+            title=data["title"], start_at=start_at,
+            location=data.get("location", "—"),
+            max_participants=data["max_participants"],
             duration_min=data["duration_min"], state="published",
             publish_at=None, platform=PLATFORM, user_id=user_id)
         if data.get("price_minor"):
@@ -462,19 +608,17 @@ async def _finalize_create(user_id: int, state: dict) -> None:
         card = await views.training_card_plain(svc, training)
         tid = training.id
         full = await _is_full(svc, training)
-        # рассылаем уведомление всем подписчикам (Telegram + VK)
         subs = await svc.repo.get_subscribers()
         when = svc.format_local(training.start_at)
         note = (f"🏸 Открыта запись на «{training.title}»\n📅 {when}"
                 + (f"\n📍 {training.location}" if training.location else ""))
         for sub in subs:
             if sub.user_id == user_id and sub.platform == PLATFORM:
-                continue  # не шлём уведомление самому создателю
+                continue
             await svc.repo.enqueue(sub.platform, sub.user_id, note)
         await session.commit()
     await _send(user_id, "✅ Тренировка создана!", keyboard=_menu_kb(True))
-    await _send(user_id, card, keyboard=_kb(tid, full))
-    # публикуем: карточку с кнопками в Telegram-группу + анонс на стену ВК
+    await _send(user_id, card, keyboard=_kb(tid, full, True))
     try:
         from app.bots import telegram
         await telegram._publish_to_group(tenant.id, tid)
@@ -484,6 +628,15 @@ async def _finalize_create(user_id: int, state: dict) -> None:
         await publish_to_wall(tenant.id, tid)
     except Exception as e:
         logger.warning("VK: анонс на стену не удался: %s", e)
+
+
+def _fmt_date(iso: str) -> str:
+    """2026-07-20 -> 20.07.2026 (для parse_local)."""
+    d = _dt.date.fromisoformat(iso)
+    return f"{d.day:02d}.{d.month:02d}.{d.year}"
+
+
+
 
 
 async def _handle_text(user_id: int, text: str, group_id=None) -> None:
@@ -650,6 +803,9 @@ async def setup() -> None:
         elif action == "create_cancel":
             _fsm.pop(user_id, None)
             await _send(user_id, "Создание отменено.", keyboard=_menu_kb(True))
+        elif action in ("cr_date", "cr_time", "cr_loc", "cr_dur",
+                        "cr_price", "cr_max", "cr_manual"):
+            await _cr_callback(user_id, payload, gid)
         elif action == "att":                       # открыть явку/оплату
             await _show_attendance(user_id, tid, gid)
         elif action == "att_t":                     # переключить у участника
