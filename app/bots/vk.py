@@ -79,10 +79,12 @@ def _confirm_del_kb(tid: int) -> str:
 
 
 def _menu_kb(is_admin: bool = False) -> str:
-    """Постоянное меню снизу: список / профиль (+ создать для админа)."""
+    """Постоянное меню снизу: список / мои записи / профиль (+ создать)."""
     from vkbottle import Keyboard, Text, KeyboardButtonColor
     kb = Keyboard(inline=False, one_time=False)
     kb.add(Text("🏸 Тренировки", payload={"a": "list"}))
+    kb.add(Text("📅 Мои записи", payload={"a": "my"}))
+    kb.row()
     kb.add(Text("👤 Профиль", payload={"a": "profile"}))
     if is_admin:
         kb.row()
@@ -137,6 +139,30 @@ async def _resolve_tenant(session, group_id):
 async def _is_full(svc, training) -> bool:
     active = await svc.repo.get_signups(training.id, "active")
     return len(active) >= training.max_participants
+
+
+async def _show_my(user_id: int, group_id=None) -> None:
+    """Показывает тренировки, на которые записан пользователь, с кнопкой отмены."""
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            await _send(user_id, "Клуб не привязан."); return
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        rows = await svc.my_trainings(PLATFORM, user_id)
+        is_admin = tenant.admin_vk_id == user_id
+        if not rows:
+            await _send(user_id, "📭 Вы не записаны ни на одну тренировку.\n"
+                        "Нажмите «🏸 Тренировки», чтобы записаться.",
+                        keyboard=_menu_kb(is_admin))
+            return
+        for training, status, position in rows:
+            card = await views.training_card_plain(svc, training)
+            mark = ("✅ Вы записаны" if status == "active"
+                    else f"⏳ Вы в очереди (№{position})")
+            full = await _is_full(svc, training)
+            await _send(user_id, f"{mark}\n\n{card}",
+                        keyboard=_kb(training.id, full, is_admin))
+        await _send(user_id, "⌨️ Меню внизу 👇", keyboard=_menu_kb(is_admin))
 
 
 async def _show_list(user_id: int, group_id=None) -> None:
@@ -673,6 +699,8 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
     text = raw.lower()
     if text in ("начать", "start", "список", "тренировки", "🏸 тренировки"):
         await _show_list(user_id, group_id)
+    elif text in ("мои записи", "📅 мои записи", "моя тренировка", "мои"):
+        await _show_my(user_id, group_id)
     elif text in ("создать", "➕ создать тренировку", "новая тренировка"):
         await _start_create(user_id, group_id)
     elif text in ("мой id", "мойid", "id", "мой айди"):
@@ -820,6 +848,8 @@ async def setup() -> None:
             await _edit_card(peer_id, cmid, tid, gid, user_id)
         elif action == "list":
             await _show_list(user_id, gid)
+        elif action == "my":
+            await _show_my(user_id, gid)
         elif action == "profile":
             await _handle_text(user_id, "профиль", gid)
         elif action == "create":
