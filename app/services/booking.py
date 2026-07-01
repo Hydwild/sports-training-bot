@@ -324,6 +324,10 @@ class BookingService:
             training.max_participants = value
             await self.session.flush()
             await self._rebalance(training_id)
+        elif field == "price_minor":
+            training.price_minor = value
+        elif field == "title":
+            training.title = value
         await self.session.commit()
         return training
 
