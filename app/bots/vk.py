@@ -115,6 +115,8 @@ async def _show_list(user_id: int, group_id=None) -> None:
             card = await views.training_card_plain(svc, tr)
             full = await _is_full(svc, tr)
             await _send(user_id, card, keyboard=_kb(tr.id, full))
+        # закрепляем нижнее меню отдельным коротким сообщением
+        await _send(user_id, "⌨️ Меню внизу 👇", keyboard=_menu_kb())
 
 
 async def _do_signup(user_id: int, tid: int, group_id=None) -> str:
@@ -155,6 +157,13 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
     text = (text or "").strip().lower()
     if text in ("начать", "start", "список", "тренировки", "🏸 тренировки"):
         await _show_list(user_id, group_id)
+    elif text in ("привет", "здравствуйте", "меню", "помощь", "help", "/start"):
+        await _send(user_id,
+                    "👋 Привет! Я бот клуба.\n\n"
+                    "🏸 Тренировки — посмотреть ближайшие и записаться\n"
+                    "👤 Профиль — ваша статистика\n\n"
+                    "Пользуйтесь кнопками меню внизу 👇",
+                    keyboard=_menu_kb())
     elif text.startswith("записаться "):
         try:
             tid = int(text.split()[1])
