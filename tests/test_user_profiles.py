@@ -94,7 +94,7 @@ def test_vk_technical_screen_name_hidden():
             async def get(user_ids, fields):
                 return [FakeUser()]
 
-    profile = asyncio.get_event_loop().run_until_complete(
+    profile = asyncio.run(
         fetch_vk_profile(FakeAPI(), 99999))
     assert profile.name == "Вася Пупкин"
     assert profile.username is None          # технический screen_name скрыт
@@ -117,7 +117,7 @@ def test_vk_real_screen_name_kept():
             async def get(user_ids, fields):
                 return [FakeUser()]
 
-    profile = asyncio.get_event_loop().run_until_complete(
+    profile = asyncio.run(
         fetch_vk_profile(FakeAPI(), 111))
     assert profile.username == "anya_badminton"
     assert profile.photo_url is None
