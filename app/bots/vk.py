@@ -653,7 +653,7 @@ async def _fsm_process(user_id: int, text: str) -> bool:
         if not text:
             await _send(user_id, "Текст пустой. Введите сообщение для рассылки:",
                         keyboard=_cancel_kb()); return True
-        state["text"] = text
+        state["text"] = text[:2000]
         async with SessionLocal() as session:
             tenant = await _resolve_tenant(session, state["gid"])
             subs = await BookingService(session, tenant.id).repo.get_subscribers()
@@ -670,7 +670,7 @@ async def _fsm_process(user_id: int, text: str) -> bool:
         async with SessionLocal() as session:
             tenant = await _resolve_tenant(session, state["gid"])
             svc = BookingService(session, tenant.id, tz=tenant.timezone)
-            res = await svc.sign_up_guest(state["tid"], text, added_by=user_id)
+            res = await svc.sign_up_guest(state["tid"], text[:250], added_by=user_id)
             await session.commit()
         msg = {"active": f"✅ Гость «{text}» записан.",
                "queue": f"⏳ Гость «{text}» в очереди.",
@@ -688,7 +688,7 @@ async def _fsm_process(user_id: int, text: str) -> bool:
         if not text:
             await _send(user_id, "Название пустое. Введите ещё раз:",
                         keyboard=_cancel_kb()); return True
-        data["title"] = text
+        data["title"] = text[:250]
         state["step"] = "date"
         await _cr_ask(user_id, "date", gid)
         return True
@@ -715,7 +715,7 @@ async def _fsm_process(user_id: int, text: str) -> bool:
                         keyboard=_cancel_kb()); return True
         data["time"] = text
     elif step == "location":
-        data["location"] = text or "—"
+        data["location"] = (text or "—")[:250]
     elif step == "duration":
         if not text.isdigit() or int(text) <= 0:
             await _send(user_id, "Введите число минут (напр. 90):",
@@ -993,7 +993,7 @@ async def _rename_apply(user_id: int, target_uid: int, alias: str,
     async with SessionLocal() as session:
         tenant = await _resolve_tenant(session, group_id)
         svc = BookingService(session, tenant.id, tz=tenant.timezone)
-        value = None if alias.strip() in ("-", "") else alias.strip()
+        value = None if alias.strip() in ("-", "") else alias.strip()[:100]
         display = await svc.repo.set_alias("vk", target_uid, value)
         await session.commit()
     if value:
@@ -1134,11 +1134,20 @@ async def setup() -> None:
 
     @_bot.on.message()
     async def _on_message(message: Message):
-        gid = getattr(message, "group_id", None)
-        await _handle_text(message.from_id, message.text or "", gid)
+        try:
+            gid = getattr(message, "group_id", None)
+            await _handle_text(message.from_id, message.text or "", gid)
+        except Exception as e:
+            logger.warning("VK: ошибка обработки сообщения: %s", e)
 
     @_bot.on.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=dict)
     async def _on_callback(event: dict):
+        try:
+            await _process_callback(event)
+        except Exception as e:
+            logger.warning("VK: ошибка обработки нажатия: %s", e)
+
+    async def _process_callback(event: dict):
         obj = event.get("object", {})
         gid = event.get("group_id")
         user_id = obj.get("user_id")
