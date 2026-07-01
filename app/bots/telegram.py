@@ -223,12 +223,11 @@ async def btn_my(message: Message) -> None:
         if not t:
             await message.answer("📭 Вы не записаны ни на одну предстоящую тренировку.\n"
                                  "Нажмите «🏸 Тренировки», чтобы записаться."); return
-        card = await views.training_card(svc, t)
+        as_admin = is_admin and message.chat.type == "private"
+        card = await views.training_card(svc, t, for_admin=as_admin)
         full = await _is_full(svc, t)
     await message.answer("📅 <b>Ваша ближайшая тренировка:</b>\n\n" + card,
                          reply_markup=_kb(t.id, is_admin, full), parse_mode="HTML")
-
-
 @router.message(F.text == BTN_PROFILE)
 async def btn_profile(message: Message) -> None:
     await cmd_profile(message)
@@ -337,9 +336,11 @@ async def cmd_list(message: Message) -> None:
             await message.answer("Ближайших тренировок нет."); return
         for t in trainings:
             full = await _is_full(svc, t)
-            await message.answer(await views.training_card(svc, t),
-                                 reply_markup=_kb(t.id, is_admin, full),
-                                 parse_mode="HTML")
+            as_admin = is_admin and message.chat.type == "private"
+            await message.answer(
+                await views.training_card(svc, t, for_admin=as_admin),
+                reply_markup=_kb(t.id, is_admin, full),
+                parse_mode="HTML")
 
 
 @router.message(Command("profile"))
@@ -383,7 +384,8 @@ async def cb_signup(query: CallbackQuery) -> None:
         res = await svc.sign_up(train_id, PLATFORM, query.from_user.id,
                                 _name(query), username=_username(query))
         training = await svc.repo.get_training(train_id)
-        new_card = await views.training_card(svc, training) if training else None
+        as_admin = is_admin and query.message.chat.type == "private"
+        new_card = await views.training_card(svc, training, for_admin=as_admin) if training else None
         full = await _is_full(svc, training) if training else False
     await query.answer(views.signup_result(res, training.title if training else ""), show_alert=True)
     await _refresh_card(query, train_id, new_card, is_admin, is_full=full)
@@ -422,7 +424,8 @@ async def cb_cancel(query: CallbackQuery) -> None:
         res = await svc.cancel_signup(train_id, PLATFORM, query.from_user.id,
                                       lock_minutes=lock)
         training = await svc.repo.get_training(train_id)
-        new_card = await views.training_card(svc, training) if training else None
+        as_admin = is_admin and query.message.chat.type == "private"
+        new_card = await views.training_card(svc, training, for_admin=as_admin) if training else None
         full = await _is_full(svc, training) if training else False
     if res.get("locked"):
         await query.answer(
@@ -568,7 +571,7 @@ async def edit_value(message: Message, state: FSMContext) -> None:
             f = "max_participants" if field == "max" else "duration_min"
             await svc.update_field(tid, f, int(message.text))
         training = await svc.repo.get_training(tid)
-        card = await views.training_card(svc, training)
+        card = await views.training_card(svc, training, for_admin=True)
         tenant_id = data["tenant_id"]
         full = await _is_full(svc, training) if training else False
     await state.clear()
@@ -1090,11 +1093,13 @@ async def cmd_attend(message: Message) -> None:
 
 async def _attend_kb(svc, train_id):
     active = await svc.repo.get_signups(train_id, "active")
+    aliases = await svc.repo.aliases_map("tg")
     rows = []
     for s in active:
         att = "✅" if s.attended else "⬜"
         pay = "💰" if s.paid else "🚫"
-        rows.append([InlineKeyboardButton(text=f"{att} {s.name}", callback_data=f"at:{s.id}"),
+        shown = aliases.get(getattr(s, "user_id", None)) or s.name
+        rows.append([InlineKeyboardButton(text=f"{att} {shown}", callback_data=f"at:{s.id}"),
                      InlineKeyboardButton(text=f"{pay} оплата", callback_data=f"pa:{s.id}")])
     rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"al:{train_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1209,10 +1214,10 @@ async def setmax_value(message: Message, state: FSMContext) -> None:
         svc = BookingService(session, data["tenant_id"])
         await svc.set_max_participants(data["train_id"], int(message.text))
         training = await svc.repo.get_training(data["train_id"])
-        card = await views.training_card(svc, training)
+        card = await views.training_card(svc, training, for_admin=True)
     await state.clear()
     await message.answer(f"Лимит обновлён: {message.text}.")
-    await message.answer(card)
+    await message.answer(card, parse_mode="HTML")
 
 
 @router.message(Command("cancel"))
