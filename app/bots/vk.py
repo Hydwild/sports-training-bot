@@ -61,7 +61,9 @@ def _kb(tid: int, is_full: bool = False, is_admin: bool = False) -> str:
         kb.add(Callback("✅ Явка/оплата", payload={"a": "att", "tid": tid}),
                color=KeyboardButtonColor.PRIMARY)
         kb.row()
+        kb.add(Callback("✏️ Изменить", payload={"a": "edit", "tid": tid}))
         kb.add(Callback("👤 Гость", payload={"a": "guest", "tid": tid}))
+        kb.row()
         kb.add(Callback("🗑 Удалить", payload={"a": "deltr", "tid": tid}),
                color=KeyboardButtonColor.NEGATIVE)
     return kb.get_json()
@@ -601,6 +603,40 @@ async def _fsm_process(user_id: int, text: str) -> bool:
         return True
 
     # мини-диалог добавления гостя
+    # ручной ввод нового значения при редактировании
+    if state.get("kind") == "edit":
+        if not state.get("manual"):
+            await _send(user_id, "Выберите вариант кнопкой "
+                        "или «✏️ Ввести вручную».")
+            return True
+        field = state["field"]
+        gid = state["gid"]
+        # валидация по типу поля
+        if field == "date":
+            try:
+                _dt.datetime.strptime(text, "%d.%m.%Y")
+            except ValueError:
+                await _send(user_id, "Формат: ДД.ММ.ГГГГ", keyboard=_cancel_kb())
+                return True
+            res = await _edit_apply(user_id, gid,
+                                    _dt.date(*map(int, reversed(text.split(".")))).isoformat())
+        elif field == "time":
+            try:
+                _dt.datetime.strptime(text, "%H:%M")
+            except ValueError:
+                await _send(user_id, "Формат: ЧЧ:ММ", keyboard=_cancel_kb())
+                return True
+            res = await _edit_apply(user_id, gid, text)
+        elif field in ("duration", "price", "max"):
+            if not text.isdigit():
+                await _send(user_id, "Введите число.", keyboard=_cancel_kb())
+                return True
+            res = await _edit_apply(user_id, gid, text)
+        else:  # location
+            res = await _edit_apply(user_id, gid, text)
+        await _send(user_id, res, keyboard=_menu_kb(True))
+        return True
+
     # мини-диалог рассылки: ввод текста → подтверждение
     if state.get("kind") == "bcast":
         if not text:
@@ -741,6 +777,144 @@ def _fmt_date(iso: str) -> str:
 
 
 
+
+
+# ─────────── Редактирование тренировки (кнопки, только админ) ───────────
+
+def _edit_menu_kb(tid: int) -> str:
+    """Меню выбора: что изменить в тренировке."""
+    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    kb = Keyboard(inline=True)
+    kb.add(Callback("📅 Дату", payload={"a": "ed_f", "f": "date", "tid": tid}))
+    kb.add(Callback("🕐 Время", payload={"a": "ed_f", "f": "time", "tid": tid}))
+    kb.row()
+    kb.add(Callback("📍 Место", payload={"a": "ed_f", "f": "location", "tid": tid}))
+    kb.add(Callback("⏱ Длит.", payload={"a": "ed_f", "f": "duration", "tid": tid}))
+    kb.row()
+    kb.add(Callback("💰 Цену", payload={"a": "ed_f", "f": "price", "tid": tid}))
+    kb.add(Callback("👥 Лимит", payload={"a": "ed_f", "f": "max", "tid": tid}))
+    kb.row()
+    kb.add(Callback("❌ Отмена", payload={"a": "ed_cancel"}),
+           color=KeyboardButtonColor.NEGATIVE)
+    return kb.get_json()
+
+
+async def _start_edit(user_id: int, tid: int, group_id=None) -> None:
+    """Открывает меню редактирования тренировки (только админ)."""
+    async with SessionLocal() as session:
+        if not await _is_admin_vk(session, user_id, group_id):
+            await _send(user_id, "⛔ Только тренер."); return
+        tenant = await _resolve_tenant(session, group_id)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        tr = await svc.repo.get_training(tid)
+        if not tr:
+            await _send(user_id, "Тренировка не найдена."); return
+        title = tr.title
+    await _send(user_id, f"✏️ Что изменить в «{title}»?",
+                keyboard=_edit_menu_kb(tid))
+
+
+async def _edit_ask_value(user_id: int, tid: int, field: str, gid) -> None:
+    """Показывает варианты нового значения для выбранного поля."""
+    _fsm[user_id] = {"kind": "edit", "tid": tid, "field": field,
+                     "gid": gid, "manual": False}
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, gid)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        if field == "date":
+            await _send(user_id, "📅 Новая дата:",
+                        keyboard=_kb_from(_date_options(svc.tz), per_row=2))
+        elif field == "time":
+            await _send(user_id, "🕐 Новое время:",
+                        keyboard=_kb_from(_time_options(), per_row=4))
+        elif field == "location":
+            opts = await _location_options(svc)
+            if opts:
+                await _send(user_id, "📍 Новое место:",
+                            keyboard=_kb_from(opts, per_row=1))
+            else:
+                _fsm[user_id]["manual"] = True
+                await _send(user_id, "📍 Введите новое место:",
+                            keyboard=_cancel_kb())
+        elif field == "duration":
+            await _send(user_id, "⏱ Новая длительность:",
+                        keyboard=_kb_from(_duration_options(), per_row=4))
+        elif field == "price":
+            await _send(user_id, "💰 Новая цена:",
+                        keyboard=_kb_from(_price_options(), per_row=3))
+        elif field == "max":
+            await _send(user_id, "👥 Новый лимит участников:",
+                        keyboard=_kb_from(_max_options(), per_row=3))
+
+
+async def _edit_apply(user_id: int, gid, raw_value) -> str:
+    """Применяет новое значение к полю тренировки."""
+    state = _fsm.get(user_id)
+    if not state or state.get("kind") != "edit":
+        return "Нет активного редактирования."
+    field = state["field"]
+    tid = state["tid"]
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, gid)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        tr = await svc.repo.get_training(tid)
+        if not tr:
+            _fsm.pop(user_id, None)
+            return "Тренировка не найдена."
+        if field == "date":
+            cur = svc.format_local(tr.start_at)
+            time_part = cur.split(" ")[1]
+            new = svc.parse_local(f"{_fmt_date(raw_value)} {time_part}")
+            await svc.update_field(tid, "start_at", new)
+            label = f"дата → {_fmt_date(raw_value)}"
+        elif field == "time":
+            cur = svc.format_local(tr.start_at)
+            date_part = cur.split(" ")[0]
+            new = svc.parse_local(f"{date_part} {raw_value}")
+            await svc.update_field(tid, "start_at", new)
+            label = f"время → {raw_value}"
+        elif field == "location":
+            await svc.update_field(tid, "location", raw_value)
+            label = f"место → {raw_value}"
+        elif field == "duration":
+            await svc.update_field(tid, "duration_min", int(raw_value))
+            label = f"длительность → {int(raw_value)} мин"
+        elif field == "price":
+            await svc.update_field(tid, "price_minor", int(raw_value) * 100)
+            label = (f"цена → {int(raw_value)}₽" if int(raw_value)
+                     else "цена → бесплатно")
+        elif field == "max":
+            await svc.update_field(tid, "max_participants", int(raw_value))
+            label = f"лимит → {int(raw_value)}"
+        else:
+            _fsm.pop(user_id, None)
+            return "Неизвестное поле."
+    _fsm.pop(user_id, None)
+    return f"✅ Изменено: {label}"
+
+
+async def _edit_callback(user_id: int, payload: dict, gid) -> str | None:
+    """Обработка кнопок выбора нового значения при редактировании."""
+    state = _fsm.get(user_id)
+    if not state or state.get("kind") != "edit":
+        return None
+    a = payload.get("a")
+    v = payload.get("v")
+    if a == "cr_manual":
+        state["manual"] = True
+        prompts = {
+            "date": "Введите дату: ДД.ММ.ГГГГ", "time": "Введите время: ЧЧ:ММ",
+            "location": "Введите место:", "duration": "Введите минуты:",
+            "price": "Введите цену в рублях:", "max": "Введите лимит:",
+        }
+        await _send(user_id, prompts.get(state["field"], "Введите значение:"),
+                    keyboard=_cancel_kb())
+        return None
+    val = {"cr_date": v, "cr_time": v, "cr_loc": v, "cr_dur": v,
+           "cr_price": v, "cr_max": v}.get(a)
+    if val is None:
+        return None
+    return await _edit_apply(user_id, gid, val)
 
 
 async def _handle_text(user_id: int, text: str, group_id=None) -> None:
@@ -936,7 +1110,23 @@ async def setup() -> None:
             await _send(user_id, "Создание отменено.", keyboard=_menu_kb(True))
         elif action in ("cr_date", "cr_time", "cr_loc", "cr_dur",
                         "cr_price", "cr_max", "cr_manual"):
-            await _cr_callback(user_id, payload, gid, peer_id, cmid)
+            st = _fsm.get(user_id)
+            if st and st.get("kind") == "edit":
+                res = await _edit_callback(user_id, payload, gid)
+                if res:
+                    snackbar = res
+                    await _strip_buttons(peer_id, cmid, res)
+            else:
+                await _cr_callback(user_id, payload, gid, peer_id, cmid)
+        elif action == "edit":                      # открыть меню редактирования
+            await _start_edit(user_id, tid, gid)
+        elif action == "ed_f":                       # выбрано поле для изменения
+            await _strip_buttons(peer_id, cmid, "✏️ Выбор нового значения…")
+            await _edit_ask_value(user_id, tid, payload.get("f"), gid)
+        elif action == "ed_cancel":
+            _fsm.pop(user_id, None)
+            snackbar = "Редактирование отменено"
+            await _strip_buttons(peer_id, cmid, "❌ Редактирование отменено.")
         elif action == "att":                       # открыть явку/оплату
             await _show_attendance(user_id, tid, gid)
         elif action == "att_t":                     # переключить у участника
