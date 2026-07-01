@@ -43,6 +43,38 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
     return "\n".join(lines)
 
 
+async def training_card_plain(svc: BookingService, t) -> str:
+    """
+    Карточка тренировки БЕЗ HTML — для VK (VK не поддерживает разметку).
+    Показывает те же данные: дату, место, длительность, цену, счётчик,
+    прогресс-бар, список записавшихся и очередь.
+    """
+    active = await svc.repo.get_signups(t.id, "active")
+    queue = await svc.repo.get_signups(t.id, "queue")
+    filled = len(active)
+    total = t.max_participants
+    bar = _progress_bar(filled, total)
+
+    lines = [f"🏸 {t.title}", f"📅 {svc.format_local(t.start_at)}"]
+    if t.location:
+        lines.append(f"📍 {t.location}")
+    h = t.duration_min / 60
+    lines.append(f"⏱ {('%.1f' % h).rstrip('0').rstrip('.')} ч")
+    if getattr(t, "price_minor", 0):
+        lines.append(f"💰 {t.price_minor // 100}₽")
+    lines.append(f"👥 {filled}/{total}  {bar}")
+
+    if active:
+        lines.append("\nЗаписаны:")
+        lines += [f"  {i}. {_label(s)}" for i, s in enumerate(active, 1)]
+    if queue:
+        lines.append("\n⏳ Очередь:")
+        lines += [f"  {i}. {_label(s)}" for i, s in enumerate(queue, 1)]
+    if not active and not queue:
+        lines.append("\nПока никто не записан — будь первым!")
+    return "\n".join(lines)
+
+
 def _progress_bar(filled: int, total: int, width: int = 10) -> str:
     """Текстовый прогресс-бар заполнения мест: ▰▰▰▱▱▱▱▱▱▱"""
     if total <= 0:
