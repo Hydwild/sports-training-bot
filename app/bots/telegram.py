@@ -121,9 +121,12 @@ async def _upsert_user(svc: BookingService, user) -> None:
         asyncio.create_task(_bg())
 
 
-def _kb(tid: int, is_admin: bool = False) -> InlineKeyboardMarkup:
+def _kb(tid: int, is_admin: bool = False,
+        is_full: bool = False) -> InlineKeyboardMarkup:
+    # когда мест нет — кнопка честно предлагает встать в очередь
+    signup_text = "⏳ Встать в очередь" if is_full else "✅ Записаться"
     rows = [[
-        InlineKeyboardButton(text="✅ Записаться", callback_data=f"su:{tid}"),
+        InlineKeyboardButton(text=signup_text, callback_data=f"su:{tid}"),
         InlineKeyboardButton(text="❌ Отменить", callback_data=f"cx:{tid}"),
     ], [
         InlineKeyboardButton(text="👤 Записать гостя", callback_data=f"gu:{tid}"),
@@ -138,6 +141,12 @@ def _kb(tid: int, is_admin: bool = False) -> InlineKeyboardMarkup:
                                  callback_data=f"trcx:{tid}"),
         ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _is_full(svc, training) -> bool:
+    """True, если активных записей не меньше лимита мест."""
+    active = await svc.repo.get_signups(training.id, "active")
+    return len(active) >= training.max_participants
 
 
 class NewTraining(StatesGroup):
@@ -215,8 +224,9 @@ async def btn_my(message: Message) -> None:
             await message.answer("📭 Вы не записаны ни на одну предстоящую тренировку.\n"
                                  "Нажмите «🏸 Тренировки», чтобы записаться."); return
         card = await views.training_card(svc, t)
+        full = await _is_full(svc, t)
     await message.answer("📅 <b>Ваша ближайшая тренировка:</b>\n\n" + card,
-                         reply_markup=_kb(t.id, is_admin), parse_mode="HTML")
+                         reply_markup=_kb(t.id, is_admin, full), parse_mode="HTML")
 
 
 @router.message(F.text == BTN_PROFILE)
@@ -326,8 +336,9 @@ async def cmd_list(message: Message) -> None:
         if not trainings:
             await message.answer("Ближайших тренировок нет."); return
         for t in trainings:
+            full = await _is_full(svc, t)
             await message.answer(await views.training_card(svc, t),
-                                 reply_markup=_kb(t.id, is_admin),
+                                 reply_markup=_kb(t.id, is_admin, full),
                                  parse_mode="HTML")
 
 
@@ -373,13 +384,15 @@ async def cb_signup(query: CallbackQuery) -> None:
                                 _name(query), username=_username(query))
         training = await svc.repo.get_training(train_id)
         new_card = await views.training_card(svc, training) if training else None
+        full = await _is_full(svc, training) if training else False
     await query.answer(views.signup_result(res, training.title if training else ""), show_alert=True)
-    await _refresh_card(query, train_id, new_card, is_admin)
+    await _refresh_card(query, train_id, new_card, is_admin, is_full=full)
     await _refresh_group_card(tid, train_id)
 
 
 async def _refresh_card(query, train_id: int, card: str | None,
-                        is_admin: bool = False, prefix: str = "") -> None:
+                        is_admin: bool = False, prefix: str = "",
+                        is_full: bool = False) -> None:
     """
     Перерисовывает карточку тренировки в том сообщении, где нажали кнопку —
     чтобы счётчик мест и список записавшихся обновлялись в реальном времени.
@@ -390,7 +403,7 @@ async def _refresh_card(query, train_id: int, card: str | None,
     try:
         await query.message.edit_text(
             (prefix + card) if prefix else card,
-            reply_markup=_kb(train_id, is_admin), parse_mode="HTML")
+            reply_markup=_kb(train_id, is_admin, is_full), parse_mode="HTML")
     except Exception:
         pass  # текст не изменился или сообщение недоступно — не критично
 
@@ -410,6 +423,7 @@ async def cb_cancel(query: CallbackQuery) -> None:
                                       lock_minutes=lock)
         training = await svc.repo.get_training(train_id)
         new_card = await views.training_card(svc, training) if training else None
+        full = await _is_full(svc, training) if training else False
     if res.get("locked"):
         await query.answer(
             f"Отмена закрыта: до тренировки меньше {res['lock_minutes']} мин. "
@@ -417,7 +431,7 @@ async def cb_cancel(query: CallbackQuery) -> None:
         return
     await query.answer("Запись отменена." if res["cancelled"] else "Вы не были записаны.", show_alert=True)
     if res["cancelled"]:
-        await _refresh_card(query, train_id, new_card, is_admin)
+        await _refresh_card(query, train_id, new_card, is_admin, is_full=full)
         await _refresh_group_card(tid, train_id)
 
 
@@ -556,9 +570,10 @@ async def edit_value(message: Message, state: FSMContext) -> None:
         training = await svc.repo.get_training(tid)
         card = await views.training_card(svc, training)
         tenant_id = data["tenant_id"]
+        full = await _is_full(svc, training) if training else False
     await state.clear()
     await message.answer("✅ Изменено:\n\n" + card,
-                         reply_markup=_kb(tid, True), parse_mode="HTML")
+                         reply_markup=_kb(tid, True, full), parse_mode="HTML")
     await _refresh_group_card(tenant_id, tid)
 
 
@@ -1298,11 +1313,12 @@ async def _publish_to_group(tenant_id: int, training_id: int) -> None:
             return
         card = await views.training_card(svc, training)
         chat_id = tenant.tg_chat_id
+        full = await _is_full(svc, training)
     try:
         msg = await _bot.send_message(
             chat_id,
             "📣 <b>Новая тренировка — открыта запись!</b>\n\n" + card,
-            reply_markup=_kb(training_id, is_admin=False),
+            reply_markup=_kb(training_id, is_admin=False, is_full=full),
             parse_mode="HTML")
         # запоминаем id сообщения для будущих обновлений
         async with SessionLocal() as session:
@@ -1336,11 +1352,12 @@ async def _refresh_group_card(tenant_id: int, training_id: int) -> None:
         card = await views.training_card(svc, training)
         chat_id = tenant.tg_chat_id
         msg_id = training.group_message_id
+        full = await _is_full(svc, training)
     try:
         await _bot.edit_message_text(
             "📣 <b>Тренировка — запись открыта!</b>\n\n" + card,
             chat_id=chat_id, message_id=msg_id,
-            reply_markup=_kb(training_id, is_admin=False),
+            reply_markup=_kb(training_id, is_admin=False, is_full=full),
             parse_mode="HTML")
     except Exception:
         pass  # не изменилось / удалено — не критично
