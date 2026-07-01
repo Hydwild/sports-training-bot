@@ -192,6 +192,33 @@ class BookingService:
 
     # ---------- Тренировки ----------
 
+    async def common_values(self) -> dict:
+        """
+        Частые значения для подсказок при создании: лимит участников и
+        длительность (берём самые используемые из истории клуба).
+        """
+        from sqlalchemy import select, func
+        from app.models.entities import Training
+        # самые частые лимиты
+        max_stmt = (select(Training.max_participants, func.count().label("c"))
+                    .where(Training.tenant_id == self.tenant_id)
+                    .group_by(Training.max_participants)
+                    .order_by(func.count().desc()).limit(4))
+        maxes = [row[0] for row in (await self.session.execute(max_stmt)).all()]
+        # самые частые длительности
+        dur_stmt = (select(Training.duration_min, func.count().label("c"))
+                    .where(Training.tenant_id == self.tenant_id)
+                    .group_by(Training.duration_min)
+                    .order_by(func.count().desc()).limit(4))
+        durs = [row[0] for row in (await self.session.execute(dur_stmt)).all()]
+        # самые частые цены (в копейках)
+        price_stmt = (select(Training.price_minor, func.count().label("c"))
+                      .where(Training.tenant_id == self.tenant_id)
+                      .group_by(Training.price_minor)
+                      .order_by(func.count().desc()).limit(4))
+        prices = [row[0] for row in (await self.session.execute(price_stmt)).all()]
+        return {"max": maxes, "dur": durs, "prices": prices}
+
     async def recent_locations(self, limit: int = 4) -> list[str]:
         """Недавно использованные места (для быстрых кнопок при создании)."""
         from sqlalchemy import select
