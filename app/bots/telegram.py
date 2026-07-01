@@ -521,6 +521,25 @@ async def cb_cancel_training_no(query: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("trcxyes:"))
+async def notify_group_cancelled(tenant_id: int, title: str, when: str) -> None:
+    """Публикует в Telegram-группу клуба сообщение об отмене тренировки.
+    Вызывается и из Telegram, и из VK. Тихо пропускает, если группы нет."""
+    if not _bot:
+        return
+    async with SessionLocal() as session:
+        g = GlobalRepository(session)
+        tenant = await g.get_tenant(tenant_id)
+        group_chat = tenant.tg_chat_id if tenant else None
+    if group_chat and group_chat != -100:
+        try:
+            await _bot.send_message(
+                group_chat,
+                f"🚫 <b>Тренировка отменена</b>\n{title} — {when}",
+                parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Не удалось уведомить группу об отмене: %s", e)
+
+
 async def cb_cancel_training_yes(query: CallbackQuery) -> None:
     train_id = int(query.data.split(":")[1])
     async with SessionLocal() as session:
