@@ -43,11 +43,13 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
     return "\n".join(lines)
 
 
-async def training_card_plain(svc: BookingService, t) -> str:
+async def training_card_plain(svc: BookingService, t,
+                              aliases: dict[int, str] | None = None) -> str:
     """
     Карточка тренировки БЕЗ HTML — для VK (VK не поддерживает разметку).
     Показывает те же данные: дату, место, длительность, цену, счётчик,
-    прогресс-бар, список записавшихся и очередь.
+    прогресс-бар, список записавшихся и очередь. Если передан aliases
+    (для тренера) — имена участников заменяются на приватные подписи.
     """
     active = await svc.repo.get_signups(t.id, "active")
     queue = await svc.repo.get_signups(t.id, "queue")
@@ -66,10 +68,10 @@ async def training_card_plain(svc: BookingService, t) -> str:
 
     if active:
         lines.append("\nЗаписаны:")
-        lines += [f"  {i}. {_label(s)}" for i, s in enumerate(active, 1)]
+        lines += [f"  {i}. {_label(s, aliases)}" for i, s in enumerate(active, 1)]
     if queue:
         lines.append("\n⏳ Очередь:")
-        lines += [f"  {i}. {_label(s)}" for i, s in enumerate(queue, 1)]
+        lines += [f"  {i}. {_label(s, aliases)}" for i, s in enumerate(queue, 1)]
     if not active and not queue:
         lines.append("\nПока никто не записан — будь первым!")
     return "\n".join(lines)
