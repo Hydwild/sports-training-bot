@@ -167,6 +167,7 @@ class Subscriber(Base):
     platform: Mapped[str] = mapped_column(String(8))
     user_id: Mapped[int] = mapped_column(BigInteger)
     name: Mapped[str] = mapped_column(String(200), default="")
+    alias: Mapped[str | None] = mapped_column(String(200))      # подпись от тренера
     username: Mapped[str | None] = mapped_column(String(100))   # @никнейм без @
     photo_url: Mapped[str | None] = mapped_column(String(500))  # URL аватара
     subscribed: Mapped[bool] = mapped_column(Boolean, default=True)
