@@ -44,12 +44,11 @@ class BookingService:
             return SignupResult("already", existing.position, existing.status)
 
         status, position = await self._place(training)
-        # если тренер задал участнику свою подпись — используем её
-        alias = await self.repo.get_alias(platform, user_id)
-        display_name = alias or name
+        # в записи храним обычное имя из Telegram (для группы и общих списков);
+        # подпись тренера применяется только при показе тренеру
         await self.repo.add_signup(
             training_id=training_id, platform=platform, user_id=user_id,
-            name=display_name, username=username, status=status, position=position,
+            name=name, username=username, status=status, position=position,
         )
         await self.session.commit()
         return SignupResult(status, position)
