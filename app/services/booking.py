@@ -68,7 +68,7 @@ class BookingService:
         import time
         guest_uid = -int(time.time() * 1000) % 1_000_000_000
         status, position = await self._place(training)
-        s = await self.repo.add_signup(
+        await self.repo.add_signup(
             training_id=training_id, platform="guest", user_id=guest_uid,
             name=guest_name, status=status, position=position,
             is_guest=True, confirmed=False, added_by=added_by,
@@ -119,6 +119,8 @@ class BookingService:
 
     async def cancel_signup(self, training_id: int, platform: str,
                             user_id: int, lock_minutes: int = 0) -> dict:
+        # блокируем строку тренировки — защита от гонок при отмене/rebalance
+        await self.repo.get_training_for_update(training_id)
         signup = await self.repo.get_user_signup(training_id, platform, user_id)
         if not signup:
             return {"cancelled": False, "promoted": None}
@@ -150,7 +152,8 @@ class BookingService:
 
     async def set_max_participants(self, training_id: int,
                                    new_max: int) -> list[Signup]:
-        training = await self.repo.get_training(training_id)
+        # блокируем строку — rebalance меняет состав, защита от гонок
+        training = await self.repo.get_training_for_update(training_id)
         if not training:
             return []
         training.max_participants = new_max
