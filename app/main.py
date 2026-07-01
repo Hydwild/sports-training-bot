@@ -26,11 +26,39 @@ logger = logging.getLogger("app")
 _background: list[asyncio.Task] = []
 
 
+async def _ensure_columns(conn) -> None:
+    """
+    Добавляет недостающие колонки в существующие таблицы (лёгкая авто-миграция).
+    Нужна, потому что create_all не изменяет уже созданные таблицы.
+    Список пополняется по мере добавления полей в модели.
+    """
+    from sqlalchemy import text
+    # (таблица, колонка, SQL-тип)
+    wanted = [
+        ("subscribers", "alias", "VARCHAR(200)"),
+    ]
+    for table, column, coltype in wanted:
+        try:
+            # ADD COLUMN IF NOT EXISTS поддерживается Postgres и новыми SQLite;
+            # на старых SQLite ловим ошибку и проверяем вручную.
+            await conn.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {coltype}"))
+        except Exception:
+            # запасной путь: пробуем без IF NOT EXISTS, ошибку «уже есть» глушим
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"))
+            except Exception:
+                pass  # колонка уже существует
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # таблицы (dev). В проде — alembic upgrade head.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # безопасно добавляем новые колонки, если их ещё нет в существующей БД
+        await _ensure_columns(conn)
     logger.info("Таблицы готовы. БД: %s",
                 "SQLite" if settings.is_sqlite else "PostgreSQL")
 
