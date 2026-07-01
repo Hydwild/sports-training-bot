@@ -46,8 +46,9 @@ async def _send(user_id: int, text: str, keyboard: str | None = None) -> None:
             user_id=user_id, message=text, random_id=0, keyboard=keyboard)
 
 
-def _kb(tid: int, is_full: bool = False) -> str:
-    """Inline-клавиатура под карточкой тренировки (записаться / отмена)."""
+def _kb(tid: int, is_full: bool = False, is_admin: bool = False) -> str:
+    """Inline-клавиатура под карточкой тренировки.
+    Участнику: записаться/отмена. Админу — плюс управление."""
     from vkbottle import Keyboard, Callback, KeyboardButtonColor
     signup = "⏳ Встать в очередь" if is_full else "✅ Записаться"
     kb = Keyboard(inline=True)
@@ -55,6 +56,14 @@ def _kb(tid: int, is_full: bool = False) -> str:
            color=KeyboardButtonColor.POSITIVE)
     kb.add(Callback("❌ Отменить", payload={"a": "cx", "tid": tid}),
            color=KeyboardButtonColor.NEGATIVE)
+    if is_admin:
+        kb.row()
+        kb.add(Callback("✅ Явка/оплата", payload={"a": "att", "tid": tid}),
+               color=KeyboardButtonColor.PRIMARY)
+        kb.row()
+        kb.add(Callback("👤 Гость", payload={"a": "guest", "tid": tid}))
+        kb.add(Callback("🗑 Удалить", payload={"a": "deltr", "tid": tid}),
+               color=KeyboardButtonColor.NEGATIVE)
     return kb.get_json()
 
 
@@ -129,19 +138,22 @@ async def _show_list(user_id: int, group_id=None) -> None:
         svc = BookingService(session, tenant.id, tz=tenant.timezone)
         await _upsert_vk_user(svc, user_id)
         await session.commit()
+        is_admin = tenant.admin_vk_id == user_id
         trainings = await svc.repo.list_upcoming()
         if not trainings:
-            await _send(user_id, "Ближайших тренировок нет.", keyboard=_menu_kb())
+            await _send(user_id, "Ближайших тренировок нет.",
+                        keyboard=_menu_kb(is_admin))
             return
         for tr in trainings:
             card = await views.training_card_plain(svc, tr)
             full = await _is_full(svc, tr)
-            await _send(user_id, card, keyboard=_kb(tr.id, full))
+            await _send(user_id, card, keyboard=_kb(tr.id, full, is_admin))
         # закрепляем нижнее меню отдельным коротким сообщением
-        await _send(user_id, "⌨️ Меню внизу 👇", keyboard=_menu_kb())
+        await _send(user_id, "⌨️ Меню внизу 👇", keyboard=_menu_kb(is_admin))
 
 
-async def _edit_card(peer_id: int, cmid: int, tid: int, group_id=None) -> None:
+async def _edit_card(peer_id: int, cmid: int, tid: int, group_id=None,
+                     admin_uid: int | None = None) -> None:
     """
     Живое обновление: переписывает карточку тренировки на месте
     (новый счётчик, список, кнопка) после записи/отмены.
@@ -158,12 +170,13 @@ async def _edit_card(peer_id: int, cmid: int, tid: int, group_id=None) -> None:
             return
         card = await views.training_card_plain(svc, training)
         full = await _is_full(svc, training)
+        is_admin = admin_uid is not None and tenant.admin_vk_id == admin_uid
     try:
         await _bot.api.messages.edit(
             peer_id=peer_id,
             conversation_message_id=cmid,
             message=card,
-            keyboard=_kb(tid, full))
+            keyboard=_kb(tid, full, is_admin))
     except Exception as e:
         logger.warning("VK: не удалось обновить карточку: %s", e)
 
@@ -201,6 +214,109 @@ async def _do_cancel(user_id: int, tid: int, group_id=None) -> str:
         return "Запись отменена." if res["cancelled"] else "Вы не были записаны."
 
 
+# ─────────── Админские действия (только тренер) ───────────
+
+def _attendance_kb(tid: int, signups: list) -> str:
+    """Клавиатура для отметки явки/оплаты: по кнопке на участника."""
+    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    kb = Keyboard(inline=True)
+    for i, s in enumerate(signups[:8]):   # VK-лимит на кнопки
+        att = "✅" if s.attended else "⬜"
+        paid = "💰" if s.paid else "⬜"
+        kb.add(Callback(f"{att}{paid} {s.name[:18]}",
+                        payload={"a": "att_t", "sid": s.id, "tid": tid}),
+               color=KeyboardButtonColor.PRIMARY)
+        if i % 1 == 0:
+            kb.row()
+    kb.add(Callback("← Назад", payload={"a": "att_close", "tid": tid}))
+    return kb.get_json()
+
+
+async def _show_attendance(user_id: int, tid: int, group_id=None) -> None:
+    """Показывает список участников с кнопками отметки явки/оплаты (админ)."""
+    async with SessionLocal() as session:
+        if not await _is_admin_vk(session, user_id, group_id):
+            await _send(user_id, "⛔ Только тренер."); return
+        tenant = await _resolve_tenant(session, group_id)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        training = await svc.repo.get_training(tid)
+        if not training:
+            await _send(user_id, "Тренировка не найдена."); return
+        active = await svc.repo.get_signups(tid, "active")
+        title = training.title
+    if not active:
+        await _send(user_id, f"«{title}» — пока никто не записан.")
+        return
+    legend = ("Отметка явки/оплаты для «" + title + "»:\n"
+              "✅ = пришёл, 💰 = оплатил (жмите, чтобы переключить)")
+    await _send(user_id, legend, keyboard=_attendance_kb(tid, active))
+
+
+async def _refresh_attendance(peer_id: int, cmid: int, tid: int,
+                              group_id=None) -> None:
+    """Обновляет сообщение со списком явки/оплаты после переключения."""
+    if not _bot or not cmid:
+        return
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            return
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        training = await svc.repo.get_training(tid)
+        if not training:
+            return
+        active = await svc.repo.get_signups(tid, "active")
+        title = training.title
+    if not active:
+        return
+    legend = ("Отметка явки/оплаты для «" + title + "»:\n"
+              "✅ = пришёл, 💰 = оплатил (жмите, чтобы переключить)")
+    try:
+        await _bot.api.messages.edit(
+            peer_id=peer_id, conversation_message_id=cmid,
+            message=legend, keyboard=_attendance_kb(tid, active))
+    except Exception as e:
+        logger.warning("VK: не удалось обновить явку: %s", e)
+
+
+async def _toggle_att(user_id: int, sid: int, group_id=None) -> str:
+    """Переключает явку И оплату по кругу: ничего → явка → +оплата → сброс."""
+    async with SessionLocal() as session:
+        if not await _is_admin_vk(session, user_id, group_id):
+            return "⛔ Только тренер."
+        tenant = await _resolve_tenant(session, group_id)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        s = await svc.repo.get_signup_by_id(sid)
+        if not s:
+            return "Не найдено."
+        # цикл состояний: (нет,нет)→(да,нет)→(да,да)→(нет,нет)
+        if not s.attended and not s.paid:
+            s.attended = True
+        elif s.attended and not s.paid:
+            s.paid = True
+        else:
+            s.attended = False; s.paid = False
+        await session.commit()
+        state = ("пришёл + оплатил" if s.attended and s.paid
+                 else "пришёл" if s.attended else "сброшено")
+        return f"{s.name}: {state}"
+
+
+async def _delete_training(user_id: int, tid: int, group_id=None) -> str:
+    """Отменяет тренировку (уведомляет записанных). Только админ."""
+    async with SessionLocal() as session:
+        if not await _is_admin_vk(session, user_id, group_id):
+            return "⛔ Только тренер."
+        tenant = await _resolve_tenant(session, group_id)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        training = await svc.repo.get_training(tid)
+        if not training:
+            return "Тренировка не найдена."
+        title = training.title
+        await svc.cancel_training(tid)
+    return f"🗑 Тренировка «{title}» отменена, участники уведомлены."
+
+
 # ─────────── Пошаговое создание тренировки (только админ) ───────────
 _STEPS = ["title", "date", "location", "duration", "price", "max"]
 _PROMPTS = {
@@ -235,7 +351,26 @@ async def _fsm_process(user_id: int, text: str) -> bool:
     text = (text or "").strip()
     if text.lower() in ("отмена", "❌ отмена", "стоп"):
         _fsm.pop(user_id, None)
-        await _send(user_id, "Создание отменено.", keyboard=_menu_kb(True))
+        await _send(user_id, "Отменено.", keyboard=_menu_kb(True))
+        return True
+
+    # мини-диалог добавления гостя
+    if state.get("kind") == "guest":
+        _fsm.pop(user_id, None)
+        if not text:
+            await _send(user_id, "Имя пустое, попробуйте снова.",
+                        keyboard=_menu_kb(True))
+            return True
+        async with SessionLocal() as session:
+            tenant = await _resolve_tenant(session, state["gid"])
+            svc = BookingService(session, tenant.id, tz=tenant.timezone)
+            res = await svc.sign_up_guest(state["tid"], text, added_by=user_id)
+            await session.commit()
+        msg = {"active": f"✅ Гость «{text}» записан.",
+               "queue": f"⏳ Гость «{text}» в очереди.",
+               "closed": "Запись закрыта."}.get(
+                   getattr(res, "result", "active"), f"Гость «{text}» добавлен.")
+        await _send(user_id, msg, keyboard=_menu_kb(True))
         return True
 
     step_name = _STEPS[state["step"]]
@@ -478,14 +613,15 @@ async def setup() -> None:
                 payload = {}
         action = payload.get("a")
         tid = payload.get("tid")
+        sid = payload.get("sid")
 
         snackbar = "Готово"
         if action == "su":
             snackbar = await _do_signup(user_id, tid, gid)
-            await _edit_card(peer_id, cmid, tid, gid)   # живое обновление
+            await _edit_card(peer_id, cmid, tid, gid, user_id)
         elif action == "cx":
             snackbar = await _do_cancel(user_id, tid, gid)
-            await _edit_card(peer_id, cmid, tid, gid)   # живое обновление
+            await _edit_card(peer_id, cmid, tid, gid, user_id)
         elif action == "list":
             await _show_list(user_id, gid)
         elif action == "profile":
@@ -495,6 +631,23 @@ async def setup() -> None:
         elif action == "create_cancel":
             _fsm.pop(user_id, None)
             await _send(user_id, "Создание отменено.", keyboard=_menu_kb(True))
+        elif action == "att":                       # открыть явку/оплату
+            await _show_attendance(user_id, tid, gid)
+        elif action == "att_t":                     # переключить у участника
+            snackbar = await _toggle_att(user_id, sid, gid)
+            await _refresh_attendance(peer_id, cmid, tid, gid)
+        elif action == "att_close":                 # закрыть явку
+            snackbar = "Готово"
+        elif action == "guest":                     # добавить гостя
+            async with SessionLocal() as session:
+                if not await _is_admin_vk(session, user_id, gid):
+                    snackbar = "⛔ Только тренер"
+                else:
+                    _fsm[user_id] = {"kind": "guest", "tid": tid, "gid": gid}
+                    await _send(user_id,
+                                "👤 Введите имя гостя:", keyboard=_cancel_kb())
+        elif action == "deltr":                     # отменить тренировку
+            snackbar = await _delete_training(user_id, tid, gid)
 
         # ответ на нажатие (всплывающее уведомление) + обновляем карточку
         try:
