@@ -520,7 +520,6 @@ async def cb_cancel_training_no(query: CallbackQuery) -> None:
     await query.message.edit_text("Отмена тренировки прервана.")
 
 
-@router.callback_query(F.data.startswith("trcxyes:"))
 async def notify_group_cancelled(tenant_id: int, title: str, when: str) -> None:
     """Публикует в Telegram-группу клуба сообщение об отмене тренировки.
     Вызывается и из Telegram, и из VK. Тихо пропускает, если группы нет."""
@@ -540,6 +539,7 @@ async def notify_group_cancelled(tenant_id: int, title: str, when: str) -> None:
             logger.warning("Не удалось уведомить группу об отмене: %s", e)
 
 
+@router.callback_query(F.data.startswith("trcxyes:"))
 async def cb_cancel_training_yes(query: CallbackQuery) -> None:
     train_id = int(query.data.split(":")[1])
     async with SessionLocal() as session:
