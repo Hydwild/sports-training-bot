@@ -209,7 +209,7 @@ async def publish_to_wall(tenant_id: int, training_id: int) -> None:
         training = await svc.repo.get_training(training_id)
         if not training:
             return
-        card = await views.training_card_plain(svc, training)
+        card = await views.announce_card_plain(svc, training)
         group_id = tenant.vk_group_id
 
     # ссылку кладём прямо в текст: как attachment VK требует фото-превью
