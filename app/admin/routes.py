@@ -41,7 +41,7 @@ async def _brand(session: AsyncSession, tenant_id: int) -> dict:
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {
+    return templates.TemplateResponse(request, "login.html", {
         "request": request,
         "brand_name": "Badminton Platform", "brand_color": "#3a7bd5",
         "brand_logo_url": None, "role": None,
@@ -118,7 +118,7 @@ async def dashboard(request: Request, claims: dict = Depends(current_claims),
                      "currency": t.currency})
     ctx = {"request": request, "role": claims["role"], "trainings": rows}
     ctx.update(await _brand(session, tenant_id))
-    return templates.TemplateResponse("dashboard.html", ctx)
+    return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
 @router.get("/trainings/{training_id}", response_class=HTMLResponse)
@@ -153,7 +153,7 @@ async def training_page(training_id: int, request: Request,
            "signups": [_signup_ctx(s) for s in active + queue],
            "summary": summary, "can_edit": can_edit}
     ctx.update(await _brand(session, tenant_id))
-    return templates.TemplateResponse("training.html", ctx)
+    return templates.TemplateResponse(request, "training.html", ctx)
 
 
 # ---------- Настройки клуба (coach и выше) ----------
@@ -166,7 +166,7 @@ async def settings_page(request: Request,
     tenant = await g.get_tenant(claims["tenant_id"])
     ctx = {"request": request, "role": claims["role"], "t": tenant, "saved": False}
     ctx.update(await _brand(session, claims["tenant_id"]))
-    return templates.TemplateResponse("settings.html", ctx)
+    return templates.TemplateResponse(request, "settings.html", ctx)
 
 
 @router.post("/settings", response_class=HTMLResponse)
@@ -204,7 +204,7 @@ async def settings_save(request: Request,
 
     ctx = {"request": request, "role": claims["role"], "t": tenant, "saved": True}
     ctx.update(await _brand(session, claims["tenant_id"]))
-    return templates.TemplateResponse("settings.html", ctx)
+    return templates.TemplateResponse(request, "settings.html", ctx)
 
 
 # ---------- Действия (assistant и выше) ----------
