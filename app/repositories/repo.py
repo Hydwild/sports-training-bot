@@ -144,6 +144,15 @@ class TenantRepository:
             ))
         await self.session.flush()
 
+    async def get_alias(self, platform: str, user_id: int) -> str | None:
+        """Возвращает подпись участника от тренера, если задана."""
+        stmt = select(Subscriber.alias).where(
+            Subscriber.tenant_id == self.tenant_id,
+            Subscriber.platform == platform,
+            Subscriber.user_id == user_id,
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def set_alias(self, platform: str, user_id: int,
                         alias: str | None) -> str | None:
         """
