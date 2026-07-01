@@ -35,7 +35,7 @@ class BookingService:
     async def sign_up(self, training_id: int, platform: str,
                       user_id: int, name: str,
                       username: str | None = None) -> SignupResult:
-        training = await self.repo.get_training(training_id)
+        training = await self.repo.get_training_for_update(training_id)
         if not training or training.is_cancelled or training.state != "published":
             return SignupResult("closed")
 
@@ -60,7 +60,7 @@ class BookingService:
         Запись помечается неподтверждённой (confirmed=False) — тренер потом
         подтверждает или отклоняет её. Место занимается по общим правилам.
         """
-        training = await self.repo.get_training(training_id)
+        training = await self.repo.get_training_for_update(training_id)
         if not training or training.is_cancelled or training.state != "published":
             return SignupResult("closed")
 
