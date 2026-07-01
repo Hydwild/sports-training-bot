@@ -94,6 +94,7 @@ def _menu_kb(is_admin: bool = False) -> str:
                color=KeyboardButtonColor.POSITIVE)
         kb.row()
         kb.add(Text("📢 Рассылка", payload={"a": "bcast"}))
+        kb.add(Text("✏️ Имена", payload={"a": "names"}))
     return kb.get_json()
 
 
@@ -180,13 +181,14 @@ async def _show_list(user_id: int, group_id=None) -> None:
         await _upsert_vk_user(svc, user_id)
         await session.commit()
         is_admin = tenant.admin_vk_id == user_id
+        aliases = await svc.repo.aliases_map("vk") if is_admin else None
         trainings = await svc.repo.list_upcoming()
         if not trainings:
             await _send(user_id, "Ближайших тренировок нет.",
                         keyboard=_menu_kb(is_admin))
             return
         for tr in trainings:
-            card = await views.training_card_plain(svc, tr)
+            card = await views.training_card_plain(svc, tr, aliases)
             full = await _is_full(svc, tr)
             await _send(user_id, card, keyboard=_kb(tr.id, full, is_admin))
         # закрепляем нижнее меню отдельным коротким сообщением
@@ -603,6 +605,15 @@ async def _fsm_process(user_id: int, text: str) -> bool:
         return True
 
     # мини-диалог добавления гостя
+    # ввод подписи участника (переименование)
+    if state.get("kind") == "rename":
+        target = state["target"]
+        gid = state["gid"]
+        _fsm.pop(user_id, None)
+        res = await _rename_apply(user_id, target, text, gid)
+        await _send(user_id, res, keyboard=_menu_kb(True))
+        return True
+
     # ручной ввод нового значения при редактировании
     if state.get("kind") == "edit":
         if not state.get("manual"):
@@ -917,6 +928,63 @@ async def _edit_callback(user_id: int, payload: dict, gid) -> str | None:
     return await _edit_apply(user_id, gid, val)
 
 
+# ─────────── Переименование участников (приватные подписи) ───────────
+
+async def _rename_pick(user_id: int, group_id=None) -> None:
+    """Показывает участников всех тренировок для выбора и переименования."""
+    async with SessionLocal() as session:
+        if not await _is_admin_vk(session, user_id, group_id):
+            await _send(user_id, "⛔ Только тренер."); return
+        tenant = await _resolve_tenant(session, group_id)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        trainings = await svc.repo.list_upcoming()
+        # собираем уникальных участников (vk) по всем предстоящим тренировкам
+        seen = {}
+        for tr in trainings:
+            for s in await svc.repo.get_signups(tr.id, "active"):
+                if getattr(s, "is_guest", False):
+                    continue
+                if s.platform == "vk" and s.user_id not in seen:
+                    seen[s.user_id] = s.name
+        aliases = await svc.repo.aliases_map("vk")
+    if not seen:
+        await _send(user_id, "Нет участников для переименования.",
+                    keyboard=_menu_kb(True))
+        return
+    from vkbottle import Keyboard, Callback
+    kb = Keyboard(inline=True)
+    for i, (uid, name) in enumerate(list(seen.items())[:8]):
+        cur = aliases.get(uid)
+        label = f"{cur or name}"[:28]
+        kb.add(Callback(label, payload={"a": "rn_pick", "uid": uid}))
+        kb.row()
+    kb.add(Callback("❌ Закрыть", payload={"a": "rn_close"}))
+    await _send(user_id, "✏️ Кого переименовать? (подпись видите только вы)",
+                keyboard=kb.get_json())
+
+
+async def _rename_start(user_id: int, target_uid: int, group_id=None) -> None:
+    """Запрашивает новую подпись для выбранного участника."""
+    _fsm[user_id] = {"kind": "rename", "target": target_uid, "gid": group_id}
+    await _send(user_id,
+                "Введите подпись для участника (или «-» чтобы убрать):",
+                keyboard=_cancel_kb())
+
+
+async def _rename_apply(user_id: int, target_uid: int, alias: str,
+                        group_id=None) -> str:
+    """Сохраняет подпись участника (видна только тренеру)."""
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        value = None if alias.strip() in ("-", "") else alias.strip()
+        display = await svc.repo.set_alias("vk", target_uid, value)
+        await session.commit()
+    if value:
+        return f"✅ Подпись сохранена: {display}"
+    return "✅ Подпись убрана."
+
+
 async def _handle_text(user_id: int, text: str, group_id=None) -> None:
     """Обработка текстовых команд."""
     raw = (text or "").strip()
@@ -931,6 +999,8 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
         await _show_my(user_id, group_id)
     elif text in ("рассылка", "📢 рассылка"):
         await _start_bcast(user_id, group_id)
+    elif text in ("имена", "✏️ имена", "переименовать"):
+        await _rename_pick(user_id, group_id)
     elif text in ("создать", "➕ создать тренировку", "новая тренировка"):
         await _start_create(user_id, group_id)
     elif text in ("мой id", "мойid", "id", "мой айди"):
@@ -1120,6 +1190,13 @@ async def setup() -> None:
                 await _cr_callback(user_id, payload, gid, peer_id, cmid)
         elif action == "edit":                      # открыть меню редактирования
             await _start_edit(user_id, tid, gid)
+        elif action == "names":                      # список для переименования
+            await _rename_pick(user_id, gid)
+        elif action == "rn_pick":                    # выбран участник
+            await _strip_buttons(peer_id, cmid, "✏️ Ввод подписи…")
+            await _rename_start(user_id, payload.get("uid"), gid)
+        elif action == "rn_close":
+            await _strip_buttons(peer_id, cmid, "Закрыто.")
         elif action == "ed_f":                       # выбрано поле для изменения
             await _strip_buttons(peer_id, cmid, "✏️ Выбор нового значения…")
             await _edit_ask_value(user_id, tid, payload.get("f"), gid)
