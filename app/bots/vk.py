@@ -323,6 +323,8 @@ async def _delete_training(user_id: int, tid: int, group_id=None) -> str:
         training = await svc.repo.get_training(tid)
         if not training:
             return "Тренировка не найдена."
+        if getattr(training, "is_cancelled", False):
+            return "Эта тренировка уже отменена."
         title = training.title
         when = svc.format_local(training.start_at)
         tenant_id = tenant.id
@@ -835,9 +837,35 @@ async def setup() -> None:
                                 "Все записанные получат уведомление.",
                                 keyboard=_confirm_del_kb(tid))
         elif action == "deltr_yes":                 # подтверждено — отменяем
-            snackbar = await _delete_training(user_id, tid, gid)
+            # сначала убираем кнопки у вопроса, чтобы не нажали дважды
+            if cmid:
+                try:
+                    await _bot.api.messages.edit(
+                        peer_id=peer_id, conversation_message_id=cmid,
+                        message="⏳ Отменяю тренировку…", keyboard="")
+                except Exception:
+                    pass
+            result = await _delete_training(user_id, tid, gid)
+            snackbar = result
+            # переписываем сообщение на итог (без кнопок) + отдельное уведомление
+            if cmid:
+                try:
+                    await _bot.api.messages.edit(
+                        peer_id=peer_id, conversation_message_id=cmid,
+                        message=result, keyboard="")
+                except Exception:
+                    await _send(user_id, result, keyboard=_menu_kb(True))
+            else:
+                await _send(user_id, result, keyboard=_menu_kb(True))
         elif action == "deltr_no":                  # передумал
             snackbar = "Отмена отменена 🙂"
+            if cmid:
+                try:
+                    await _bot.api.messages.edit(
+                        peer_id=peer_id, conversation_message_id=cmid,
+                        message="↩️ Отмена тренировки прервана.", keyboard="")
+                except Exception:
+                    pass
 
         # ответ на нажатие (всплывающее уведомление) + обновляем карточку
         try:
