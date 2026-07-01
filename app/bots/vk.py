@@ -329,6 +329,10 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
         await _show_list(user_id, group_id)
     elif text in ("создать", "➕ создать тренировку", "новая тренировка"):
         await _start_create(user_id, group_id)
+    elif text in ("мой id", "мойid", "id", "мой айди"):
+        await _send(user_id, f"Ваш VK ID: {user_id}\n\n"
+                    "Передайте его тренеру, чтобы он назначил вас "
+                    "администратором (если нужно).")
     elif text in ("привет", "здравствуйте", "меню", "помощь", "help", "/start"):
         async with SessionLocal() as session:
             is_admin = await _is_admin_vk(session, user_id, group_id)
