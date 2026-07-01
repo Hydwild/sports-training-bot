@@ -29,6 +29,15 @@ PLATFORM = "vk"
 _bot = None   # type: ignore
 _enabled = False
 _group_id = None   # id сообщества, к которому привязан токен
+_fsm: dict[int, dict] = {}   # user_id -> {step, data} — диалог создания тренировки
+
+
+async def _is_admin_vk(session, user_id: int, group_id=None) -> bool:
+    """Проверяет, что пользователь — админ клуба (по admin_vk_id)."""
+    tenant = await _resolve_tenant(session, group_id)
+    if tenant is None:
+        return False
+    return tenant.admin_vk_id == user_id
 
 
 async def _send(user_id: int, text: str, keyboard: str | None = None) -> None:
@@ -49,12 +58,25 @@ def _kb(tid: int, is_full: bool = False) -> str:
     return kb.get_json()
 
 
-def _menu_kb() -> str:
-    """Постоянное меню снизу: список / профиль."""
-    from vkbottle import Keyboard, Text
+def _menu_kb(is_admin: bool = False) -> str:
+    """Постоянное меню снизу: список / профиль (+ создать для админа)."""
+    from vkbottle import Keyboard, Text, KeyboardButtonColor
     kb = Keyboard(inline=False, one_time=False)
     kb.add(Text("🏸 Тренировки", payload={"a": "list"}))
     kb.add(Text("👤 Профиль", payload={"a": "profile"}))
+    if is_admin:
+        kb.row()
+        kb.add(Text("➕ Создать тренировку", payload={"a": "create"}),
+               color=KeyboardButtonColor.POSITIVE)
+    return kb.get_json()
+
+
+def _cancel_kb() -> str:
+    """Кнопка отмены во время пошагового создания."""
+    from vkbottle import Keyboard, Text, KeyboardButtonColor
+    kb = Keyboard(inline=False, one_time=False)
+    kb.add(Text("❌ Отмена", payload={"a": "create_cancel"}),
+           color=KeyboardButtonColor.NEGATIVE)
     return kb.get_json()
 
 
@@ -179,18 +201,143 @@ async def _do_cancel(user_id: int, tid: int, group_id=None) -> str:
         return "Запись отменена." if res["cancelled"] else "Вы не были записаны."
 
 
+# ─────────── Пошаговое создание тренировки (только админ) ───────────
+_STEPS = ["title", "date", "location", "duration", "price", "max"]
+_PROMPTS = {
+    "title": "📝 Введите название тренировки:",
+    "date": "📅 Введите дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ\n(например 05.07.2026 19:00):",
+    "location": "📍 Введите место (зал/адрес):",
+    "duration": "⏱ Введите длительность в минутах (например 90):",
+    "price": "💰 Введите цену в рублях (например 500, или 0 если бесплатно):",
+    "max": "👥 Введите максимум участников (например 6):",
+}
+
+
+async def _start_create(user_id: int, group_id=None) -> None:
+    """Начинает диалог создания тренировки (проверяет права админа)."""
+    async with SessionLocal() as session:
+        if not await _is_admin_vk(session, user_id, group_id):
+            await _send(user_id, "⛔ Создавать тренировки может только тренер.")
+            return
+    _fsm[user_id] = {"step": 0, "data": {}, "gid": group_id}
+    await _send(user_id, _PROMPTS["title"], keyboard=_cancel_kb())
+
+
+async def _fsm_process(user_id: int, text: str) -> bool:
+    """
+    Обрабатывает шаг диалога создания. Возвращает True, если сообщение
+    было частью диалога (и обработано здесь).
+    """
+    state = _fsm.get(user_id)
+    if state is None:
+        return False
+
+    text = (text or "").strip()
+    if text.lower() in ("отмена", "❌ отмена", "стоп"):
+        _fsm.pop(user_id, None)
+        await _send(user_id, "Создание отменено.", keyboard=_menu_kb(True))
+        return True
+
+    step_name = _STEPS[state["step"]]
+    data = state["data"]
+
+    # валидация текущего шага
+    if step_name == "title":
+        if not text:
+            await _send(user_id, "Название не может быть пустым. Введите ещё раз:",
+                        keyboard=_cancel_kb()); return True
+        data["title"] = text
+    elif step_name == "date":
+        # проверим формат через сервис
+        async with SessionLocal() as session:
+            tenant = await _resolve_tenant(session, state["gid"])
+            svc = BookingService(session, tenant.id, tz=tenant.timezone)
+            when = svc.parse_local(text)
+        if when is None:
+            await _send(user_id, "Не понял дату. Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n"
+                        "например 05.07.2026 19:00. Введите ещё раз:",
+                        keyboard=_cancel_kb()); return True
+        data["start_at"] = when
+    elif step_name == "location":
+        data["location"] = text or "—"
+    elif step_name == "duration":
+        if not text.isdigit() or int(text) <= 0:
+            await _send(user_id, "Введите число минут (например 90):",
+                        keyboard=_cancel_kb()); return True
+        data["duration_min"] = int(text)
+    elif step_name == "price":
+        if not text.isdigit():
+            await _send(user_id, "Введите число рублей (например 500 или 0):",
+                        keyboard=_cancel_kb()); return True
+        data["price_minor"] = int(text) * 100
+    elif step_name == "max":
+        if not text.isdigit() or int(text) <= 0:
+            await _send(user_id, "Введите число участников (например 6):",
+                        keyboard=_cancel_kb()); return True
+        data["max_participants"] = int(text)
+
+    # переход к следующему шагу или финал
+    state["step"] += 1
+    if state["step"] < len(_STEPS):
+        nxt = _STEPS[state["step"]]
+        await _send(user_id, _PROMPTS[nxt], keyboard=_cancel_kb())
+        return True
+
+    # все шаги пройдены — создаём тренировку
+    await _finalize_create(user_id, state)
+    return True
+
+
+async def _finalize_create(user_id: int, state: dict) -> None:
+    data = state["data"]
+    gid = state["gid"]
+    _fsm.pop(user_id, None)
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, gid)
+        if tenant is None:
+            await _send(user_id, "Клуб не привязан."); return
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        training = await svc.create_training(
+            title=data["title"], start_at=data["start_at"],
+            location=data["location"], max_participants=data["max_participants"],
+            duration_min=data["duration_min"], state="published",
+            publish_at=None, platform=PLATFORM, user_id=user_id)
+        if data.get("price_minor"):
+            training.price_minor = data["price_minor"]
+        await session.commit()
+        card = await views.training_card_plain(svc, training)
+        tid = training.id
+        full = await _is_full(svc, training)
+    await _send(user_id, "✅ Тренировка создана!", keyboard=_menu_kb(True))
+    await _send(user_id, card, keyboard=_kb(tid, full))
+    # публикуем анонс на стену и уведомляем Telegram-подписчиков
+    try:
+        await publish_to_wall(tenant.id, tid)
+    except Exception as e:
+        logger.warning("VK: анонс на стену не удался: %s", e)
+
+
 async def _handle_text(user_id: int, text: str, group_id=None) -> None:
     """Обработка текстовых команд."""
-    text = (text or "").strip().lower()
+    raw = (text or "").strip()
+    # если идёт пошаговое создание — направляем ввод туда (нужен оригинал)
+    if user_id in _fsm:
+        if await _fsm_process(user_id, raw):
+            return
+    text = raw.lower()
     if text in ("начать", "start", "список", "тренировки", "🏸 тренировки"):
         await _show_list(user_id, group_id)
+    elif text in ("создать", "➕ создать тренировку", "новая тренировка"):
+        await _start_create(user_id, group_id)
     elif text in ("привет", "здравствуйте", "меню", "помощь", "help", "/start"):
+        async with SessionLocal() as session:
+            is_admin = await _is_admin_vk(session, user_id, group_id)
         await _send(user_id,
                     "👋 Привет! Я бот клуба.\n\n"
                     "🏸 Тренировки — посмотреть ближайшие и записаться\n"
                     "👤 Профиль — ваша статистика\n\n"
                     "Пользуйтесь кнопками меню внизу 👇",
-                    keyboard=_menu_kb())
+                    keyboard=_menu_kb(is_admin))
     elif text.startswith("записаться "):
         try:
             tid = int(text.split()[1])
@@ -324,6 +471,11 @@ async def setup() -> None:
             await _show_list(user_id, gid)
         elif action == "profile":
             await _handle_text(user_id, "профиль", gid)
+        elif action == "create":
+            await _start_create(user_id, gid)
+        elif action == "create_cancel":
+            _fsm.pop(user_id, None)
+            await _send(user_id, "Создание отменено.", keyboard=_menu_kb(True))
 
         # ответ на нажатие (всплывающее уведомление) + обновляем карточку
         try:
