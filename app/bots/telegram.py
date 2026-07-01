@@ -619,6 +619,14 @@ async def edit_value(message: Message, state: FSMContext) -> None:
                 await message.answer("Введите положительное число."); return
             f = "max_participants" if field == "max" else "duration_min"
             await svc.update_field(tid, f, int(message.text))
+        # уведомляем записанных об изменении
+        readable = {"time": "🕐 Новые дата/время", "loc": "📍 Новое место",
+                    "max": "👥 Новый лимит", "dur": "⏱ Новая длительность"}.get(
+                        field, "Изменение")
+        try:
+            await svc.notify_changed(tid, readable)
+        except Exception as e:
+            logger.warning("Не удалось уведомить об изменении: %s", e)
         training = await svc.repo.get_training(tid)
         card = await views.training_card(svc, training, for_admin=True)
         tenant_id = data["tenant_id"]
