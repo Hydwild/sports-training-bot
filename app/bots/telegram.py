@@ -992,6 +992,7 @@ async def new_pubmode(query: CallbackQuery, state: FSMContext) -> None:
         await query.message.answer(card, parse_mode="HTML",
                                    reply_markup=_kb(tid, is_admin=True))
         await _publish_to_group(tenant_id, tid)  # сразу в группу клуба
+        await _publish_to_vk(tenant_id, tid)     # анонс на стене ВК
     elif mode == "draft":
         card, _, tid = await _finalize(state, "draft", None)
         await query.message.edit_text("📝 Черновик создан (/drafts чтобы запустить):")
@@ -1042,6 +1043,7 @@ async def cb_publish(query: CallbackQuery) -> None:
     await query.message.edit_text(f"Тренировка #{train_id} опубликована.")
     await query.message.answer(card, parse_mode="HTML")
     await _publish_to_group(tid, train_id)  # публикуем в группу клуба
+    await _publish_to_vk(tid, train_id)     # анонс на стене ВК
 
 
 @router.message(Command("guests"))
@@ -1330,6 +1332,15 @@ async def broadcast_send(message: Message, state: FSMContext) -> None:
         counts = await svc.broadcast(message.text)
     await state.clear()
     await message.answer(f"Рассылка в очереди. Telegram: {counts['tg']}, ВКонтакте: {counts['vk']}.")
+
+
+async def _publish_to_vk(tenant_id: int, training_id: int) -> None:
+    """Публикует анонс тренировки на стене ВК-сообщества (если ВК настроен)."""
+    try:
+        from app.bots import vk
+        await vk.publish_to_wall(tenant_id, training_id)
+    except Exception as e:
+        logger.warning("Не удалось опубликовать анонс в ВК: %s", e)
 
 
 async def _publish_to_group(tenant_id: int, training_id: int) -> None:
