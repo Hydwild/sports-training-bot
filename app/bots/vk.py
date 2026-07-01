@@ -29,7 +29,27 @@ PLATFORM = "vk"
 _bot = None   # type: ignore
 _enabled = False
 _group_id = None   # id сообщества, к которому привязан токен
-_fsm: dict[int, dict] = {}   # user_id -> {step, data} — диалог создания тренировки
+_fsm: dict[int, dict] = {}   # user_id -> {step, data, ...} — активные диалоги
+_FSM_TTL_SEC = 3600          # незавершённые диалоги живут не дольше часа
+
+
+def _fsm_gc() -> None:
+    """Удаляет заброшенные диалоги старше TTL — защита от утечки памяти.
+    Вызывается при старте каждого нового диалога."""
+    import time
+    now = time.time()
+    stale = [uid for uid, st in _fsm.items()
+             if now - st.get("_ts", now) > _FSM_TTL_SEC]
+    for uid in stale:
+        _fsm.pop(uid, None)
+
+
+def _fsm_set(user_id: int, state: dict) -> None:
+    """Ставит состояние диалога с меткой времени и чистит старые."""
+    import time
+    _fsm_gc()
+    state["_ts"] = time.time()
+    _fsm[user_id] = state
 
 
 async def _is_admin_vk(session, user_id: int, group_id=None) -> bool:
@@ -452,7 +472,7 @@ async def _start_bcast(user_id: int, group_id=None) -> None:
         if not await _is_admin_vk(session, user_id, group_id):
             await _send(user_id, "⛔ Рассылку может делать только тренер.")
             return
-    _fsm[user_id] = {"kind": "bcast", "gid": group_id}
+    _fsm_set(user_id, {"kind": "bcast", "gid": group_id})
     await _send(user_id, "📢 Введите текст рассылки для всех подписчиков:",
                 keyboard=_cancel_kb())
 
@@ -478,7 +498,7 @@ async def _start_create(user_id: int, group_id=None) -> None:
         if not await _is_admin_vk(session, user_id, group_id):
             await _send(user_id, "⛔ Создавать тренировки может только тренер.")
             return
-    _fsm[user_id] = {"step": "title", "data": {}, "gid": group_id, "manual": False}
+    _fsm_set(user_id, {"step": "title", "data": {}, "gid": group_id, "manual": False})
     await _send(user_id, "📝 Введите название тренировки:", keyboard=_cancel_kb())
 
 
@@ -827,8 +847,8 @@ async def _start_edit(user_id: int, tid: int, group_id=None) -> None:
 
 async def _edit_ask_value(user_id: int, tid: int, field: str, gid) -> None:
     """Показывает варианты нового значения для выбранного поля."""
-    _fsm[user_id] = {"kind": "edit", "tid": tid, "field": field,
-                     "gid": gid, "manual": False}
+    _fsm_set(user_id, {"kind": "edit", "tid": tid, "field": field,
+                       "gid": gid, "manual": False})
     async with SessionLocal() as session:
         tenant = await _resolve_tenant(session, gid)
         svc = BookingService(session, tenant.id, tz=tenant.timezone)
@@ -902,14 +922,13 @@ async def _edit_apply(user_id: int, gid, raw_value) -> str:
             return "Неизвестное поле."
         # уведомляем записанных об изменении (кроме мелочей вроде лимита)
         notified = 0
-        human = {"дата": "дата", "время": "время"}
         readable = {
-            "date": f"📅 Новая дата",
-            "time": f"🕐 Новое время",
-            "location": f"📍 Новое место",
-            "duration": f"⏱ Новая длительность",
-            "price": f"💰 Новая цена",
-            "max": f"👥 Новый лимит",
+            "date": "📅 Новая дата",
+            "time": "🕐 Новое время",
+            "location": "📍 Новое место",
+            "duration": "⏱ Новая длительность",
+            "price": "💰 Новая цена",
+            "max": "👥 Новый лимит",
         }.get(field, "Изменение")
         try:
             notified = await svc.notify_changed(tid, f"{readable}: {label.split('→ ')[-1]}")
@@ -981,7 +1000,7 @@ async def _rename_pick(user_id: int, group_id=None) -> None:
 
 async def _rename_start(user_id: int, target_uid: int, group_id=None) -> None:
     """Запрашивает новую подпись для выбранного участника."""
-    _fsm[user_id] = {"kind": "rename", "target": target_uid, "gid": group_id}
+    _fsm_set(user_id, {"kind": "rename", "target": target_uid, "gid": group_id})
     await _send(user_id,
                 "Введите подпись для участника (или «-» чтобы убрать):",
                 keyboard=_cancel_kb())
@@ -1241,7 +1260,7 @@ async def setup() -> None:
                 if not await _is_admin_vk(session, user_id, gid):
                     snackbar = "⛔ Только тренер"
                 else:
-                    _fsm[user_id] = {"kind": "guest", "tid": tid, "gid": gid}
+                    _fsm_set(user_id, {"kind": "guest", "tid": tid, "gid": gid})
                     await _send(user_id,
                                 "👤 Введите имя гостя:", keyboard=_cancel_kb())
         elif action == "deltr":                     # спросить подтверждение
