@@ -184,6 +184,41 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
                     "Или пользуйтесь кнопками.", keyboard=_menu_kb())
 
 
+async def publish_to_wall(tenant_id: int, training_id: int) -> None:
+    """
+    Публикует анонс тренировки на стене VK-сообщества с кнопкой-ссылкой
+    «Написать сообществу» (запись ведётся в личке с ботом).
+    Тихо пропускает, если VK не настроен или у клуба нет vk_group_id.
+    """
+    if not _bot or not _enabled:
+        return
+    async with SessionLocal() as session:
+        g = GlobalRepository(session)
+        tenant = await g.get_tenant(tenant_id)
+        if not tenant or not tenant.vk_group_id:
+            return
+        svc = BookingService(session, tenant_id, tz=tenant.timezone)
+        training = await svc.repo.get_training(training_id)
+        if not training:
+            return
+        card = await views.training_card_plain(svc, training)
+        group_id = tenant.vk_group_id
+
+    text = ("📣 Новая тренировка — открыта запись!\n\n" + card +
+            "\n\n✍️ Чтобы записаться, напишите сообществу «Тренировки».")
+    # ссылка на диалог с сообществом
+    link = f"https://vk.me/club{group_id}"
+    try:
+        await _bot.api.wall.post(
+            owner_id=-group_id,          # отрицательный = сообщество
+            from_group=1,                # от имени сообщества
+            message=text,
+            attachments=link)
+        logger.info("VK: анонс тренировки %s опубликован на стене", training_id)
+    except Exception as e:
+        logger.warning("VK: не удалось опубликовать на стену: %s", e)
+
+
 async def setup() -> None:
     global _bot, _enabled
     if _enabled:
