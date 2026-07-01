@@ -22,7 +22,7 @@ from aiogram.types import (
 )
 
 from app.bots import views
-from app.bots.user_info import fetch_tg_photo_url, profile_link
+from app.bots.user_info import fetch_tg_photo_url
 from app.core.config import settings
 from app.core.features import features
 from app.db.engine import SessionLocal
@@ -1110,7 +1110,7 @@ async def cb_guest_confirm(query: CallbackQuery) -> None:
             await query.answer("Только для администратора.", show_alert=True); return
         svc = BookingService(session, tid)
         s = await svc.confirm_guest(sid)
-    await query.answer(f"Гость подтверждён." if s else "Не найдено", show_alert=True)
+    await query.answer("Гость подтверждён." if s else "Не найдено", show_alert=True)
     if s:
         await query.message.edit_text(f"✅ Гость «{s.name}» подтверждён как реально занятый.")
 
@@ -1297,7 +1297,7 @@ async def cmd_cancel_training(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("ct:"))
-async def cb_cancel_training(query: CallbackQuery) -> None:
+async def cb_cancel_training_direct(query: CallbackQuery) -> None:
     train_id = int(query.data.split(":")[1])
     async with SessionLocal() as session:
         tid, is_admin = await _resolve_tenant(session, query.message.chat.id, query.from_user.id)
