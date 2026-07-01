@@ -158,16 +158,28 @@ async def update_brand(tenant_id: int, body: BrandUpdate,
 async def update_chat(tenant_id: int,
                       tg_chat_id: int | None = None,
                       vk_group_id: int | None = None,
+                      admin_tg_id: int | None = None,
+                      admin_vk_id: int | None = None,
                       session: AsyncSession = Depends(get_session)):
-    """Привязать клуб к группе Telegram (tg_chat_id) или сообществу VK."""
+    """
+    Привязать клуб к группе Telegram (tg_chat_id) или сообществу VK
+    (vk_group_id), а также задать администратора клуба в каждой платформе
+    (admin_tg_id / admin_vk_id) — админ может создавать тренировки из бота.
+    """
     tenant = await _ensure_tenant(session, tenant_id)
     if tg_chat_id is not None:
         tenant.tg_chat_id = tg_chat_id
     if vk_group_id is not None:
         tenant.vk_group_id = vk_group_id
+    if admin_tg_id is not None:
+        tenant.admin_tg_id = admin_tg_id
+    if admin_vk_id is not None:
+        tenant.admin_vk_id = admin_vk_id
     await session.commit()
     return {"ok": True, "tg_chat_id": tenant.tg_chat_id,
-            "vk_group_id": tenant.vk_group_id}
+            "vk_group_id": tenant.vk_group_id,
+            "admin_tg_id": tenant.admin_tg_id,
+            "admin_vk_id": tenant.admin_vk_id}
 
 
 # ---------- Старт платежа ----------
