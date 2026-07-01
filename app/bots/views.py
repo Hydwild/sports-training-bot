@@ -75,6 +75,22 @@ async def training_card_plain(svc: BookingService, t) -> str:
     return "\n".join(lines)
 
 
+async def announce_card_plain(svc: BookingService, t) -> str:
+    """
+    Короткий анонс тренировки для поста на стене VK — БЕЗ счётчика мест,
+    списка записанных и прогресс-бара (пост статичен и не обновляется).
+    Только суть: название, дата, место, длительность, цена.
+    """
+    lines = [f"🏸 {t.title}", f"📅 {svc.format_local(t.start_at)}"]
+    if t.location:
+        lines.append(f"📍 {t.location}")
+    h = t.duration_min / 60
+    lines.append(f"⏱ {('%.1f' % h).rstrip('0').rstrip('.')} ч")
+    if getattr(t, "price_minor", 0):
+        lines.append(f"💰 {t.price_minor // 100}₽")
+    return "\n".join(lines)
+
+
 def _progress_bar(filled: int, total: int, width: int = 10) -> str:
     """Текстовый прогресс-бар заполнения мест: ▰▰▰▱▱▱▱▱▱▱"""
     if total <= 0:
