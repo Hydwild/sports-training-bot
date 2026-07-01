@@ -900,8 +900,24 @@ async def _edit_apply(user_id: int, gid, raw_value) -> str:
         else:
             _fsm.pop(user_id, None)
             return "Неизвестное поле."
+        # уведомляем записанных об изменении (кроме мелочей вроде лимита)
+        notified = 0
+        human = {"дата": "дата", "время": "время"}
+        readable = {
+            "date": f"📅 Новая дата",
+            "time": f"🕐 Новое время",
+            "location": f"📍 Новое место",
+            "duration": f"⏱ Новая длительность",
+            "price": f"💰 Новая цена",
+            "max": f"👥 Новый лимит",
+        }.get(field, "Изменение")
+        try:
+            notified = await svc.notify_changed(tid, f"{readable}: {label.split('→ ')[-1]}")
+        except Exception as e:
+            logger.warning("VK: не удалось уведомить об изменении: %s", e)
     _fsm.pop(user_id, None)
-    return f"✅ Изменено: {label}"
+    tail = f" ({notified} участникам отправлено уведомление)" if notified else ""
+    return f"✅ Изменено: {label}{tail}"
 
 
 async def _edit_callback(user_id: int, payload: dict, gid) -> str | None:
