@@ -375,6 +375,7 @@ async def cb_signup(query: CallbackQuery) -> None:
         new_card = await views.training_card(svc, training) if training else None
     await query.answer(views.signup_result(res, training.title if training else ""), show_alert=True)
     await _refresh_card(query, train_id, new_card, is_admin)
+    await _refresh_group_card(tid, train_id)
 
 
 async def _refresh_card(query, train_id: int, card: str | None,
@@ -417,6 +418,7 @@ async def cb_cancel(query: CallbackQuery) -> None:
     await query.answer("Запись отменена." if res["cancelled"] else "Вы не были записаны.", show_alert=True)
     if res["cancelled"]:
         await _refresh_card(query, train_id, new_card, is_admin)
+        await _refresh_group_card(tid, train_id)
 
 
 # ---------- Управление тренировкой (админ) ----------
@@ -553,9 +555,11 @@ async def edit_value(message: Message, state: FSMContext) -> None:
             await svc.update_field(tid, f, int(message.text))
         training = await svc.repo.get_training(tid)
         card = await views.training_card(svc, training)
+        tenant_id = data["tenant_id"]
     await state.clear()
     await message.answer("✅ Изменено:\n\n" + card,
                          reply_markup=_kb(tid, True), parse_mode="HTML")
+    await _refresh_group_card(tenant_id, tid)
 
 
 @router.callback_query(F.data.startswith("gu:"))
@@ -1277,9 +1281,9 @@ async def broadcast_send(message: Message, state: FSMContext) -> None:
 
 async def _publish_to_group(tenant_id: int, training_id: int) -> None:
     """
-    Публикует карточку тренировки с кнопками записи в группу клуба.
-    Молча пропускает, если группа не привязана (tg_chat_id -100 или пустой)
-    или отправка не удалась (бот не в группе и т.п.).
+    Публикует карточку тренировки с кнопками записи в группу клуба и
+    запоминает id сообщения, чтобы потом обновлять его при изменениях.
+    Молча пропускает, если группа не привязана или отправка не удалась.
     """
     if not _bot:
         return
@@ -1295,14 +1299,51 @@ async def _publish_to_group(tenant_id: int, training_id: int) -> None:
         card = await views.training_card(svc, training)
         chat_id = tenant.tg_chat_id
     try:
-        await _bot.send_message(
+        msg = await _bot.send_message(
             chat_id,
             "📣 <b>Новая тренировка — открыта запись!</b>\n\n" + card,
             reply_markup=_kb(training_id, is_admin=False),
             parse_mode="HTML")
+        # запоминаем id сообщения для будущих обновлений
+        async with SessionLocal() as session:
+            svc = BookingService(session, tenant_id)
+            tr = await svc.repo.get_training(training_id)
+            if tr:
+                tr.group_message_id = msg.message_id
+                await session.commit()
     except Exception as e:
         logger.warning("Не удалось опубликовать тренировку в группу %s: %s",
                        chat_id, e)
+
+
+async def _refresh_group_card(tenant_id: int, training_id: int) -> None:
+    """
+    Обновляет ранее опубликованную в группе карточку тренировки
+    (счётчик мест, очередь, изменённые время/место). Тихо пропускает,
+    если карточки в группе нет или сообщение недоступно.
+    """
+    if not _bot:
+        return
+    async with SessionLocal() as session:
+        g = GlobalRepository(session)
+        tenant = await g.get_tenant(tenant_id)
+        if not tenant or not tenant.tg_chat_id or tenant.tg_chat_id == -100:
+            return
+        svc = BookingService(session, tenant_id)
+        training = await svc.repo.get_training(training_id)
+        if not training or not training.group_message_id:
+            return
+        card = await views.training_card(svc, training)
+        chat_id = tenant.tg_chat_id
+        msg_id = training.group_message_id
+    try:
+        await _bot.edit_message_text(
+            "📣 <b>Тренировка — запись открыта!</b>\n\n" + card,
+            chat_id=chat_id, message_id=msg_id,
+            reply_markup=_kb(training_id, is_admin=False),
+            parse_mode="HTML")
+    except Exception:
+        pass  # не изменилось / удалено — не критично
 
 
 async def _send(user_id: int, text: str) -> None:
