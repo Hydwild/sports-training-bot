@@ -344,6 +344,25 @@ class BookingService:
             state="published", publish_at=None, platform="api", user_id=0,
         )
 
+    async def notify_changed(self, training_id: int, change_desc: str) -> int:
+        """Уведомляет всех записанных (active+queue) об изменении тренировки.
+        change_desc — что именно изменилось. Возвращает число адресатов."""
+        training = await self.repo.get_training(training_id)
+        if not training:
+            return 0
+        participants = (await self.repo.get_signups(training_id, "active")
+                        + await self.repo.get_signups(training_id, "queue"))
+        when = self.format_local(training.start_at)
+        text = (f"✏️ Изменение в тренировке «{training.title}»:\n{change_desc}\n\n"
+                f"📅 Сейчас: {when}"
+                + (f"\n📍 {training.location}" if training.location else ""))
+        for s in participants:
+            if getattr(s, "is_guest", False):
+                continue
+            await self.repo.enqueue(s.platform, s.user_id, text)
+        await self.session.commit()
+        return len(participants)
+
     async def cancel_training(self, training_id: int) -> None:
         training = await self.repo.get_training(training_id)
         if not training:
