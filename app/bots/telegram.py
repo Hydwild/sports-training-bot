@@ -301,7 +301,7 @@ async def cmd_stats(message: Message) -> None:
 async def cb_signup(query: CallbackQuery) -> None:
     train_id = int(query.data.split(":")[1])
     async with SessionLocal() as session:
-        tid, _ = await _resolve_tenant(session, query.message.chat.id, query.from_user.id)
+        tid, is_admin = await _resolve_tenant(session, query.message.chat.id, query.from_user.id)
         if tid is None:
             await query.answer("Чат не привязан к клубу.", show_alert=True); return
         svc = BookingService(session, tid)
@@ -309,14 +309,33 @@ async def cb_signup(query: CallbackQuery) -> None:
         res = await svc.sign_up(train_id, PLATFORM, query.from_user.id,
                                 _name(query), username=_username(query))
         training = await svc.repo.get_training(train_id)
+        new_card = await views.training_card(svc, training) if training else None
     await query.answer(views.signup_result(res, training.title if training else ""), show_alert=True)
+    await _refresh_card(query, train_id, new_card, is_admin)
+
+
+async def _refresh_card(query, train_id: int, card: str | None,
+                        is_admin: bool = False, prefix: str = "") -> None:
+    """
+    Перерисовывает карточку тренировки в том сообщении, где нажали кнопку —
+    чтобы счётчик мест и список записавшихся обновлялись в реальном времени.
+    Молча игнорирует ошибку 'message is not modified' и прочие.
+    """
+    if not card:
+        return
+    try:
+        await query.message.edit_text(
+            (prefix + card) if prefix else card,
+            reply_markup=_kb(train_id, is_admin), parse_mode="HTML")
+    except Exception:
+        pass  # текст не изменился или сообщение недоступно — не критично
 
 
 @router.callback_query(F.data.startswith("cx:"))
 async def cb_cancel(query: CallbackQuery) -> None:
     train_id = int(query.data.split(":")[1])
     async with SessionLocal() as session:
-        tid, _ = await _resolve_tenant(session, query.message.chat.id, query.from_user.id)
+        tid, is_admin = await _resolve_tenant(session, query.message.chat.id, query.from_user.id)
         if tid is None:
             await query.answer("Чат не привязан к клубу.", show_alert=True); return
         g = GlobalRepository(session)
@@ -325,12 +344,16 @@ async def cb_cancel(query: CallbackQuery) -> None:
         svc = BookingService(session, tid)
         res = await svc.cancel_signup(train_id, PLATFORM, query.from_user.id,
                                       lock_minutes=lock)
+        training = await svc.repo.get_training(train_id)
+        new_card = await views.training_card(svc, training) if training else None
     if res.get("locked"):
         await query.answer(
             f"Отмена закрыта: до тренировки меньше {res['lock_minutes']} мин. "
             f"Свяжитесь с тренером.", show_alert=True)
         return
     await query.answer("Запись отменена." if res["cancelled"] else "Вы не были записаны.", show_alert=True)
+    if res["cancelled"]:
+        await _refresh_card(query, train_id, new_card, is_admin)
 
 
 # ---------- Управление тренировкой (админ) ----------
@@ -393,9 +416,24 @@ async def cb_cancel_training_yes(query: CallbackQuery) -> None:
         if tid is None:
             return
         svc = BookingService(session, tid)
+        training = await svc.repo.get_training(train_id)
+        title = training.title if training else ""
+        when = svc.format_local(training.start_at) if training else ""
         await svc.cancel_training(train_id)
+        g = GlobalRepository(session)
+        tenant = await g.get_tenant(tid)
+        group_chat = tenant.tg_chat_id if tenant else None
     await query.answer("Тренировка отменена, все уведомлены.", show_alert=True)
     await query.message.edit_text("🗑 Тренировка отменена. Участники получили уведомление.")
+    # уведомление в группу клуба
+    if _bot and group_chat and group_chat != -100:
+        try:
+            await _bot.send_message(
+                group_chat,
+                f"🚫 <b>Тренировка отменена</b>\n{title} — {when}",
+                parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Не удалось уведомить группу об отмене: %s", e)
 
 
 @router.callback_query(F.data.startswith("ed:"))
