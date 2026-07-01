@@ -275,6 +275,24 @@ class BookingService:
         await self.session.commit()
         return training
 
+    async def my_trainings(self, platform: str, user_id: int) -> list:
+        """Все предстоящие тренировки, куда записан юзер (active и queue),
+        вместе со статусом записи. Возвращает список (Training, status, position)."""
+        from sqlalchemy import select
+        from app.models.entities import Training, Signup
+        now = dt.datetime.now(dt.timezone.utc)
+        stmt = (select(Training, Signup.status, Signup.position)
+                .join(Signup, Signup.training_id == Training.id)
+                .where(Training.tenant_id == self.tenant_id,
+                       Training.is_cancelled.is_(False),
+                       Training.start_at > now,
+                       Signup.platform == platform,
+                       Signup.user_id == user_id,
+                       Signup.status.in_(("active", "queue")))
+                .order_by(Training.start_at.asc()))
+        rows = (await self.session.execute(stmt)).all()
+        return [(r[0], r[1], r[2]) for r in rows]
+
     async def next_training_for_user(self, platform: str, user_id: int):
         """Ближайшая будущая тренировка, на которую записан пользователь."""
         from sqlalchemy import select
