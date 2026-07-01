@@ -90,6 +90,8 @@ def _menu_kb(is_admin: bool = False) -> str:
         kb.row()
         kb.add(Text("➕ Создать тренировку", payload={"a": "create"}),
                color=KeyboardButtonColor.POSITIVE)
+        kb.row()
+        kb.add(Text("📢 Рассылка", payload={"a": "bcast"}))
     return kb.get_json()
 
 
@@ -429,6 +431,43 @@ async def _location_options(svc) -> list[tuple[str, dict]]:
     return [(p[:24], {"a": "cr_loc", "v": p}) for p in places]
 
 
+def _bcast_confirm_kb() -> str:
+    """Кнопки подтверждения рассылки."""
+    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    kb = Keyboard(inline=True)
+    kb.add(Callback("✅ Отправить", payload={"a": "bcast_yes"}),
+           color=KeyboardButtonColor.POSITIVE)
+    kb.add(Callback("❌ Отмена", payload={"a": "bcast_no"}),
+           color=KeyboardButtonColor.NEGATIVE)
+    return kb.get_json()
+
+
+async def _start_bcast(user_id: int, group_id=None) -> None:
+    """Начинает рассылку (только админ): просит ввести текст."""
+    async with SessionLocal() as session:
+        if not await _is_admin_vk(session, user_id, group_id):
+            await _send(user_id, "⛔ Рассылку может делать только тренер.")
+            return
+    _fsm[user_id] = {"kind": "bcast", "gid": group_id}
+    await _send(user_id, "📢 Введите текст рассылки для всех подписчиков:",
+                keyboard=_cancel_kb())
+
+
+async def _do_bcast(user_id: int, group_id=None) -> str:
+    """Отправляет рассылку из сохранённого текста."""
+    state = _fsm.get(user_id)
+    if not state or "text" not in state:
+        return "Нет текста для рассылки."
+    text = state["text"]
+    _fsm.pop(user_id, None)
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        res = await svc.broadcast(text)
+    total = res.get("tg", 0) + res.get("vk", 0)
+    return f"✅ Рассылка отправлена ({total} получателей)."
+
+
 async def _start_create(user_id: int, group_id=None) -> None:
     """Начинает диалог создания (проверяет права админа)."""
     async with SessionLocal() as session:
@@ -562,6 +601,21 @@ async def _fsm_process(user_id: int, text: str) -> bool:
         return True
 
     # мини-диалог добавления гостя
+    # мини-диалог рассылки: ввод текста → подтверждение
+    if state.get("kind") == "bcast":
+        if not text:
+            await _send(user_id, "Текст пустой. Введите сообщение для рассылки:",
+                        keyboard=_cancel_kb()); return True
+        state["text"] = text
+        async with SessionLocal() as session:
+            tenant = await _resolve_tenant(session, state["gid"])
+            subs = await BookingService(session, tenant.id).repo.get_subscribers()
+        n = len(subs)
+        await _send(user_id,
+                    f"📢 Разослать это сообщение {n} подписчикам?\n\n«{text}»",
+                    keyboard=_bcast_confirm_kb())
+        return True
+
     if state.get("kind") == "guest":
         _fsm.pop(user_id, None)
         if not text:
@@ -701,6 +755,8 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
         await _show_list(user_id, group_id)
     elif text in ("мои записи", "📅 мои записи", "моя тренировка", "мои"):
         await _show_my(user_id, group_id)
+    elif text in ("рассылка", "📢 рассылка"):
+        await _start_bcast(user_id, group_id)
     elif text in ("создать", "➕ создать тренировку", "новая тренировка"):
         await _start_create(user_id, group_id)
     elif text in ("мой id", "мойid", "id", "мой айди"):
@@ -854,6 +910,27 @@ async def setup() -> None:
             await _handle_text(user_id, "профиль", gid)
         elif action == "create":
             await _start_create(user_id, gid)
+        elif action == "bcast":
+            await _start_bcast(user_id, gid)
+        elif action == "bcast_yes":
+            snackbar = await _do_bcast(user_id, gid)
+            if cmid:
+                try:
+                    await _bot.api.messages.edit(
+                        peer_id=peer_id, conversation_message_id=cmid,
+                        message=snackbar, keyboard="")
+                except Exception:
+                    await _send(user_id, snackbar, keyboard=_menu_kb(True))
+        elif action == "bcast_no":
+            _fsm.pop(user_id, None)
+            snackbar = "Рассылка отменена"
+            if cmid:
+                try:
+                    await _bot.api.messages.edit(
+                        peer_id=peer_id, conversation_message_id=cmid,
+                        message="❌ Рассылка отменена.", keyboard="")
+                except Exception:
+                    pass
         elif action == "create_cancel":
             _fsm.pop(user_id, None)
             await _send(user_id, "Создание отменено.", keyboard=_menu_kb(True))
