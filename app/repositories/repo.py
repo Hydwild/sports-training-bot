@@ -144,6 +144,16 @@ class TenantRepository:
             ))
         await self.session.flush()
 
+    async def aliases_map(self, platform: str = "tg") -> dict[int, str]:
+        """{user_id: alias} для всех участников клуба с заданной подписью."""
+        stmt = select(Subscriber.user_id, Subscriber.alias).where(
+            Subscriber.tenant_id == self.tenant_id,
+            Subscriber.platform == platform,
+            Subscriber.alias.is_not(None),
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return {uid: alias for uid, alias in rows}
+
     async def get_alias(self, platform: str, user_id: int) -> str | None:
         """Возвращает подпись участника от тренера, если задана."""
         stmt = select(Subscriber.alias).where(
@@ -157,10 +167,10 @@ class TenantRepository:
                         alias: str | None) -> str | None:
         """
         Задаёт подпись участника от тренера (или снимает, если alias пустой).
-        Обновляет отображаемое имя во всех его записях. Возвращает
-        актуальное отображаемое имя.
+        Подпись хранится ТОЛЬКО в профиле подписчика и видна лишь тренеру —
+        в группу и общие списки она не попадает (там остаётся имя из Telegram).
+        Возвращает имя, которое увидит тренер (подпись или имя из Telegram).
         """
-        # обновляем подписчика
         stmt = select(Subscriber).where(
             Subscriber.tenant_id == self.tenant_id,
             Subscriber.platform == platform,
@@ -172,15 +182,6 @@ class TenantRepository:
         if sub:
             sub.alias = alias
             display = alias or sub.name
-        # применяем имя ко всем записям этого участника (не гостям)
-        if display:
-            upd = update(Signup).where(
-                Signup.tenant_id == self.tenant_id,
-                Signup.platform == platform,
-                Signup.user_id == user_id,
-                Signup.is_guest.is_(False),
-            ).values(name=display)
-            await self.session.execute(upd)
         await self.session.flush()
         return display
 
