@@ -49,6 +49,19 @@ class TenantRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_training_for_update(self, training_id: int) -> Training | None:
+        """Как get_training, но блокирует строку (FOR UPDATE) — защита от
+        одновременных записей на одну тренировку (гонки). В SQLite no-op."""
+        stmt = select(Training).where(
+            Training.id == training_id,
+            Training.tenant_id == self.tenant_id,
+        ).with_for_update()
+        try:
+            return (await self.session.execute(stmt)).scalar_one_or_none()
+        except Exception:
+            # SQLite и некоторые драйверы не поддерживают FOR UPDATE
+            return await self.get_training(training_id)
+
     async def list_upcoming(self, include_drafts: bool = False) -> list[Training]:
         stmt = select(Training).where(
             Training.tenant_id == self.tenant_id,
