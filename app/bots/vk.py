@@ -212,16 +212,16 @@ async def publish_to_wall(tenant_id: int, training_id: int) -> None:
         card = await views.training_card_plain(svc, training)
         group_id = tenant.vk_group_id
 
-    text = ("📣 Новая тренировка — открыта запись!\n\n" + card +
-            "\n\n✍️ Чтобы записаться, напишите сообществу «Тренировки».")
-    # ссылка на диалог с сообществом
+    # ссылку кладём прямо в текст: как attachment VK требует фото-превью
     link = f"https://vk.me/club{group_id}"
+    text = ("📣 Новая тренировка — открыта запись!\n\n" + card +
+            "\n\n✍️ Чтобы записаться, напишите сообществу в личные сообщения "
+            f"(команда «Тренировки»):\n{link}")
     try:
         await _bot.api.wall.post(
             owner_id=-group_id,          # отрицательный = сообщество
             from_group=1,                # от имени сообщества
-            message=text,
-            attachments=link)
+            message=text)
         logger.info("VK: анонс тренировки %s опубликован на стене", training_id)
     except Exception as e:
         logger.warning("VK: не удалось опубликовать на стену: %s", e)
