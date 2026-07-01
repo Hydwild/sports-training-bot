@@ -119,6 +119,33 @@ async def _show_list(user_id: int, group_id=None) -> None:
         await _send(user_id, "⌨️ Меню внизу 👇", keyboard=_menu_kb())
 
 
+async def _edit_card(peer_id: int, cmid: int, tid: int, group_id=None) -> None:
+    """
+    Живое обновление: переписывает карточку тренировки на месте
+    (новый счётчик, список, кнопка) после записи/отмены.
+    """
+    if not _bot or not cmid:
+        return
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            return
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        training = await svc.repo.get_training(tid)
+        if not training:
+            return
+        card = await views.training_card_plain(svc, training)
+        full = await _is_full(svc, training)
+    try:
+        await _bot.api.messages.edit(
+            peer_id=peer_id,
+            conversation_message_id=cmid,
+            message=card,
+            keyboard=_kb(tid, full))
+    except Exception as e:
+        logger.warning("VK: не удалось обновить карточку: %s", e)
+
+
 async def _do_signup(user_id: int, tid: int, group_id=None) -> str:
     async with SessionLocal() as session:
         tenant = await _resolve_tenant(session, group_id)
@@ -276,6 +303,7 @@ async def setup() -> None:
         user_id = obj.get("user_id")
         peer_id = obj.get("peer_id")
         event_id = obj.get("event_id")
+        cmid = obj.get("conversation_message_id")
         payload = obj.get("payload", {})
         if isinstance(payload, str):
             try:
@@ -288,8 +316,10 @@ async def setup() -> None:
         snackbar = "Готово"
         if action == "su":
             snackbar = await _do_signup(user_id, tid, gid)
+            await _edit_card(peer_id, cmid, tid, gid)   # живое обновление
         elif action == "cx":
             snackbar = await _do_cancel(user_id, tid, gid)
+            await _edit_card(peer_id, cmid, tid, gid)   # живое обновление
         elif action == "list":
             await _show_list(user_id, gid)
         elif action == "profile":
