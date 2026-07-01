@@ -133,6 +133,9 @@ class TenantRepository:
                 sub.username = username
             if photo_url is not None:
                 sub.photo_url = photo_url
+            # если тренер задал подпись — не даём Telegram-имени её перетереть
+            if getattr(sub, "alias", None):
+                pass  # отображаемое имя в записях остаётся alias
         else:
             self.session.add(Subscriber(
                 tenant_id=self.tenant_id, platform=platform,
@@ -140,6 +143,44 @@ class TenantRepository:
                 photo_url=photo_url, subscribed=True,
             ))
         await self.session.flush()
+
+    async def set_alias(self, platform: str, user_id: int,
+                        alias: str | None) -> str | None:
+        """
+        Задаёт подпись участника от тренера (или снимает, если alias пустой).
+        Обновляет отображаемое имя во всех его записях. Возвращает
+        актуальное отображаемое имя.
+        """
+        # обновляем подписчика
+        stmt = select(Subscriber).where(
+            Subscriber.tenant_id == self.tenant_id,
+            Subscriber.platform == platform,
+            Subscriber.user_id == user_id,
+        )
+        sub = (await self.session.execute(stmt)).scalar_one_or_none()
+        alias = (alias or "").strip() or None
+        display = alias
+        if sub:
+            sub.alias = alias
+            display = alias or sub.name
+        # применяем имя ко всем записям этого участника (не гостям)
+        if display:
+            upd = update(Signup).where(
+                Signup.tenant_id == self.tenant_id,
+                Signup.platform == platform,
+                Signup.user_id == user_id,
+                Signup.is_guest.is_(False),
+            ).values(name=display)
+            await self.session.execute(upd)
+        await self.session.flush()
+        return display
+
+    async def list_participants(self) -> list[Subscriber]:
+        """Все известные участники клуба (для управления/переименования)."""
+        stmt = select(Subscriber).where(
+            Subscriber.tenant_id == self.tenant_id,
+        ).order_by(Subscriber.name)
+        return list((await self.session.execute(stmt)).scalars())
 
     async def set_subscription(self, platform: str, user_id: int,
                                subscribed: bool) -> None:
