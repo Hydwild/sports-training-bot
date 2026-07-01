@@ -125,19 +125,25 @@ def _kb(tid: int, is_admin: bool = False,
         is_full: bool = False) -> InlineKeyboardMarkup:
     # когда мест нет — кнопка честно предлагает встать в очередь
     signup_text = "⏳ Встать в очередь" if is_full else "✅ Записаться"
-    rows = [[
+    rows = []
+    if is_admin:
+        # у админа кнопка обновления списка — самой первой, наверху
+        rows.append([
+            InlineKeyboardButton(text="🔄 Обновить список", callback_data=f"ref:{tid}"),
+        ])
+    rows.append([
         InlineKeyboardButton(text=signup_text, callback_data=f"su:{tid}"),
         InlineKeyboardButton(text="❌ Отменить", callback_data=f"cx:{tid}"),
-    ], [
+    ])
+    rows.append([
         InlineKeyboardButton(text="👤 Записать гостя", callback_data=f"gu:{tid}"),
-    ]]
+    ])
     if is_admin:
         rows.append([
             InlineKeyboardButton(text="✏️ Изменить", callback_data=f"ed:{tid}"),
             InlineKeyboardButton(text="🔁 Повторить", callback_data=f"rep:{tid}"),
         ])
         rows.append([
-            InlineKeyboardButton(text="🔄 Обновить", callback_data=f"ref:{tid}"),
             InlineKeyboardButton(text="🗑 Отменить тренировку",
                                  callback_data=f"trcx:{tid}"),
         ])
