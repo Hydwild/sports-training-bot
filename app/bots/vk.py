@@ -67,6 +67,17 @@ def _kb(tid: int, is_full: bool = False, is_admin: bool = False) -> str:
     return kb.get_json()
 
 
+def _confirm_del_kb(tid: int) -> str:
+    """Кнопки подтверждения отмены тренировки: Да / Нет."""
+    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    kb = Keyboard(inline=True)
+    kb.add(Callback("✅ Да, отменить", payload={"a": "deltr_yes", "tid": tid}),
+           color=KeyboardButtonColor.NEGATIVE)
+    kb.add(Callback("↩️ Нет", payload={"a": "deltr_no", "tid": tid}),
+           color=KeyboardButtonColor.SECONDARY)
+    return kb.get_json()
+
+
 def _menu_kb(is_admin: bool = False) -> str:
     """Постоянное меню снизу: список / профиль (+ создать для админа)."""
     from vkbottle import Keyboard, Text, KeyboardButtonColor
@@ -303,7 +314,7 @@ async def _toggle_att(user_id: int, sid: int, group_id=None) -> str:
 
 
 async def _delete_training(user_id: int, tid: int, group_id=None) -> str:
-    """Отменяет тренировку (уведомляет записанных). Только админ."""
+    """Отменяет тренировку (уведомляет записанных + Telegram-группу). Только админ."""
     async with SessionLocal() as session:
         if not await _is_admin_vk(session, user_id, group_id):
             return "⛔ Только тренер."
@@ -313,7 +324,15 @@ async def _delete_training(user_id: int, tid: int, group_id=None) -> str:
         if not training:
             return "Тренировка не найдена."
         title = training.title
+        when = svc.format_local(training.start_at)
+        tenant_id = tenant.id
         await svc.cancel_training(tid)
+    # уведомляем Telegram-группу об отмене
+    try:
+        from app.bots import telegram
+        await telegram.notify_group_cancelled(tenant_id, title, when)
+    except Exception as e:
+        logger.warning("VK: не удалось уведомить Telegram-группу: %s", e)
     return f"🗑 Тренировка «{title}» отменена, участники уведомлены."
 
 
@@ -646,8 +665,23 @@ async def setup() -> None:
                     _fsm[user_id] = {"kind": "guest", "tid": tid, "gid": gid}
                     await _send(user_id,
                                 "👤 Введите имя гостя:", keyboard=_cancel_kb())
-        elif action == "deltr":                     # отменить тренировку
+        elif action == "deltr":                     # спросить подтверждение
+            async with SessionLocal() as session:
+                if not await _is_admin_vk(session, user_id, gid):
+                    snackbar = "⛔ Только тренер"
+                else:
+                    tenant = await _resolve_tenant(session, gid)
+                    svc = BookingService(session, tenant.id, tz=tenant.timezone)
+                    tr = await svc.repo.get_training(tid)
+                    title = tr.title if tr else "?"
+                    await _send(user_id,
+                                f"❓ Точно отменить тренировку «{title}»?\n"
+                                "Все записанные получат уведомление.",
+                                keyboard=_confirm_del_kb(tid))
+        elif action == "deltr_yes":                 # подтверждено — отменяем
             snackbar = await _delete_training(user_id, tid, gid)
+        elif action == "deltr_no":                  # передумал
+            snackbar = "Отмена отменена 🙂"
 
         # ответ на нажатие (всплывающее уведомление) + обновляем карточку
         try:
