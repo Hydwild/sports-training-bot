@@ -147,7 +147,11 @@ class NewTraining(StatesGroup):
     location = State()      # выбор места кнопками
     location_manual = State()
     duration = State()
+    duration_manual = State()
     maxp = State()
+    maxp_manual = State()
+    price = State()
+    price_manual = State()
     pubmode = State()
     publish_at = State()
 
@@ -663,24 +667,139 @@ async def new_location_manual(message: Message, state: FSMContext) -> None:
 
 
 async def _ask_duration(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    async with SessionLocal() as session:
+        svc = BookingService(session, data["tenant_id"])
+        common = await svc.common_values()
+    # подсказки из истории + стандартные
+    durs = common["dur"] or []
+    standard = [60, 90, 120, 180]
+    options, seen = [], set()
+    for d in durs + standard:
+        if d not in seen:
+            seen.add(d); options.append(d)
+        if len(options) >= 4:
+            break
+    row = [InlineKeyboardButton(
+        text=f"{'⭐ ' if d in durs else ''}{d//60} ч" if d % 60 == 0
+             else f"{'⭐ ' if d in durs else ''}{d} мин",
+        callback_data=f"ndur:{d}") for d in options]
+    rows = [row, [InlineKeyboardButton(text="✏️ Другое", callback_data="ndur:manual")]]
     await state.set_state(NewTraining.duration)
-    await message.answer("⏱ Длительность в минутах? (напр. 120)")
+    await message.answer("⏱ Длительность тренировки:",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-@router.message(NewTraining.duration)
-async def new_duration(message: Message, state: FSMContext) -> None:
+@router.callback_query(NewTraining.duration, F.data.startswith("ndur:"))
+async def new_duration_cb(query: CallbackQuery, state: FSMContext) -> None:
+    val = query.data.split(":")[1]
+    await query.answer()
+    if val == "manual":
+        await state.set_state(NewTraining.duration_manual)
+        await query.message.answer("Введите длительность в минутах (напр. 120):")
+        return
+    await state.update_data(duration=int(val))
+    await _ask_maxp(query.message, state)
+
+
+@router.message(NewTraining.duration_manual)
+async def new_duration_manual(message: Message, state: FSMContext) -> None:
     if not message.text.isdigit() or int(message.text) < 1:
         await message.answer("Введите число минут, напр. 120."); return
     await state.update_data(duration=int(message.text))
+    await _ask_maxp(message, state)
+
+
+async def _ask_maxp(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    async with SessionLocal() as session:
+        svc = BookingService(session, data["tenant_id"])
+        common = await svc.common_values()
+    maxes = common["max"] or []
+    standard = [4, 6, 8, 12]
+    options, seen = [], set()
+    for m in maxes + standard:
+        if m not in seen:
+            seen.add(m); options.append(m)
+        if len(options) >= 4:
+            break
+    row = [InlineKeyboardButton(
+        text=f"{'⭐ ' if m in maxes else ''}{m}", callback_data=f"nmax:{m}")
+        for m in options]
+    rows = [row, [InlineKeyboardButton(text="✏️ Другое", callback_data="nmax:manual")]]
     await state.set_state(NewTraining.maxp)
-    await message.answer("Максимум участников?")
+    await message.answer("👥 Максимум участников:",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-@router.message(NewTraining.maxp)
-async def new_maxp(message: Message, state: FSMContext) -> None:
+@router.callback_query(NewTraining.maxp, F.data.startswith("nmax:"))
+async def new_maxp_cb(query: CallbackQuery, state: FSMContext) -> None:
+    val = query.data.split(":")[1]
+    await query.answer()
+    if val == "manual":
+        await state.set_state(NewTraining.maxp_manual)
+        await query.message.answer("Введите максимум участников (число):")
+        return
+    await state.update_data(maxp=int(val))
+    await _ask_price(query.message, state)
+
+
+@router.message(NewTraining.maxp_manual)
+async def new_maxp_manual(message: Message, state: FSMContext) -> None:
     if not message.text.isdigit() or int(message.text) < 1:
         await message.answer("Введите положительное число."); return
     await state.update_data(maxp=int(message.text))
+    await _ask_price(message, state)
+
+
+async def _ask_price(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    async with SessionLocal() as session:
+        svc = BookingService(session, data["tenant_id"])
+        common = await svc.common_values()
+    prices = [p for p in common.get("prices", []) if p > 0]
+    standard = [30000, 40000, 50000]  # 300, 400, 500 руб в копейках
+    options, seen = [], set()
+    for p in prices + standard:
+        if p not in seen:
+            seen.add(p); options.append(p)
+        if len(options) >= 3:
+            break
+    row = [InlineKeyboardButton(
+        text=f"{'⭐ ' if p in prices else ''}{p // 100}₽", callback_data=f"npr:{p}")
+        for p in options]
+    rows = [
+        [InlineKeyboardButton(text="🆓 Бесплатно", callback_data="npr:0")],
+        row,
+        [InlineKeyboardButton(text="✏️ Другая сумма", callback_data="npr:manual")],
+    ]
+    await state.set_state(NewTraining.price)
+    await message.answer("💰 Стоимость участия:",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(NewTraining.price, F.data.startswith("npr:"))
+async def new_price_cb(query: CallbackQuery, state: FSMContext) -> None:
+    val = query.data.split(":")[1]
+    await query.answer()
+    if val == "manual":
+        await state.set_state(NewTraining.price_manual)
+        await query.message.answer("Введите стоимость в рублях (напр. 350):")
+        return
+    await state.update_data(price_minor=int(val))
+    await _ask_pubmode(query.message, state)
+
+
+@router.message(NewTraining.price_manual)
+async def new_price_manual(message: Message, state: FSMContext) -> None:
+    txt = message.text.strip().replace("₽", "").replace("руб", "").strip()
+    if not txt.isdigit():
+        await message.answer("Введите число рублей, напр. 350."); return
+    await state.update_data(price_minor=int(txt) * 100)
+    await _ask_pubmode(message, state)
+
+
+async def _ask_pubmode(message: Message, state: FSMContext) -> None:
     await state.set_state(NewTraining.pubmode)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Открыть сразу", callback_data="pm:now")],
@@ -691,16 +810,23 @@ async def new_maxp(message: Message, state: FSMContext) -> None:
 
 async def _finalize(state: FSMContext, st: str, publish_at):
     data = await state.get_data()
+    tenant_id = data["tenant_id"]
     async with SessionLocal() as session:
-        svc = BookingService(session, data["tenant_id"])
+        svc = BookingService(session, tenant_id)
         training = await svc.create_training(
             title=data["title"], start_at=dt.datetime.fromisoformat(data["start_at"]),
             location=data["location"], max_participants=data["maxp"],
             duration_min=data["duration"], state=st, publish_at=publish_at,
             platform=PLATFORM, user_id=0)
+        # цена (если указана) — отдельно, как в API
+        price = data.get("price_minor", 0)
+        if price:
+            training.price_minor = price
+            await session.commit()
+        tid = training.id
         card = await views.training_card(svc, training)
     await state.clear()
-    return card
+    return card, tenant_id, tid
 
 
 @router.callback_query(NewTraining.pubmode, F.data.startswith("pm:"))
@@ -708,13 +834,14 @@ async def new_pubmode(query: CallbackQuery, state: FSMContext) -> None:
     mode = query.data.split(":")[1]
     await query.answer()
     if mode == "now":
-        card = await _finalize(state, "published", None)
+        card, tenant_id, tid = await _finalize(state, "published", None)
         await query.message.edit_text("Создано, запись открыта:")
-        await query.message.answer(card)
+        await query.message.answer(card, parse_mode="HTML")
+        await _publish_to_group(tenant_id, tid)  # сразу в группу клуба
     elif mode == "draft":
-        card = await _finalize(state, "draft", None)
+        card, _, _ = await _finalize(state, "draft", None)
         await query.message.edit_text("Черновик создан (/drafts чтобы запустить):")
-        await query.message.answer(card)
+        await query.message.answer(card, parse_mode="HTML")
     else:
         await state.set_state(NewTraining.publish_at)
         await query.message.edit_text("Во сколько открыть запись? ДД.ММ.ГГГГ ЧЧ:ММ")
@@ -725,9 +852,9 @@ async def new_publish_at(message: Message, state: FSMContext) -> None:
     parsed = BookingService(None, 0).parse_local(message.text)
     if not parsed:
         await message.answer("Неверный формат. Пример: 19.06.2026 09:00"); return
-    card = await _finalize(state, "draft", parsed)
+    card, _, _ = await _finalize(state, "draft", parsed)
     await message.answer("Запланировано, запись откроется автоматически:")
-    await message.answer(card)
+    await message.answer(card, parse_mode="HTML")
 
 
 @router.message(Command("drafts"))
@@ -757,7 +884,8 @@ async def cb_publish(query: CallbackQuery) -> None:
         card = await views.training_card(svc, training)
     await query.answer("Запись открыта, подписчики уведомлены.")
     await query.message.edit_text(f"Тренировка #{train_id} опубликована.")
-    await query.message.answer(card)
+    await query.message.answer(card, parse_mode="HTML")
+    await _publish_to_group(tid, train_id)  # публикуем в группу клуба
 
 
 @router.message(Command("guests"))
@@ -1044,6 +1172,36 @@ async def broadcast_send(message: Message, state: FSMContext) -> None:
         counts = await svc.broadcast(message.text)
     await state.clear()
     await message.answer(f"Рассылка в очереди. Telegram: {counts['tg']}, ВКонтакте: {counts['vk']}.")
+
+
+async def _publish_to_group(tenant_id: int, training_id: int) -> None:
+    """
+    Публикует карточку тренировки с кнопками записи в группу клуба.
+    Молча пропускает, если группа не привязана (tg_chat_id -100 или пустой)
+    или отправка не удалась (бот не в группе и т.п.).
+    """
+    if not _bot:
+        return
+    async with SessionLocal() as session:
+        g = GlobalRepository(session)
+        tenant = await g.get_tenant(tenant_id)
+        if not tenant or not tenant.tg_chat_id or tenant.tg_chat_id == -100:
+            return  # группа не привязана
+        svc = BookingService(session, tenant_id)
+        training = await svc.repo.get_training(training_id)
+        if not training:
+            return
+        card = await views.training_card(svc, training)
+        chat_id = tenant.tg_chat_id
+    try:
+        await _bot.send_message(
+            chat_id,
+            "📣 <b>Новая тренировка — открыта запись!</b>\n\n" + card,
+            reply_markup=_kb(training_id, is_admin=False),
+            parse_mode="HTML")
+    except Exception as e:
+        logger.warning("Не удалось опубликовать тренировку в группу %s: %s",
+                       chat_id, e)
 
 
 async def _send(user_id: int, text: str) -> None:
