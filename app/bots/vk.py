@@ -28,6 +28,7 @@ PLATFORM = "vk"
 
 _bot = None   # type: ignore
 _enabled = False
+_group_id = None   # id сообщества, к которому привязан токен
 
 
 async def _send(user_id: int, text: str, keyboard: str | None = None) -> None:
@@ -72,11 +73,18 @@ async def _upsert_vk_user(svc: BookingService, user_id: int) -> str:
 
 
 async def _resolve_tenant(session, group_id):
+    """
+    Находит клуб по vk_group_id. Приоритет:
+    1) group_id из события (если пришёл),
+    2) _group_id самого бота (узнаём при старте — самый надёжный),
+    3) первый клуб с непустым vk_group_id (запасной путь).
+    """
     g = GlobalRepository(session)
     tenants = await g.list_tenants()
-    if group_id:
+    gid = group_id or _group_id
+    if gid:
         for t in tenants:
-            if t.vk_group_id == group_id:
+            if t.vk_group_id == gid:
                 return t
     for t in tenants:
         if t.vk_group_id:
@@ -235,6 +243,17 @@ async def setup() -> None:
 
     _bot = Bot(token=settings.vk_token)
     _enabled = True
+
+    # узнаём id своего сообщества (надёжнее, чем искать наугад)
+    global _group_id
+    try:
+        groups = await _bot.api.groups.get_by_id()
+        # vkbottle может вернуть список или объект с .groups
+        g0 = groups[0] if isinstance(groups, list) else groups.groups[0]
+        _group_id = g0.id
+        logger.info("VK: сообщество id=%s определено", _group_id)
+    except Exception as e:
+        logger.warning("VK: не удалось определить group_id: %s", e)
 
     @_bot.on.message()
     async def _on_message(message: Message):
