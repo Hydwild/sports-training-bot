@@ -4,9 +4,13 @@ from __future__ import annotations
 from app.services.booking import BookingService
 
 
-async def training_card(svc: BookingService, t) -> str:
+async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
     active = await svc.repo.get_signups(t.id, "active")
     queue = await svc.repo.get_signups(t.id, "queue")
+
+    # подписи тренера подставляем только в карточке для тренера (в личке).
+    # в группе for_admin=False → показываются обычные имена из Telegram.
+    aliases = await svc.repo.aliases_map("tg") if for_admin else {}
 
     # прогресс-бар заполнения мест
     filled = len(active)
@@ -18,6 +22,8 @@ async def training_card(svc: BookingService, t) -> str:
         lines.append(f"📍 {t.location}")
     h = t.duration_min / 60
     lines.append(f"⏱ {('%.1f' % h).rstrip('0').rstrip('.')} ч")
+    if getattr(t, "price_minor", 0):
+        lines.append(f"💰 {t.price_minor // 100}₽")
     lines.append(f"👥 {filled}/{total}  {bar}")
 
     if t.state == "draft":
@@ -28,10 +34,10 @@ async def training_card(svc: BookingService, t) -> str:
 
     if active:
         lines.append("\n<b>Записаны:</b>")
-        lines += [f"  {i}. {_label(s)}" for i, s in enumerate(active, 1)]
+        lines += [f"  {i}. {_label(s, aliases)}" for i, s in enumerate(active, 1)]
     if queue:
         lines.append("\n<b>⏳ Очередь:</b>")
-        lines += [f"  {i}. {_label(s)}" for i, s in enumerate(queue, 1)]
+        lines += [f"  {i}. {_label(s, aliases)}" for i, s in enumerate(queue, 1)]
     if not active and not queue:
         lines.append("\n<i>Пока никто не записан — будь первым!</i>")
     return "\n".join(lines)
@@ -46,14 +52,21 @@ def _progress_bar(filled: int, total: int, width: int = 10) -> str:
     return "▰" * full + "▱" * (width - full)
 
 
-def _label(s) -> str:
-    """Имя участника с @username (если есть) и пометкой гостя."""
+def _label(s, aliases: dict[int, str] | None = None) -> str:
+    """Имя участника с @username (если есть) и пометкой гостя.
+    Если передан словарь подписей и для участника есть подпись — она заменяет имя.
+    """
     if getattr(s, "is_guest", False):
         mark = "✅" if s.confirmed else "⏳ требует подтверждения"
         return f"{s.name} (гость, {mark})"
+    name = s.name
+    if aliases:
+        alias = aliases.get(getattr(s, "user_id", None))
+        if alias:
+            name = alias
     uname = getattr(s, "username", None)
     suffix = f" @{uname}" if uname else ""
-    return f"{s.name}{suffix}"
+    return f"{name}{suffix}"
 
 
 def signup_result(res, title: str) -> str:
