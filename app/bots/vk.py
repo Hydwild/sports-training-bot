@@ -308,9 +308,24 @@ async def _finalize_create(user_id: int, state: dict) -> None:
         card = await views.training_card_plain(svc, training)
         tid = training.id
         full = await _is_full(svc, training)
+        # рассылаем уведомление всем подписчикам (Telegram + VK)
+        subs = await svc.repo.get_subscribers()
+        when = svc.format_local(training.start_at)
+        note = (f"🏸 Открыта запись на «{training.title}»\n📅 {when}"
+                + (f"\n📍 {training.location}" if training.location else ""))
+        for sub in subs:
+            if sub.user_id == user_id and sub.platform == PLATFORM:
+                continue  # не шлём уведомление самому создателю
+            await svc.repo.enqueue(sub.platform, sub.user_id, note)
+        await session.commit()
     await _send(user_id, "✅ Тренировка создана!", keyboard=_menu_kb(True))
     await _send(user_id, card, keyboard=_kb(tid, full))
-    # публикуем анонс на стену и уведомляем Telegram-подписчиков
+    # публикуем: карточку с кнопками в Telegram-группу + анонс на стену ВК
+    try:
+        from app.bots import telegram
+        await telegram._publish_to_group(tenant.id, tid)
+    except Exception as e:
+        logger.warning("VK: публикация в Telegram-группу не удалась: %s", e)
     try:
         await publish_to_wall(tenant.id, tid)
     except Exception as e:
