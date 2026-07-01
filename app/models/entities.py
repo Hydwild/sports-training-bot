@@ -105,6 +105,8 @@ class Training(Base):
     guests_expired: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by_platform: Mapped[str] = mapped_column(String(8))
     created_by_id: Mapped[int] = mapped_column(BigInteger)
+    # id сообщения-карточки, опубликованного в группе Telegram (для live-обновления)
+    group_message_id: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
