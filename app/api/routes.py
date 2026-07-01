@@ -23,8 +23,11 @@ router = APIRouter(prefix="/api", tags=["api"])
 
 
 async def require_admin(x_admin_token: str = Header(default="")) -> None:
-    """Простая защита служебных эндпойнтов общим токеном площадки."""
-    if not settings.admin_api_token or x_admin_token != settings.admin_api_token:
+    """Простая защита служебных эндпойнтов общим токеном площадки.
+    Сравнение через compare_digest — защита от timing-атак."""
+    import hmac
+    expected = settings.admin_api_token or ""
+    if not expected or not hmac.compare_digest(x_admin_token, expected):
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
