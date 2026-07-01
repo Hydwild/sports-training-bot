@@ -70,6 +70,7 @@ BTN_ATTEND = "✅ Явка/оплата"
 BTN_GUESTS = "👥 Гости"
 BTN_DRAFTS = "📋 Черновики"
 BTN_BROADCAST = "📢 Рассылка"
+BTN_NAMES = "✏️ Имена"
 
 
 def _menu(is_admin: bool) -> ReplyKeyboardMarkup:
@@ -82,7 +83,8 @@ def _menu(is_admin: bool) -> ReplyKeyboardMarkup:
         rows.append([KeyboardButton(text=BTN_NEW),
                      KeyboardButton(text=BTN_ATTEND)])
         rows.append([KeyboardButton(text=BTN_GUESTS),
-                     KeyboardButton(text=BTN_DRAFTS),
+                     KeyboardButton(text=BTN_DRAFTS)])
+        rows.append([KeyboardButton(text=BTN_NAMES),
                      KeyboardButton(text=BTN_BROADCAST)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True,
                                input_field_placeholder="Выберите действие")
@@ -250,6 +252,67 @@ async def btn_drafts(message: Message) -> None:
 @router.message(F.text == BTN_BROADCAST)
 async def btn_broadcast(message: Message, state: FSMContext) -> None:
     await cmd_broadcast(message, state)
+
+
+class RenameParticipant(StatesGroup):
+    value = State()
+
+
+@router.message(F.text == BTN_NAMES)
+async def btn_names(message: Message) -> None:
+    tid = await _admin_guard(message)
+    if tid is None:
+        return
+    async with SessionLocal() as session:
+        svc = BookingService(session, tid)
+        people = await svc.repo.list_participants()
+    if not people:
+        await message.answer("Пока нет known участников. Они появятся здесь "
+                             "после первой записи на тренировку."); return
+    rows = []
+    for p in people:
+        shown = p.alias or p.name or f"id{p.user_id}"
+        mark = "✏️ " if p.alias else ""
+        rows.append([InlineKeyboardButton(
+            text=f"{mark}{shown}", callback_data=f"rn:{p.platform}:{p.user_id}")])
+    await message.answer(
+        "👥 <b>Участники клуба</b>\n"
+        "Нажмите, чтобы задать свою подпись (как в телефонной книжке). "
+        "✏️ — уже переименованные.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("rn:"))
+async def cb_rename(query: CallbackQuery, state: FSMContext) -> None:
+    _, platform, uid = query.data.split(":")
+    async with SessionLocal() as session:
+        tid = await _is_admin_cb(session, query)
+        if tid is None:
+            return
+    await state.update_data(tenant_id=tid, platform=platform, user_id=int(uid))
+    await state.set_state(RenameParticipant.value)
+    await query.answer()
+    await query.message.answer(
+        "Введите подпись для участника (например «Вася вторник»).\n"
+        "Отправьте «-» чтобы вернуть имя из Telegram.")
+
+
+@router.message(RenameParticipant.value)
+async def rename_value(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    alias = message.text.strip()
+    if alias == "-":
+        alias = None
+    async with SessionLocal() as session:
+        svc = BookingService(session, data["tenant_id"])
+        display = await svc.repo.set_alias(data["platform"], data["user_id"], alias)
+        await session.commit()
+    await state.clear()
+    if alias:
+        await message.answer(f"✅ Участник теперь отображается как «{display}».")
+    else:
+        await message.answer(f"✅ Возвращено имя из Telegram: «{display}».")
 
 
 @router.message(Command("list"))
