@@ -464,7 +464,8 @@ async def _cr_advance(user_id: int, gid) -> None:
     await _cr_ask(user_id, nxt, gid)
 
 
-async def _cr_callback(user_id: int, payload: dict, gid) -> None:
+async def _cr_callback(user_id: int, payload: dict, gid,
+                       peer_id=None, cmid=None) -> None:
     """Обработка нажатий кнопок в мастере создания."""
     state = _fsm.get(user_id)
     if not state:
@@ -483,22 +484,43 @@ async def _cr_callback(user_id: int, payload: dict, gid) -> None:
             "price": "Введите цену в рублях (напр. 500 или 0):",
             "max": "Введите максимум участников (напр. 6):",
         }
+        # убираем кнопки у текущего сообщения
+        await _strip_buttons(peer_id, cmid, "✏️ Ввод вручную…")
         await _send(user_id, prompts.get(state["step"], "Введите значение:"),
                     keyboard=_cancel_kb())
         return
+
+    label = None
     if a == "cr_date":
-        data["date"] = v
+        data["date"] = v; label = f"✅ Дата: {_fmt_date(v)}"
     elif a == "cr_time":
-        data["time"] = v
+        data["time"] = v; label = f"✅ Время: {v}"
     elif a == "cr_loc":
-        data["location"] = v
+        data["location"] = v; label = f"✅ Место: {v}"
     elif a == "cr_dur":
         data["duration_min"] = int(v)
+        label = f"✅ Длительность: {int(v)} мин"
     elif a == "cr_price":
         data["price_minor"] = int(v) * 100
+        label = f"✅ Цена: {v}₽" if int(v) else "✅ Бесплатно"
     elif a == "cr_max":
-        data["max_participants"] = int(v)
+        data["max_participants"] = int(v); label = f"✅ Максимум: {v}"
+    # переписываем нажатое сообщение — кнопки исчезают, остаётся выбор
+    if label:
+        await _strip_buttons(peer_id, cmid, label)
     await _cr_advance(user_id, gid)
+
+
+async def _strip_buttons(peer_id, cmid, text: str) -> None:
+    """Убирает кнопки у сообщения, заменяя его коротким текстом-следом."""
+    if not _bot or not peer_id or not cmid:
+        return
+    try:
+        await _bot.api.messages.edit(
+            peer_id=peer_id, conversation_message_id=cmid,
+            message=text, keyboard="")
+    except Exception:
+        pass
 
 
 async def _fsm_process(user_id: int, text: str) -> bool:
@@ -807,7 +829,7 @@ async def setup() -> None:
             await _send(user_id, "Создание отменено.", keyboard=_menu_kb(True))
         elif action in ("cr_date", "cr_time", "cr_loc", "cr_dur",
                         "cr_price", "cr_max", "cr_manual"):
-            await _cr_callback(user_id, payload, gid)
+            await _cr_callback(user_id, payload, gid, peer_id, cmid)
         elif action == "att":                       # открыть явку/оплату
             await _show_attendance(user_id, tid, gid)
         elif action == "att_t":                     # переключить у участника
