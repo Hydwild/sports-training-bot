@@ -36,6 +36,7 @@ async def _ensure_columns(conn) -> None:
     # (таблица, колонка, SQL-тип)
     wanted = [
         ("subscribers", "alias", "VARCHAR(200)"),
+        ("trainings", "group_message_id", "BIGINT"),
     ]
     for table, column, coltype in wanted:
         try:
