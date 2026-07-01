@@ -137,6 +137,7 @@ def _kb(tid: int, is_admin: bool = False,
             InlineKeyboardButton(text="🔁 Повторить", callback_data=f"rep:{tid}"),
         ])
         rows.append([
+            InlineKeyboardButton(text="🔄 Обновить", callback_data=f"ref:{tid}"),
             InlineKeyboardButton(text="🗑 Отменить тренировку",
                                  callback_data=f"trcx:{tid}"),
         ])
@@ -370,6 +371,29 @@ async def cmd_stats(message: Message) -> None:
     png = charts.attendance_chart_png(rows)
     if png:
         await message.answer_photo(BufferedInputFile(png, "attendance.png"), caption="Посещаемость")
+
+
+@router.callback_query(F.data.startswith("ref:"))
+async def cb_refresh(query: CallbackQuery) -> None:
+    """Кнопка «Обновить» — перечитывает карточку с актуальным списком."""
+    train_id = int(query.data.split(":")[1])
+    async with SessionLocal() as session:
+        tid, is_admin = await _resolve_tenant(session, query.message.chat.id, query.from_user.id)
+        if tid is None:
+            await query.answer("Чат не привязан к клубу.", show_alert=True); return
+        svc = BookingService(session, tid)
+        training = await svc.repo.get_training(train_id)
+        if not training:
+            await query.answer("Тренировка не найдена.", show_alert=True); return
+        as_admin = is_admin and query.message.chat.type == "private"
+        card = await views.training_card(svc, training, for_admin=as_admin)
+        full = await _is_full(svc, training)
+    await query.answer("Обновлено")
+    try:
+        await query.message.edit_text(
+            card, reply_markup=_kb(train_id, is_admin, full), parse_mode="HTML")
+    except Exception:
+        pass  # данные не изменились — Telegram вернёт ошибку, это ок
 
 
 @router.callback_query(F.data.startswith("su:"))
@@ -958,13 +982,15 @@ async def new_pubmode(query: CallbackQuery, state: FSMContext) -> None:
     await query.answer()
     if mode == "now":
         card, tenant_id, tid = await _finalize(state, "published", None)
-        await query.message.edit_text("Создано, запись открыта:")
-        await query.message.answer(card, parse_mode="HTML")
+        await query.message.edit_text("✅ Тренировка создана, запись открыта:")
+        await query.message.answer(card, parse_mode="HTML",
+                                   reply_markup=_kb(tid, is_admin=True))
         await _publish_to_group(tenant_id, tid)  # сразу в группу клуба
     elif mode == "draft":
-        card, _, _ = await _finalize(state, "draft", None)
-        await query.message.edit_text("Черновик создан (/drafts чтобы запустить):")
-        await query.message.answer(card, parse_mode="HTML")
+        card, _, tid = await _finalize(state, "draft", None)
+        await query.message.edit_text("📝 Черновик создан (/drafts чтобы запустить):")
+        await query.message.answer(card, parse_mode="HTML",
+                                   reply_markup=_kb(tid, is_admin=True))
     else:
         await state.set_state(NewTraining.publish_at)
         await query.message.edit_text("Во сколько открыть запись? ДД.ММ.ГГГГ ЧЧ:ММ")
@@ -975,9 +1001,10 @@ async def new_publish_at(message: Message, state: FSMContext) -> None:
     parsed = BookingService(None, 0).parse_local(message.text)
     if not parsed:
         await message.answer("Неверный формат. Пример: 19.06.2026 09:00"); return
-    card, _, _ = await _finalize(state, "draft", parsed)
-    await message.answer("Запланировано, запись откроется автоматически:")
-    await message.answer(card, parse_mode="HTML")
+    card, _, tid = await _finalize(state, "draft", parsed)
+    await message.answer("⏰ Запланировано, запись откроется автоматически:")
+    await message.answer(card, parse_mode="HTML",
+                         reply_markup=_kb(tid, is_admin=True))
 
 
 @router.message(Command("drafts"))
