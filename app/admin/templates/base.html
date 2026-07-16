@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ brand_name }} — админка</title>
+  <style>
+    :root {
+      --brand: {{ brand_color }};
+      --bg: #f4f6fb; --surface: #fff; --text: #1a1a2e; --muted: #6b7280;
+      --border: #eceef4; --shadow: rgba(20,30,60,.08);
+      --ok-bg: #e3f6e8; --ok-fg: #1a7f3c; --no-bg: #fdeaea; --no-fg: #c0392b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14161c; --surface: #1e2129; --text: #e7e9ee; --muted: #9aa1ad;
+        --border: #2b2f3a; --shadow: rgba(0,0,0,.35);
+        --ok-bg: #14351f; --ok-fg: #58d38a; --no-bg: #3a1a1a; --no-fg: #f0837a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+    header { background: var(--brand); color: #fff; padding: 14px 24px;
+             display: flex; align-items: center; gap: 14px;
+             box-shadow: 0 1px 6px var(--shadow); }
+    header img { height: 32px; border-radius: 6px; }
+    header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+    header .spacer { flex: 1; }
+    header a { color: #fff; text-decoration: none; opacity: .92; font-size: 14px; }
+    header a:hover { opacity: 1; text-decoration: underline; }
+    main { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+    h2 { font-size: 20px; margin: 0 0 12px; }
+    .card { background: var(--surface); border: 1px solid var(--border);
+            border-radius: 14px; padding: 18px 20px;
+            box-shadow: 0 1px 3px var(--shadow); margin-bottom: 16px; }
+    .role { font-size: 12px; background: rgba(255,255,255,.22); padding: 3px 10px;
+            border-radius: 20px; text-transform: capitalize; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border);
+             font-size: 14px; }
+    th { color: var(--muted); font-weight: 600; }
+    tbody tr:hover { background: color-mix(in srgb, var(--brand) 6%, transparent); }
+    .btn { display: inline-block; background: var(--brand); color: #fff;
+           padding: 8px 14px; border-radius: 9px; text-decoration: none;
+           font-size: 13px; border: none; cursor: pointer;
+           transition: filter .15s, transform .05s; }
+    .btn:hover { filter: brightness(1.07); }
+    .btn:active { transform: translateY(1px); }
+    .btn.sm { padding: 5px 11px; font-size: 12px; }
+    .muted { color: var(--muted); font-size: 13px; }
+    a { color: var(--brand); }
+    .tag { font-size: 12px; padding: 2px 9px; border-radius: 20px;
+           display: inline-block; font-weight: 600; }
+    .ok { background: var(--ok-bg); color: var(--ok-fg); }
+    .no { background: var(--no-bg); color: var(--no-fg); }
+    .badge { font-size: 11px; font-weight: 700; letter-spacing: .3px;
+             padding: 2px 7px; border-radius: 6px; color: #fff; }
+    .badge.tg { background: #2aabee; }
+    .badge.vk { background: #4a76a8; }
+    .badge.web { background: #6b7280; }
+    .badge.guest { background: #b8860b; }
+    input, select { background: var(--surface); color: var(--text);
+                    border: 1px solid var(--border); border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    {% if brand_logo_url %}<img src="{{ brand_logo_url }}" alt="logo">{% endif %}
+    <h1>{{ brand_name }}</h1>
+    {% if role %}<span class="role">{{ role }}</span>{% endif %}
+    <div class="spacer"></div>
+    {% if role %}<a href="/admin/logout">Выйти</a>{% endif %}
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

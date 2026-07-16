@@ -1,0 +1,19 @@
+# LITE: один контейнер, данные в SQLite (volume). БД-сервис не нужен.
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      EDITION: lite
+    volumes:
+      - lite_data:/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    # Lite на SQLite: миграции применяются к файлу в volume
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  lite_data:
