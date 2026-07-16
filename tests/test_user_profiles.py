@@ -101,6 +101,53 @@ def test_vk_technical_screen_name_hidden():
     assert profile.photo_url == "https://vk.com/photo.jpg"
 
 
+# ---------- Экранирование HTML в карточке тренировки ----------
+
+async def test_training_card_escapes_malicious_display_name():
+    """Регресс: Telegram позволяет пользователю задать в имени профиля любые
+    символы, включая теги. training_card() отправляется с parse_mode="HTML" —
+    без экранирования участник мог внедрить кликабельную ссылку/разметку в
+    карточку, которую видят все в группе (и тренер)."""
+    from app.bots.views import training_card
+
+    class FakeTraining:
+        id = 1
+        title = "Тренировка"
+        location = ""
+        max_participants = 5
+        duration_min = 90
+        price_minor = 0
+        state = "published"
+        publish_at = None
+        start_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)
+
+    class FakeSignup:
+        id = 1
+        name = '<a href="https://evil.example/phish">🎁 Приз</a>'
+        username = None
+        is_guest = False
+        user_id = 999
+        confirmed = True
+
+    class FakeRepo:
+        async def get_signups(self, tid, status):
+            return [FakeSignup()] if status == "active" else []
+
+        async def aliases_map(self, platform):
+            return {}
+
+    class FakeSvc:
+        repo = FakeRepo()
+
+        def format_local(self, when):
+            return "01.01.2026 19:00"
+
+    card = await training_card(FakeSvc(), FakeTraining())
+    assert "<a href=" not in card          # тег не прошёл как есть
+    assert "&lt;a href=" in card           # экранирован
+    assert "evil.example" in card          # текст остался виден, просто безопасен
+
+
 def test_vk_real_screen_name_kept():
     import asyncio
     from app.bots.user_info import fetch_vk_profile

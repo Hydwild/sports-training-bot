@@ -192,6 +192,9 @@ class Outbox(Base):
     user_id: Mapped[int] = mapped_column(BigInteger)
     text: Mapped[str] = mapped_column(Text)
     sent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # число неудачных попыток доставки; после лимита сообщение считается
+    # безнадёжным и снимается с очереди, чтобы не ретраить вечно (см. tasks.py)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )

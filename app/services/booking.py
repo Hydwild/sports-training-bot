@@ -74,9 +74,15 @@ class BookingService:
         if not training or training.is_cancelled or training.state != "published":
             return SignupResult("closed")
 
-        # синтетический отрицательный id, чтобы не конфликтовать с реальными
-        import time
-        guest_uid = -int(time.time() * 1000) % 1_000_000_000
+        # синтетический случайный id для гостя. Namespace изолирован полем
+        # platform="guest" (не пересекается с реальными tg/vk id), но сам id
+        # обязан быть уникален в пределах (tenant_id, training_id, platform) —
+        # уникальный индекс signups. Раньше брали время в мс, что могло
+        # столкнуться при двойном тапе/ретрае сети в одну и ту же миллисекунду
+        # (и приводило к необработанному IntegrityError). Случайные 31 бит
+        # делают коллизию практически невозможной без завязки на время.
+        import secrets
+        guest_uid = secrets.randbits(31)
         status, position = await self._place(training)
         await self.repo.add_signup(
             training_id=training_id, platform="guest", user_id=guest_uid,
@@ -324,6 +330,11 @@ class BookingService:
 
     async def update_field(self, training_id: int, field: str, value) -> Training | None:
         """Редактирование одного поля тренировки (time/location/maxp/duration)."""
+        if field == "max_participants":
+            # отдельный метод блокирует строку тренировки (FOR UPDATE) перед
+            # rebalance — важно при гонке с одновременной записью участника.
+            await self.set_max_participants(training_id, value)
+            return await self.repo.get_training(training_id)
         training = await self.repo.get_training(training_id)
         if not training:
             return None
@@ -333,10 +344,6 @@ class BookingService:
             training.location = value
         elif field == "duration_min":
             training.duration_min = value
-        elif field == "max_participants":
-            training.max_participants = value
-            await self.session.flush()
-            await self._rebalance(training_id)
         elif field == "price_minor":
             training.price_minor = value
         elif field == "title":
@@ -436,7 +443,7 @@ class BookingService:
         Возвращает список {month: 'ГГГГ-ММ', trainings, attended}, свежие сверху."""
         from collections import defaultdict
         from app.models.entities import Training, Signup
-        from sqlalchemy import select, func
+        from sqlalchemy import select
         now = dt.datetime.now(dt.timezone.utc)
         trs = list((await self.session.execute(
             select(Training).where(
@@ -445,22 +452,24 @@ class BookingService:
                 Training.state == "published",
                 Training.start_at < now))).scalars())
         by_month = defaultdict(lambda: {"trainings": 0, "attended": 0})
-        ids_by_month = defaultdict(list)
+        month_by_tid: dict[int, str] = {}
         for t in trs:
             local = self.format_local(t.start_at)  # ДД.ММ.ГГГГ ЧЧ:ММ
             d, m, y = local.split(" ")[0].split(".")
             key = f"{y}-{m}"
             by_month[key]["trainings"] += 1
-            ids_by_month[key].append(t.id)
-        for key, tids in ids_by_month.items():
-            if not tids:
-                continue
-            cnt = (await self.session.execute(
-                select(func.count()).select_from(Signup).where(
+            month_by_tid[t.id] = key
+        # одним запросом вместо запроса на каждый месяц (N+1)
+        if month_by_tid:
+            attended_tids = (await self.session.execute(
+                select(Signup.training_id).where(
                     Signup.tenant_id == self.tenant_id,
-                    Signup.training_id.in_(tids),
-                    Signup.attended.is_(True)))).scalar() or 0
-            by_month[key]["attended"] = cnt
+                    Signup.training_id.in_(month_by_tid.keys()),
+                    Signup.attended.is_(True)))).scalars().all()
+            for tid in attended_tids:
+                key = month_by_tid.get(tid)
+                if key:
+                    by_month[key]["attended"] += 1
         rows = [{"month": k, **v} for k, v in by_month.items()]
         rows.sort(key=lambda r: r["month"], reverse=True)
         return rows[:months]

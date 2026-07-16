@@ -1,10 +1,20 @@
 """Общие тексты сообщений (одинаковые для Telegram и VK)."""
 from __future__ import annotations
 
+import html as _html
+
 from app.services.booking import BookingService
 
 
 async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
+    """
+    HTML-карточка для Telegram (parse_mode="HTML"). Заголовок/место задаёт
+    тренер (доверенная роль), но имена участников — из профиля Telegram,
+    который может содержать произвольные символы включая теги (`<a href=...>`
+    и т.п.). Экранируем ВСЁ, что не является нашей собственной разметкой,
+    иначе участник может внедрить кликабельную ссылку/форматирование в
+    карточку, которую видят все в группе.
+    """
     active = await svc.repo.get_signups(t.id, "active")
     queue = await svc.repo.get_signups(t.id, "queue")
 
@@ -17,9 +27,9 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
     total = t.max_participants
     bar = _progress_bar(filled, total)
 
-    lines = [f"🏸 <b>{t.title}</b>", f"📅 {svc.format_local(t.start_at)}"]
+    lines = [f"🏸 <b>{_html.escape(t.title)}</b>", f"📅 {svc.format_local(t.start_at)}"]
     if t.location:
-        lines.append(f"📍 {t.location}")
+        lines.append(f"📍 {_html.escape(t.location)}")
     h = t.duration_min / 60
     lines.append(f"⏱ {('%.1f' % h).rstrip('0').rstrip('.')} ч")
     if getattr(t, "price_minor", 0):
@@ -34,10 +44,12 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
 
     if active:
         lines.append("\n<b>Записаны:</b>")
-        lines += [f"  {i}. {_label(s, aliases)}" for i, s in enumerate(active, 1)]
+        lines += [f"  {i}. {_html.escape(_label(s, aliases))}"
+                  for i, s in enumerate(active, 1)]
     if queue:
         lines.append("\n<b>⏳ Очередь:</b>")
-        lines += [f"  {i}. {_label(s, aliases)}" for i, s in enumerate(queue, 1)]
+        lines += [f"  {i}. {_html.escape(_label(s, aliases))}"
+                  for i, s in enumerate(queue, 1)]
     if not active and not queue:
         lines.append("\n<i>Пока никто не записан — будь первым!</i>")
     return "\n".join(lines)

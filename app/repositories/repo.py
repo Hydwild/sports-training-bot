@@ -479,6 +479,20 @@ class GlobalRepository:
             Payment.provider_payment_id == provider_payment_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_payment_by_provider_id_global_for_update(
+            self, provider_payment_id: str) -> Payment | None:
+        """Как get_payment_by_provider_id_global, но блокирует строку
+        (FOR UPDATE) — защита от гонки при двух почти одновременных
+        вебхуках-ретраях провайдера (иначе оба могут пройти проверку
+        status != 'succeeded' до commit друг друга). В SQLite no-op."""
+        stmt = select(Payment).where(
+            Payment.provider_payment_id == provider_payment_id
+        ).with_for_update()
+        try:
+            return (await self.session.execute(stmt)).scalar_one_or_none()
+        except Exception:
+            return await self.get_payment_by_provider_id_global(provider_payment_id)
+
     async def fetch_pending_outbox(self, platform: str,
                                    limit: int = 50) -> list[Outbox]:
         stmt = select(Outbox).where(
@@ -490,6 +504,14 @@ class GlobalRepository:
     async def mark_outbox_sent(self, outbox_id: int) -> None:
         await self.session.execute(
             update(Outbox).where(Outbox.id == outbox_id).values(sent=True)
+        )
+
+    async def record_outbox_failure(self, outbox_id: int, attempts: int) -> None:
+        """Фиксирует неудачную попытку доставки (для повтора на следующем
+        проходе очереди или отказа после превышения лимита — см. tasks.py)."""
+        await self.session.execute(
+            update(Outbox).where(Outbox.id == outbox_id)
+            .values(attempts=attempts)
         )
 
     async def trainings_needing_reminder(self, window_min: int = 60) -> list[Training]:

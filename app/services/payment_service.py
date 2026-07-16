@@ -82,7 +82,10 @@ async def handle_webhook(session: AsyncSession, provider_name: str,
         return False
 
     g = GlobalRepository(session)
-    payment = await g.get_payment_by_provider_id_global(pid)
+    # блокируем строку платежа: провайдеры повторяют вебхуки при таймауте,
+    # без лока два почти одновременных запроса могут оба пройти проверку
+    # статуса ниже до commit друг друга и задвоить уведомление об оплате.
+    payment = await g.get_payment_by_provider_id_global_for_update(pid)
     if payment is None:
         logger.warning("Вебхук: платёж %s не найден в базе", pid)
         return False

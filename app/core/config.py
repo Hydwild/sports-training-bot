@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     # --- Прочее ---
     timezone: str = "Europe/Moscow"
     log_dir: str = "logs"
+    # SaaS: Telegram ID владельца площадки — получает алерты об истекающей
+    # оплате клубов (см. tasks._daily_maintenance). Пусто — алерты не шлются.
+    platform_owner_tg_id: int = 0
 
     # --- Платежи ---
     # ЮKassa (рабочий провайдер)

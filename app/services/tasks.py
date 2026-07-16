@@ -39,6 +39,11 @@ async def deliver_outbox_loop() -> None:
         await asyncio.sleep(2)
 
 
+# после стольких неудачных попыток сообщение считается недоставляемым и
+# снимается с очереди (не ретраим вечно — например, бот заблокирован юзером)
+MAX_OUTBOX_ATTEMPTS = 5
+
+
 async def _deliver_once() -> None:
     async with SessionLocal() as session:
         g = GlobalRepository(session)
@@ -46,15 +51,26 @@ async def _deliver_once() -> None:
             pending = await g.fetch_pending_outbox(platform, limit=25)
             for item in pending:
                 try:
-                    await sender(item.user_id, item.text,
-                                 tenant_id=getattr(item, "tenant_id", None))
-                except TypeError:
-                    await sender(item.user_id, item.text)
+                    try:
+                        await sender(item.user_id, item.text,
+                                     tenant_id=getattr(item, "tenant_id", None))
+                    except TypeError:
+                        await sender(item.user_id, item.text)
+                    await g.mark_outbox_sent(item.id)
                 except Exception:
-                    logger.warning("Доставка %s user=%s не удалась",
-                                   platform, item.user_id)
-                # помечаем отправленным в любом случае, чтобы не зациклиться
-                await g.mark_outbox_sent(item.id)
+                    attempts = (item.attempts or 0) + 1
+                    if attempts >= MAX_OUTBOX_ATTEMPTS:
+                        logger.warning(
+                            "Доставка %s user=%s не удалась %d раз подряд — "
+                            "отказываемся, сообщение снято с очереди",
+                            platform, item.user_id, attempts)
+                        await g.mark_outbox_sent(item.id)
+                    else:
+                        logger.info(
+                            "Доставка %s user=%s не удалась (попытка %d/%d), "
+                            "повторим на следующем проходе",
+                            platform, item.user_id, attempts, MAX_OUTBOX_ATTEMPTS)
+                        await g.record_outbox_failure(item.id, attempts)
             await session.commit()
 
 
@@ -321,15 +337,16 @@ async def _daily_maintenance(last_day: list) -> None:
                 and t.paid_until <= soon.isoformat()]
     if not expiring:
         return
-    owner = next((t for t in tenants if t.id == 1 and t.admin_tg_id), None)
+    from app.core.config import settings
+    owner_tg_id = settings.platform_owner_tg_id
     tg_sender = _senders.get("tg")
-    if owner and tg_sender:
+    if owner_tg_id and tg_sender:
         lines = ["💳 Оплата клубов (SaaS):"]
         today_s = dt.date.today().isoformat()
         for t in expiring:
             state = "ИСТЕКЛА" if t.paid_until < today_s else f"до {t.paid_until}"
             lines.append(f"  • {t.name} (id={t.id}): {state}")
         try:
-            await tg_sender(owner.admin_tg_id, "\n".join(lines))
+            await tg_sender(owner_tg_id, "\n".join(lines))
         except Exception:
             pass

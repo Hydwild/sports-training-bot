@@ -7,7 +7,7 @@
     <a class="btn sm" href="/admin/builder">🛠 Конфигуратор</a>
     <a class="btn sm" href="/admin/backup">💾 Скачать бэкап</a>
   </p>
-  <p style="color:#667">
+  <p class="muted">
     🌐 Публичная страница записи:
     <a href="/club/{{ tenant_id }}" target="_blank">/club/{{ tenant_id }}</a>
     · <a href="/club/{{ tenant_id }}/qr" target="_blank">QR-код для печати</a>
@@ -29,7 +29,8 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">Тренировок пока нет.</p>
+  <p class="muted" style="text-align:center;padding:24px 0">🏸 Тренировок пока нет —
+    создайте первую через бота в Telegram/VK.</p>
   {% endif %}
 </div>
 {% endblock %}

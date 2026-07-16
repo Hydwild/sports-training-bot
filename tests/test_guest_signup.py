@@ -65,3 +65,17 @@ async def test_guest_isolated_per_tenant(session):
     svc_b = BookingService(session, tb.id)
     # клуб Б не видит гостя клуба А
     assert await svc_b.repo.get_training(tid_a) is None
+
+
+async def test_guest_rapid_signups_no_uid_collision(session):
+    """Регресс: раньше guest_uid строился из времени в мс, и несколько
+    гостей, добавленных в одну и ту же миллисекунду (двойной тап/ретрай
+    сети), могли получить одинаковый id и упасть с IntegrityError по
+    уникальному индексу (tenant_id, training_id, platform, user_id)."""
+    svc, tid = await _club_training(session, maxp=20)
+    for i in range(15):
+        res = await svc.sign_up_guest(tid, f"Гость {i}", added_by=1)
+        assert res.result == "active"
+    guests = await svc.list_unconfirmed_guests(tid)
+    assert len(guests) == 15
+    assert len({g.user_id for g in guests}) == 15  # все id уникальны

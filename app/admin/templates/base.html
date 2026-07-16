@@ -56,12 +56,14 @@
     .no { background: var(--no-bg); color: var(--no-fg); }
     .badge { font-size: 11px; font-weight: 700; letter-spacing: .3px;
              padding: 2px 7px; border-radius: 6px; color: #fff; }
-    .badge.tg { background: #2aabee; }
+    /* цвета подобраны на контраст ≥4.5:1 с белым текстом (WCAG AA) */
+    .badge.tg { background: #1868b0; }
     .badge.vk { background: #4a76a8; }
     .badge.web { background: #6b7280; }
-    .badge.guest { background: #b8860b; }
-    input, select { background: var(--surface); color: var(--text);
-                    border: 1px solid var(--border); border-radius: 8px; }
+    .badge.guest { background: #8a6500; }
+    input, select, textarea { background: var(--surface); color: var(--text);
+                    border: 1px solid var(--border); border-radius: 8px;
+                    font-family: inherit; }
   </style>
 </head>
 <body>

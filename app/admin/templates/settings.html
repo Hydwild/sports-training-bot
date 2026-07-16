@@ -8,30 +8,30 @@
     <h3>Брендинг (white-label)</h3>
     <p><label>Название клуба<br>
       <input name="brand_name" value="{{ t.brand_name or '' }}"
-             style="width:100%;padding:8px;border:1px solid #ccd;border-radius:8px"></label></p>
+             style="width:100%;padding:8px"></label></p>
     <p><label>Цвет акцента<br>
       <input name="brand_color" type="color" value="{{ t.brand_color }}"></label></p>
     <p><label>URL логотипа<br>
       <input name="brand_logo_url" value="{{ t.brand_logo_url or '' }}"
-             style="width:100%;padding:8px;border:1px solid #ccd;border-radius:8px"></label></p>
+             style="width:100%;padding:8px"></label></p>
 
     <h3>Уведомления и таймеры</h3>
     <p><label><input type="checkbox" name="reminder_enabled"
        {% if t.reminder_enabled %}checked{% endif %}> Напоминать о тренировке</label></p>
     <p><label>За сколько минут до начала напоминать
       <input name="reminder_minutes" type="number" min="1" value="{{ t.reminder_minutes }}"
-             style="width:90px;padding:6px;border:1px solid #ccd;border-radius:8px"></label></p>
+             style="width:90px;padding:6px"></label></p>
 
     <p><label>Напоминать тренеру о неподтверждённых гостях за (минут, 0 — выкл)
       <input name="guest_reminder_minutes" type="number" min="0" value="{{ t.guest_reminder_minutes }}"
-             style="width:90px;padding:6px;border:1px solid #ccd;border-radius:8px"></label></p>
+             style="width:90px;padding:6px"></label></p>
 
     <p><label><input type="checkbox" name="guest_expire_enabled"
        {% if t.guest_expire_enabled %}checked{% endif %}>
        Автоматически снимать неподтверждённых гостей</label></p>
     <p><label>За сколько минут до начала снимать
       <input name="guest_expire_minutes" type="number" min="1" value="{{ t.guest_expire_minutes }}"
-             style="width:90px;padding:6px;border:1px solid #ccd;border-radius:8px"></label></p>
+             style="width:90px;padding:6px"></label></p>
 
     <p><label><input type="checkbox" name="publish_notify_enabled"
        {% if t.publish_notify_enabled %}checked{% endif %}>
@@ -39,7 +39,7 @@
 
     <p><label>Окно отмены: запретить отписку за (минут до начала, 0 — без ограничений)
       <input name="cancel_lock_minutes" type="number" min="0" value="{{ t.cancel_lock_minutes }}"
-             style="width:90px;padding:6px;border:1px solid #ccd;border-radius:8px"></label></p>
+             style="width:90px;padding:6px"></label></p>
 
     <p><button class="btn" type="submit">Сохранить</button>
        <a href="/admin" style="margin-left:10px">← на дашборд</a></p>
