@@ -45,14 +45,18 @@ TG_TOKEN=сюда_токен_от_BotFather
 TG_MODE=polling
 VK_TOKEN=сюда_токен_сообщества_ВК
 RUN_VK_POLLING=true
-JWT_SECRET=любая_случайная_строка
-ADMIN_API_TOKEN=любая_случайная_строка
+JWT_SECRET=случайная_строка_минимум_16_символов
+ADMIN_API_TOKEN=случайная_строка
 TIMEZONE=Europe/Moscow
 LOG_DIR=/data/logs
 PORT=8080
 ```
 
 Примечания:
+- ⚠️ `JWT_SECRET` **обязателен** и должен быть длиной ≥16 символов, иначе
+  сервис не запустится (защита от дефолтных/пустых секретов). Сгенерировать:
+  `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+  или `openssl rand -base64 32`.
 - Если VK-бот не нужен — оставить `VK_TOKEN` пустым и `RUN_VK_POLLING=false`
 - `EDITION=lite` — базовый набор (запись, очередь, напоминания, посещаемость).
   Для экспорта, статистики, оплат и веб-админки поставить `EDITION=pro`

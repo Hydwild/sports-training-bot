@@ -12,6 +12,7 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 INSECURE_JWT_SECRET = "dev-insecure-change-me"
+MIN_JWT_SECRET_LEN = 16  # минимальная длина боевого JWT-секрета
 _COLOR_RE = re.compile(r"#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?")
 
 
@@ -92,7 +93,9 @@ class Settings(BaseSettings):
 
     @property
     def is_insecure_jwt(self) -> bool:
-        return self.jwt_secret == INSECURE_JWT_SECRET
+        # небезопасно: дефолт, пусто или слишком короткий (легко подобрать)
+        return (self.jwt_secret == INSECURE_JWT_SECRET
+                or len(self.jwt_secret) < MIN_JWT_SECRET_LEN)
 
     def assert_production_secrets(self) -> None:
         """Фейл на старте, если в боевой конфигурации остались небезопасные
@@ -101,8 +104,10 @@ class Settings(BaseSettings):
             return
         problems = []
         if self.is_insecure_jwt:
-            problems.append("JWT_SECRET оставлен дефолтным — задайте случайную "
-                            "строку (например, `openssl rand -base64 32`)")
+            problems.append(
+                "JWT_SECRET пустой, дефолтный или короче "
+                f"{MIN_JWT_SECRET_LEN} символов — задайте случайную строку "
+                "(например, `openssl rand -base64 32`)")
         if self.tg_mode == "webhook" and not self.tg_webhook_secret:
             problems.append("TG_MODE=webhook, но TG_WEBHOOK_SECRET не задан")
         if problems:
