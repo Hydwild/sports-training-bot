@@ -2137,14 +2137,55 @@ async def reload_client_bots() -> None:
     logger.info("VK: клиентские боты перечитаны (%d)", len(_client_bots))
 
 
+async def _poll_forever(bot) -> None:
+    """
+    Безопасный аналог bot.run_polling() из vkbottle для вызова из УЖЕ
+    работающего event loop (мы всегда внутри loop'а FastAPI/uvicorn).
+
+    Проблема оригинального bot.run_polling(): он проверяет свой внутренний
+    флаг loop_wrapper.is_running (не сам event loop!) — при первом вызове
+    флаг всегда False, поэтому метод пытается САМ запустить/остановить
+    event loop через синхронный LoopWrapper.run(). Тот, в свою очередь,
+    видит, что реальный loop уже работает, и падает:
+        RuntimeError: LoopWrapper.run() cannot be called from a running
+        event loop. Use 'await bot.run_polling()' instead.
+    Падение происходит ПОСЛЕ того, как bot.loop_wrapper.add_task(...) уже
+    успел запланировать внутренний поллинг-таск на реальном loop'е (у него
+    свой, отдельный от LoopWrapper, безопасный путь для уже запущенного
+    loop'а) — то есть даже неудачный вызов оставляет позади «осиротевший»
+    поллинг-таск, который никто не отслеживает и не отменяет. Раньше это
+    исключение просто терялось молча (task exception was never retrieved),
+    поэтому проблема была незаметна: спавнился ровно один осиротевший
+    таск при старте и молча работал. После того как run_polling() стал
+    попадать под supervise() (авто-ретрай), КАЖДЫЙ повторный вызов при
+    падении добавлял ЕЩЁ один осиротевший поллинг-таск поверх предыдущих —
+    отсюда дублирующиеся ответы (несколько параллельных Long Poll на один
+    и тот же бот).
+
+    Решение: не используем bot.run_polling()/LoopWrapper вообще, а
+    напрямую воспроизводим то же самое (низкоуровневый bot.polling.listen()
+    + диспетчеризация через bot.router.route — именно это делает
+    run_polling() внутри), но без обращения к LoopWrapper. Так ошибка
+    вообще не возникает, а не просто прячется, и повторные попытки
+    supervise() безопасны и идемпотентны (каждая создаёт ровно один новый
+    поллинг, не оставляя дублей от прежних попыток).
+    """
+    import asyncio as _aio
+    polling = bot.polling
+    async for event in polling.listen():
+        for update in event.get("updates", []):
+            _aio.create_task(bot.router.route(update, polling.api))
+
+
 def _spawn_client_poll(tid: int, bot):
     """Запускает поллинг клиентского бота под супервизором: если Long Poll
     этого клуба упадёт с исключением, перезапустится сам (с бэкоффом),
     не утаскивая за собой ни платформенного бота, ни остальных клиентов."""
     import asyncio as _aio
+    from functools import partial
     from app.services import tasks as _tasks
     return _aio.create_task(
-        _tasks.supervise(f"VK-поллинг клиента id={tid}", bot.run_polling))
+        _tasks.supervise(f"VK-поллинг клиента id={tid}", partial(_poll_forever, bot)))
 
 
 async def run_polling() -> None:
@@ -2156,7 +2197,7 @@ async def run_polling() -> None:
         for tid, b in _client_bots.items():
             _client_tasks[tid] = _spawn_client_poll(tid, b)
         try:
-            await _bot.run_polling()
+            await _poll_forever(_bot)
         finally:
             _vk_polling_active = False
             for t in _client_tasks.values():
