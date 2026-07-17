@@ -175,6 +175,14 @@ def test_monthly_summary_and_past():
     asyncio.run(run())
 
 
+def test_faq_page():
+    with TestClient(app) as c:
+        r = c.get("/faq")
+        assert r.status_code == 200
+        assert "Вопросы и ответы" in r.text
+        assert "Как записаться на тренировку" in r.text
+
+
 def test_promo_and_demo_seed():
     with TestClient(app) as c:
         r = c.get("/promo")

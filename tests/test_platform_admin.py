@@ -223,6 +223,37 @@ def test_edit_bad_token_keeps_name_change():
         assert "Имя Сохранилось" in c.get("/admin/platform").text
 
 
+def test_backup_now_requires_auth():
+    with TestClient(app) as c:
+        assert c.post("/admin/platform/backup-now").status_code == 401
+
+
+def test_backup_now_requires_csrf():
+    with TestClient(app) as c:
+        login = c.post("/admin/platform/login", data={"token": TOKEN},
+                       follow_redirects=False)
+        c.cookies.set("platform_token", login.cookies["platform_token"])
+        assert c.post("/admin/platform/backup-now").status_code == 403
+
+
+def test_backup_now_shows_result_on_dashboard(monkeypatch):
+    from app.services import backup
+
+    async def fake_send():
+        return "Бэкап отправлен: backup_test.sql.gz (0.1 МБ)."
+
+    monkeypatch.setattr(backup, "send_backup_to_owner", fake_send)
+
+    with TestClient(app) as c:
+        login = c.post("/admin/platform/login", data={"token": TOKEN},
+                       follow_redirects=False)
+        c.cookies.set("platform_token", login.cookies["platform_token"])
+        csrf = _csrf(c.get("/admin/platform").text)
+        r = c.post("/admin/platform/backup-now", data={"csrf": csrf})
+        assert r.status_code == 200
+        assert "Бэкап отправлен" in r.text
+
+
 def test_rate_limit_on_login_attempts():
     from app.api import routes as api_routes
     api_routes._ip_hits.clear()

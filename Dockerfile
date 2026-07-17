@@ -6,9 +6,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /code
 
-# системные зависимости для asyncpg/matplotlib
+# системные зависимости: gcc/libpq-dev — сборка asyncpg/matplotlib;
+# postgresql-client — pg_dump для внешних бэкапов (app/services/backup.py)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc libpq-dev \
+        gcc libpq-dev postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

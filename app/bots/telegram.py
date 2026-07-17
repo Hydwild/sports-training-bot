@@ -1566,6 +1566,22 @@ async def _send(user_id: int, text: str, tenant_id: int | None = None) -> None:
         await b.send_message(user_id, text)
 
 
+async def send_document_to_owner(user_id: int, filename: str, data: bytes,
+                                 caption: str = "") -> bool:
+    """Отправляет файл владельцу площадки через ДЕФОЛТНОГО (платформенного)
+    бота — используется для внешних бэкапов базы, которые не привязаны к
+    конкретному клубу. Возвращает True при успехе."""
+    if not _bot:
+        return False
+    try:
+        await _bot.send_document(
+            user_id, BufferedInputFile(data, filename), caption=caption)
+        return True
+    except Exception as e:
+        logger.warning("Не удалось отправить документ владельцу площадки: %s", e)
+        return False
+
+
 async def setup() -> None:
     global _bot, _dp
     if not settings.tg_token:

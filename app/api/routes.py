@@ -541,3 +541,10 @@ async def promo_page():
     """Промо-страница продукта (лендинг). Контакты и цены — в promo_page.py."""
     from app.api.promo_page import PROMO_HTML
     return PROMO_HTML
+
+
+@public_router.get("/faq", response_class=HTMLResponse)
+async def faq_page():
+    """FAQ для клиентов: как записаться, создать тренировку и т.д. — в faq_page.py."""
+    from app.api.faq_page import FAQ_HTML
+    return FAQ_HTML

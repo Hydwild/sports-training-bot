@@ -108,6 +108,7 @@ async def _deliver_once() -> None:
 
 async def scheduler_loop() -> None:
     _last_backup_day = [None]
+    _last_offsite_backup_day = [None]
     _last_maint_day = [None]
     while True:
         try:
@@ -124,6 +125,11 @@ async def scheduler_loop() -> None:
             _auto_backup(_last_backup_day)
         except Exception:
             logger.exception("Ошибка автобэкапа")
+        try:
+            await _offsite_backup(_last_offsite_backup_day)
+        except Exception as e:
+            logger.exception("Ошибка внешнего бэкапа")
+            await _alert_admins("внешний бэкап", e)
         try:
             await _daily_maintenance(_last_maint_day)
         except Exception:
@@ -198,6 +204,20 @@ def _auto_backup(last_day: list) -> None:
             pass
     last_day[0] = today
     logger.info("Автобэкап базы сохранён: %s", dest)
+
+
+async def _offsite_backup(last_day: list) -> None:
+    """Раз в сутки отправляет дамп базы (Postgres или SQLite) владельцу
+    площадки в Telegram — в отличие от _auto_backup (копия на том же
+    Railway-диске), эта копия хранится ВНЕ платформы и переживает полное
+    падение Railway. См. app/services/backup.py и DISASTER_RECOVERY.md."""
+    today = dt.date.today().isoformat()
+    if last_day[0] == today:
+        return
+    last_day[0] = today
+    from app.services import backup
+    result = await backup.send_backup_to_owner()
+    logger.info("Внешний бэкап: %s", result)
 
 
 async def _process_schedules() -> None:

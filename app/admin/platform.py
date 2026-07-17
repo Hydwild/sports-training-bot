@@ -104,10 +104,7 @@ async def platform_logout():
 
 # ---------- Дашборд: список клиентов ----------
 
-@router.get("", response_class=HTMLResponse)
-async def platform_dashboard(request: Request,
-                             _auth: None = Depends(require_platform_admin),
-                             session: AsyncSession = Depends(get_session)):
+async def _dashboard_rows(request: Request, session: AsyncSession) -> list[dict]:
     g = GlobalRepository(session)
     tenants = await g.list_tenants()
     soon = (dt.date.today() + dt.timedelta(days=3)).isoformat()
@@ -132,8 +129,30 @@ async def platform_dashboard(request: Request,
             "public_url": f"{base}/club/{t.id}",
             "edit_url": f"/admin/platform/{t.id}/edit",
         })
+    return rows
+
+
+@router.get("", response_class=HTMLResponse)
+async def platform_dashboard(request: Request,
+                             _auth: None = Depends(require_platform_admin),
+                             session: AsyncSession = Depends(get_session)):
+    rows = await _dashboard_rows(request, session)
     return templates.TemplateResponse(request, "platform_dashboard.html",
-                                      _ctx(request, tenants=rows))
+                                      _ctx(request, tenants=rows, backup_msg=None))
+
+
+# ---------- Бэкап базы вручную (внешний, в Telegram) ----------
+
+@router.post("/backup-now", response_class=HTMLResponse)
+async def platform_backup_now(request: Request,
+                              _auth: None = Depends(require_platform_admin),
+                              _csrf: None = Depends(require_csrf(COOKIE)),
+                              session: AsyncSession = Depends(get_session)):
+    from app.services import backup
+    result = await backup.send_backup_to_owner()
+    rows = await _dashboard_rows(request, session)
+    return templates.TemplateResponse(request, "platform_dashboard.html",
+                                      _ctx(request, tenants=rows, backup_msg=result))
 
 
 # ---------- Добавить клиента ----------
