@@ -55,6 +55,11 @@ class Tenant(Base):
     welcome_text: Mapped[str | None] = mapped_column(String(1000))
     signup_close_minutes: Mapped[int] = mapped_column(Integer, default=0)
     paid_until: Mapped[str] = mapped_column(String(10), default="")  # SaaS: ISO-дата
+    # SaaS: маркер последнего отправленного клиенту уведомления об оплате,
+    # вида "2026-08-01:soon" / "2026-08-01:expired" — привязан к текущему
+    # paid_until, поэтому автоматически «сбрасывается» при продлении оплаты
+    # (новое значение paid_until не совпадёт со старым маркером).
+    last_billing_notice: Mapped[str] = mapped_column(String(32), default="")
     # мультиклиент: собственные боты клуба (пусто — используется бот из env)
     tg_token: Mapped[str | None] = mapped_column(String(200))
     vk_token: Mapped[str | None] = mapped_column(String(200))

@@ -43,6 +43,7 @@ async def _ensure_columns(conn) -> None:
         ("tenants", "vk_token", "VARCHAR(200)"),
         ("trainings", "group_message_id", "BIGINT"),
         ("outbox", "attempts", "INTEGER DEFAULT 0"),
+        ("tenants", "last_billing_notice", "VARCHAR(32) DEFAULT \'\'"),
     ]
     for table, column, coltype in wanted:
         try:

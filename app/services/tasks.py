@@ -316,13 +316,18 @@ async def _run_scheduler() -> None:
 
 
 async def _daily_maintenance(last_day: list) -> None:
-    """Раз в сутки: чистка очереди сообщений и напоминания об оплате клубов."""
+    """Раз в сутки: чистка очереди сообщений, уведомление клиентов об
+    истекающей/истёкшей оплате их клуба (в их же боте) и сводка владельцу
+    платформы."""
     today = dt.date.today().isoformat()
     if last_day[0] == today:
         return
     last_day[0] = today
     from sqlalchemy import delete, select
+    from app.core.config import settings
     from app.models.entities import Outbox, Tenant
+    from app.repositories.repo import TenantRepository
+
     async with SessionLocal() as session:
         # отправленные сообщения старше 30 дней и "web"-хвосты больше не нужны
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
@@ -330,19 +335,50 @@ async def _daily_maintenance(last_day: list) -> None:
             (Outbox.platform == "web")
             | ((Outbox.sent.is_(True)) & (Outbox.created_at < cutoff))))
         await session.commit()
-        # SaaS: клубы с истекающей/истёкшей оплатой -> владельцу платформы
+
+        # SaaS: клубы с истекающей (≤3 дня) или уже истёкшей оплатой
         tenants = list((await session.execute(select(Tenant))).scalars())
-    soon = dt.date.today() + dt.timedelta(days=3)
-    expiring = [t for t in tenants if (t.paid_until or "").strip()
-                and t.paid_until <= soon.isoformat()]
+        soon = (dt.date.today() + dt.timedelta(days=3)).isoformat()
+        today_s = today
+        expiring = [t for t in tenants if (t.paid_until or "").strip()
+                    and t.paid_until <= soon]
+
+        # уведомление клиенту (тренеру/владельцу клуба) в его собственном
+        # боте. Маркер last_billing_notice — чтобы не слать одно и то же
+        # каждый день: одно сообщение на переход в "скоро истекает" и одно
+        # на сам факт истечения. При продлении оплаты (новый paid_until)
+        # маркер естественным образом устаревает и уведомления возобновятся.
+        for t in expiring:
+            stage = "expired" if t.paid_until < today_s else "soon"
+            marker = f"{t.paid_until}:{stage}"
+            if t.last_billing_notice == marker or not (t.admin_tg_id or t.admin_vk_id):
+                continue
+            contact = (f" Для продления свяжитесь: {settings.platform_support_contact}."
+                      if settings.platform_support_contact else
+                      " Для продления свяжитесь с администрацией сервиса.")
+            if stage == "expired":
+                text = (f"🚫 Подписка клуба «{t.name}» истекла {t.paid_until}. "
+                        f"Бот и страница записи временно приостановлены — "
+                        f"участники не могут записываться.{contact}")
+            else:
+                text = (f"⚠️ Подписка клуба «{t.name}» истекает {t.paid_until}. "
+                        f"Чтобы бот не останавливался, продлите заранее.{contact}")
+            repo = TenantRepository(session, t.id)
+            if t.admin_tg_id:
+                await repo.enqueue("tg", t.admin_tg_id, text)
+            if t.admin_vk_id:
+                await repo.enqueue("vk", t.admin_vk_id, text)
+            t.last_billing_notice = marker
+        await session.commit()
+
+    # сводка владельцу платформы — вне сессии, только чтение уже
+    # загруженных скалярных полей (name/id/paid_until) и отправка сообщения
     if not expiring:
         return
-    from app.core.config import settings
     owner_tg_id = settings.platform_owner_tg_id
     tg_sender = _senders.get("tg")
     if owner_tg_id and tg_sender:
         lines = ["💳 Оплата клубов (SaaS):"]
-        today_s = dt.date.today().isoformat()
         for t in expiring:
             state = "ИСТЕКЛА" if t.paid_until < today_s else f"до {t.paid_until}"
             lines.append(f"  • {t.name} (id={t.id}): {state}")
