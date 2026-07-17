@@ -72,7 +72,7 @@
     <h1>{{ brand_name }}</h1>
     {% if role %}<span class="role">{{ role }}</span>{% endif %}
     <div class="spacer"></div>
-    {% if role %}<a href="/admin/logout">Выйти</a>{% endif %}
+    {% if role %}<a href="{{ logout_url or '/admin/logout' }}">Выйти</a>{% endif %}
   </header>
   <main>
     {% block content %}{% endblock %}

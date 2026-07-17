@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Клиенты платформы</h2>
+  <p><a class="btn" href="/admin/platform/new">➕ Добавить клиента</a></p>
+
+  {% if tenants %}
+  <table>
+    <tr><th>#</th><th>Клуб</th><th>Боты</th><th>Тренер</th><th>Оплата</th><th></th></tr>
+    {% for t in tenants %}
+    <tr>
+      <td>{{ t.id }}</td>
+      <td>{{ t.name }}</td>
+      <td>
+        {% if t.has_tg %}<span class="badge tg">TG</span>{% endif %}
+        {% if t.has_vk %}<span class="badge vk">VK</span>{% endif %}
+        {% if not t.has_tg and not t.has_vk %}<span class="muted">не подключены</span>{% endif %}
+      </td>
+      <td>{{ t.admin_tg_id or "—" }}</td>
+      <td>
+        <span class="tag {{ t.status_tag }}">{{ t.status_text }}</span>
+        <form method="post" action="/admin/platform/{{ t.id }}/billing"
+              style="display:inline-block;margin-left:6px">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="date" name="paid_until" style="padding:4px;font-size:12px;width:130px">
+          <button class="btn sm" type="submit">Продлить</button>
+        </form>
+      </td>
+      <td><a href="{{ t.public_url }}" target="_blank">страница</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted" style="text-align:center;padding:24px 0">Клиентов пока нет —
+    начните с кнопки «Добавить клиента» выше.</p>
+  {% endif %}
+</div>
+{% endblock %}

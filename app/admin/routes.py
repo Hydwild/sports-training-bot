@@ -252,7 +252,7 @@ async def settings_page(request: Request,
 @router.post("/settings", response_class=HTMLResponse)
 async def settings_save(request: Request,
                         claims: dict = Depends(require_role("coach")),
-                        _csrf: None = Depends(require_csrf),
+                        _csrf: None = Depends(require_csrf()),
                         session: AsyncSession = Depends(get_session)):
     form = await request.form()
     g = GlobalRepository(session)
@@ -294,7 +294,7 @@ async def settings_save(request: Request,
 @router.post("/signups/{signup_id}/toggle_attend")
 async def toggle_attend(signup_id: int,
                         claims: dict = Depends(require_role("assistant")),
-                        _csrf: None = Depends(require_csrf),
+                        _csrf: None = Depends(require_csrf()),
                         session: AsyncSession = Depends(get_session)):
     svc = BookingService(session, claims["tenant_id"])
     s = await svc.toggle_attended(signup_id)
@@ -306,7 +306,7 @@ async def toggle_attend(signup_id: int,
 @router.post("/signups/{signup_id}/toggle_pay")
 async def toggle_pay(signup_id: int,
                      claims: dict = Depends(require_role("assistant")),
-                     _csrf: None = Depends(require_csrf),
+                     _csrf: None = Depends(require_csrf()),
                      session: AsyncSession = Depends(get_session)):
     svc = BookingService(session, claims["tenant_id"])
     s = await svc.toggle_paid(signup_id)
@@ -381,7 +381,7 @@ async def builder_page(request: Request,
 @router.post("/builder")
 async def builder_generate(request: Request,
                            claims: dict = Depends(require_role("owner")),
-                           _csrf: None = Depends(require_csrf),
+                           _csrf: None = Depends(require_csrf()),
                            club_name: str = Form(...),
                            edition: str = Form("lite"),
                            timezone: str = Form("Europe/Moscow"),

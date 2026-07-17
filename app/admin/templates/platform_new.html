@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Добавить клиента</h2>
+  <p class="muted">Создаёт клуб и (если указаны) сразу подключает его боты —
+     без рестарта сервиса. Токены можно добавить и позже.</p>
+  {% if error %}<p class="tag no">{{ error }}</p>{% endif %}
+  <form method="post" action="/admin/platform/new">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+
+    <p><label>Название клуба<br>
+      <input name="club_name" required placeholder="Клуб «Волан»"
+             style="width:100%;padding:8px"></label></p>
+
+    <p><label>Часовой пояс<br>
+      <select name="timezone" style="padding:8px">
+        <option>Europe/Moscow</option><option>Europe/Kaliningrad</option>
+        <option>Europe/Samara</option><option>Asia/Yekaterinburg</option>
+        <option>Asia/Omsk</option><option>Asia/Novosibirsk</option>
+        <option>Asia/Krasnoyarsk</option><option>Asia/Irkutsk</option>
+        <option>Asia/Yakutsk</option><option>Asia/Vladivostok</option>
+      </select></label></p>
+
+    <h3>Токены ботов (можно оставить пустыми и задать позже)</h3>
+    <p><label>Токен Telegram-бота (от @BotFather)<br>
+      <input name="tg_token" placeholder="123456:ABC..."
+             style="width:100%;padding:8px"></label></p>
+    <p><label>Токен сообщества ВКонтакте<br>
+      <input name="vk_token" placeholder="vk1.a...."
+             style="width:100%;padding:8px"></label></p>
+
+    <h3>Тренер клиента</h3>
+    <p class="muted">Telegram ID тренера — бот сразу узнает его как
+       администратора клуба. Узнать ID можно у @userinfobot.</p>
+    <p><label>Telegram ID тренера<br>
+      <input name="admin_tg_id" type="number" placeholder="123456789"
+             style="width:100%;padding:8px"></label></p>
+
+    <p><button class="btn" type="submit">Создать клуб</button>
+       <a href="/admin/platform" style="margin-left:10px">← к списку</a></p>
+  </form>
+</div>
+{% endblock %}

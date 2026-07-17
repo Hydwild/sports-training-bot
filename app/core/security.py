@@ -103,25 +103,30 @@ def require_role(min_role: str):
 
 # ---------- CSRF (для форм HTML-админки) ----------
 
-def csrf_token_for(access_token: str) -> str:
-    """CSRF-токен, привязанный к сессии (JWT в cookie). Без знания jwt_secret
-    подделать нельзя, а сторонний сайт не может прочитать httponly-cookie —
-    поэтому и вычислить корректный токен для формы не сможет."""
+def csrf_token_for(session_value: str) -> str:
+    """CSRF-токен, привязанный к значению сессионной cookie. Без знания
+    jwt_secret подделать нельзя, а сторонний сайт не может прочитать
+    httponly-cookie — поэтому и вычислить корректный токен для формы не
+    сможет. Годится для любой сессионной cookie (JWT тенант-админки или
+    сырой платформенный токен), значение которой достаточно секретно."""
     return hmac.new(settings.jwt_secret.encode(),
-                    b"csrf:" + access_token.encode(),
+                    b"csrf:" + session_value.encode(),
                     hashlib.sha256).hexdigest()
 
 
-def csrf_for_request(request: Request) -> str:
+def csrf_for_request(request: Request, cookie_name: str = "access_token") -> str:
     """CSRF-токен для встраивания в форму (пустая строка, если нет сессии)."""
-    tok = request.cookies.get("access_token", "")
+    tok = request.cookies.get(cookie_name, "")
     return csrf_token_for(tok) if tok else ""
 
 
-async def require_csrf(request: Request) -> None:
-    """Зависимость для POST-роутов админки: сверяет поле формы `csrf`."""
-    tok = request.cookies.get("access_token", "")
-    form = await request.form()   # Starlette кэширует — повторный await безопасен
-    sent = str(form.get("csrf", ""))
-    if not tok or not hmac.compare_digest(sent, csrf_token_for(tok)):
-        raise HTTPException(status_code=403, detail="CSRF-проверка не пройдена")
+def require_csrf(cookie_name: str = "access_token"):
+    """Зависимость для POST-роутов админки: сверяет поле формы `csrf` против
+    указанной сессионной cookie (по умолчанию — access_token тенант-админки)."""
+    async def checker(request: Request) -> None:
+        tok = request.cookies.get(cookie_name, "")
+        form = await request.form()  # Starlette кэширует — повторный await безопасен
+        sent = str(form.get("csrf", ""))
+        if not tok or not hmac.compare_digest(sent, csrf_token_for(tok)):
+            raise HTTPException(status_code=403, detail="CSRF-проверка не пройдена")
+    return checker

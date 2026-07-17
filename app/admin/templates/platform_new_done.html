@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>✅ Клуб «{{ tenant.name }}» создан</h2>
+  <p class="muted">id={{ tenant.id }}{% if tenant.admin_tg_id %} · тренер: {{ tenant.admin_tg_id }}{% endif %}</p>
+  <p>{{ reload_note }}</p>
+
+  <p><strong>Страница записи (без Telegram/ВК):</strong><br>
+     <a href="{{ public_url }}" target="_blank">{{ public_url }}</a></p>
+  <p><a href="{{ public_url }}/qr" target="_blank">Скачать QR-код для печати</a></p>
+
+  <p class="muted">Дальше клиент пишет своему боту /start — увидит меню
+     управления клубом.</p>
+
+  <p style="margin-top:16px">
+    <a class="btn" href="/admin/platform/new">➕ Добавить ещё клиента</a>
+    <a href="/admin/platform" style="margin-left:10px">← к списку клиентов</a>
+  </p>
+</div>
+{% endblock %}

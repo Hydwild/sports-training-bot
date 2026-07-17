@@ -141,6 +141,8 @@ app.include_router(public_router)
 if settings.is_pro:
     from app.admin.routes import router as admin_router  # noqa: E402
     app.include_router(admin_router)
+    from app.admin.platform import router as platform_router  # noqa: E402
+    app.include_router(platform_router)
 
     @app.post("/webhook/payment/{provider}")
     async def payment_webhook(provider: str, request: Request):
