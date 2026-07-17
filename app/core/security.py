@@ -22,6 +22,20 @@ ALGO = "HS256"
 ROLE_LEVEL = {"assistant": 1, "coach": 2, "owner": 3}
 
 
+class NotAuthenticated(HTTPException):
+    """Нет валидной сессии (не 'мало прав' — именно отсутствие/невалидность
+    входа). main.py ловит этот класс отдельно от обычного HTTPException и
+    редиректит на указанную страницу входа вместо голого JSON 401 — иначе
+    человек, перешедший по прямой ссылке на защищённую HTML-страницу без
+    активной сессии, просто видит "Не авторизован" без объяснения, куда
+    идти дальше. Используется только в HTML-разделах (/admin, /admin/
+    platform); JSON API (/api/*) авторизуется отдельным механизмом
+    (X-Admin-Token) и этот класс не использует — там нужен обычный JSON 401."""
+    def __init__(self, redirect_to: str, detail: str = "Не авторизован") -> None:
+        super().__init__(status_code=401, detail=detail)
+        self.redirect_to = redirect_to
+
+
 # ---------- JWT ----------
 
 def create_token(tg_user_id: int, tenant_id: int, role: str,
@@ -42,9 +56,9 @@ def decode_token(token: str) -> dict:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[ALGO])
     except jwt.ExpiredSignatureError as e:
-        raise HTTPException(status_code=401, detail="Токен истёк") from e
+        raise NotAuthenticated("/admin/login", detail="Токен истёк") from e
     except jwt.InvalidTokenError as e:
-        raise HTTPException(status_code=401, detail="Неверный токен") from e
+        raise NotAuthenticated("/admin/login", detail="Неверный токен") from e
 
 
 # ---------- Telegram Login Widget ----------
@@ -82,7 +96,7 @@ def _read_token(request: Request) -> str:
         if auth.startswith("Bearer "):
             token = auth[7:]
     if not token:
-        raise HTTPException(status_code=401, detail="Не авторизован")
+        raise NotAuthenticated("/admin/login")
     return token
 
 

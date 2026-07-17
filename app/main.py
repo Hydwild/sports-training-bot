@@ -15,6 +15,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from app.api.routes import router as api_router
 from app.core.config import settings
+from app.core.security import NotAuthenticated
 from app.core.logging_setup import setup_logging
 from app.db.engine import engine
 from app.models.entities import Base
@@ -121,6 +122,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Badminton Platform", version="2.0", lifespan=lifespan)
+
+
+@app.exception_handler(NotAuthenticated)
+async def _not_authenticated_handler(request: Request, exc: NotAuthenticated):
+    """Заход на защищённую HTML-страницу (/admin, /admin/platform) без
+    активной сессии — вместо голого JSON 401 вежливо перекидываем на
+    соответствующую страницу входа. JSON API (/api/*) сюда не попадает —
+    там своя авторизация (X-Admin-Token) и обычный HTTPException."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(exc.redirect_to, status_code=302)
 
 
 @app.middleware("http")

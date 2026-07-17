@@ -38,9 +38,16 @@ def test_login_wrong_token_rejected_and_no_cookie():
 
 
 def test_dashboard_requires_auth():
+    """Без сессии — вежливый редирект на страницу входа, не голый 401
+    (иначе человек, перешедший по прямой ссылке, просто видит "не
+    авторизован" без объяснения, куда идти дальше)."""
     with TestClient(app) as c:
-        assert c.get("/admin/platform").status_code == 401
-        assert c.get("/admin/platform/new").status_code == 401
+        r = c.get("/admin/platform", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin/platform/login"
+        r2 = c.get("/admin/platform/new", follow_redirects=False)
+        assert r2.status_code == 302
+        assert r2.headers["location"] == "/admin/platform/login"
 
 
 def test_login_then_dashboard_and_create_client():
@@ -225,7 +232,9 @@ def test_edit_bad_token_keeps_name_change():
 
 def test_backup_now_requires_auth():
     with TestClient(app) as c:
-        assert c.post("/admin/platform/backup-now").status_code == 401
+        r = c.post("/admin/platform/backup-now", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin/platform/login"
 
 
 def test_backup_now_requires_csrf():

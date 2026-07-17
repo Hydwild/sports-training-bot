@@ -30,7 +30,7 @@ from app.api.routes import (
 )
 from app.api.schemas import TenantCreate
 from app.core.config import settings, tenant_suspended
-from app.core.security import csrf_for_request, require_csrf
+from app.core.security import NotAuthenticated, csrf_for_request, require_csrf
 from app.db.engine import get_session
 from app.repositories.repo import GlobalRepository
 
@@ -46,7 +46,7 @@ def require_platform_admin(request: Request) -> None:
     expected = settings.admin_api_token or ""
     got = request.cookies.get(COOKIE, "")
     if not expected or not hmac.compare_digest(got, expected):
-        raise HTTPException(status_code=401, detail="Не авторизован")
+        raise NotAuthenticated("/admin/platform/login")
 
 
 def _ctx(request: Request, **extra) -> dict:

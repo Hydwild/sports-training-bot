@@ -47,3 +47,22 @@ def test_full_admin_flow():
                    follow_redirects=False)
         assert r.status_code == 403
 
+
+def test_admin_without_session_redirects_to_login():
+    """Прямая ссылка на /admin без активной сессии — вежливый редирект на
+    страницу входа, а не голый 401 без объяснения (была реальная жалоба:
+    человек не понимал, куда логиниться, увидев просто "не авторизован")."""
+    with TestClient(app) as c:
+        r = c.get("/admin", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin/login"
+
+
+def test_admin_invalid_cookie_redirects_to_login():
+    """Битый/просроченный access_token — тоже редирект, не голый 401."""
+    with TestClient(app) as c:
+        c.cookies.set("access_token", "garbage-not-a-jwt")
+        r = c.get("/admin", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin/login"
+
