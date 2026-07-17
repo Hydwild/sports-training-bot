@@ -335,7 +335,7 @@ color:#fff;font-size:16px;cursor:pointer}}
 button:hover{{filter:brightness(1.07)}} .full{{color:#e0863b;font-weight:600}}
 .ok{{color:#2a9d5a;font-size:18px;text-align:center}}
 a{{color:{color}}}</style></head><body>
-<h1>🏸 {title}</h1>{body}
+<h1>{title}</h1>{body}
 <p style="text-align:center;color:var(--muted)">Запись онлайн — без регистрации</p>
 </body></html>"""
 

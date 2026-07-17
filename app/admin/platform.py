@@ -130,6 +130,7 @@ async def platform_dashboard(request: Request,
             "admin_tg_id": t.admin_tg_id,
             "status_text": status[0], "status_tag": status[1],
             "public_url": f"{base}/club/{t.id}",
+            "edit_url": f"/admin/platform/{t.id}/edit",
         })
     return templates.TemplateResponse(request, "platform_dashboard.html",
                                       _ctx(request, tenants=rows))
@@ -186,6 +187,66 @@ async def platform_new_submit(request: Request,
     return templates.TemplateResponse(request, "platform_new_done.html",
         _ctx(request, tenant=tenant_out, reload_note=reload_note,
              public_url=f"{base}/club/{tenant_out.id}"))
+
+
+# ---------- Изменить клиента ----------
+
+@router.get("/{tenant_id}/edit", response_class=HTMLResponse)
+async def platform_edit_form(tenant_id: int, request: Request,
+                             _auth: None = Depends(require_platform_admin),
+                             session: AsyncSession = Depends(get_session)):
+    g = GlobalRepository(session)
+    tenant = await g.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+    return templates.TemplateResponse(request, "platform_edit.html",
+        _ctx(request, t=tenant, error=None, saved=False))
+
+
+@router.post("/{tenant_id}/edit", response_class=HTMLResponse)
+async def platform_edit_submit(tenant_id: int, request: Request,
+                               _auth: None = Depends(require_platform_admin),
+                               _csrf: None = Depends(require_csrf(COOKIE)),
+                               club_name: str = Form(...),
+                               timezone: str = Form("Europe/Moscow"),
+                               tg_token: str = Form(""),
+                               vk_token: str = Form(""),
+                               admin_tg_id: str = Form(""),
+                               admin_vk_id: str = Form(""),
+                               session: AsyncSession = Depends(get_session)):
+    g = GlobalRepository(session)
+    tenant = await g.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+
+    name = club_name.strip()[:200]
+    if not name:
+        return templates.TemplateResponse(request, "platform_edit.html",
+            _ctx(request, t=tenant, error="Название клуба обязательно", saved=False),
+            status_code=400)
+
+    # это форма-снимок всего клуба: пустое поле тренера/токена значит
+    # "убрать значение", а не "оставить как было"
+    tenant.name = name
+    tenant.timezone = timezone.strip() or "Europe/Moscow"
+    tenant.admin_tg_id = int(admin_tg_id) if admin_tg_id.strip().isdigit() else None
+    tenant.admin_vk_id = int(admin_vk_id) if admin_vk_id.strip().isdigit() else None
+    await session.commit()
+
+    try:
+        # переиспользуем существующую валидацию формата + hot-reload ботов
+        await _set_tenant_tokens(
+            tenant_id,
+            TokensPatch(tg_token=tg_token.strip(), vk_token=vk_token.strip()),
+            session)
+    except HTTPException as e:
+        # имя/тренер/таймзона уже сохранены — сообщаем только про токен
+        return templates.TemplateResponse(request, "platform_edit.html",
+            _ctx(request, t=tenant, error=f"Токен не принят: {e.detail}", saved=False),
+            status_code=400)
+
+    return templates.TemplateResponse(request, "platform_edit.html",
+        _ctx(request, t=tenant, error=None, saved=True))
 
 
 # ---------- Быстрое продление оплаты ----------

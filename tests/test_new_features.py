@@ -30,6 +30,9 @@ def test_public_web_flow():
         # страница
         r = c.get(f"/club/{tid}")
         assert r.status_code == 200 and "Игра" in r.text
+        # заголовок без эмодзи ракетки
+        assert "<h1>Веб-клуб</h1>" in r.text
+        assert "🏸" not in r.text
         # запись
         r = c.post(f"/club/{tid}/signup", data={
             "training_id": tr, "name": "Олег", "phone": "79123456789"})

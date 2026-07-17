@@ -26,7 +26,10 @@
           <button class="btn sm" type="submit">Продлить</button>
         </form>
       </td>
-      <td><a href="{{ t.public_url }}" target="_blank">страница</a></td>
+      <td>
+        <a href="{{ t.public_url }}" target="_blank">страница</a>
+        · <a href="{{ t.edit_url }}">✏️ изменить</a>
+      </td>
     </tr>
     {% endfor %}
   </table>
