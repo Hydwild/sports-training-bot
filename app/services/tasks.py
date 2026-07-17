@@ -39,6 +39,38 @@ async def deliver_outbox_loop() -> None:
         await asyncio.sleep(2)
 
 
+async def supervise(name: str, coro_factory: Callable[[], Awaitable[None]],
+                    base_backoff: float = 5.0) -> None:
+    """
+    Самовосстановление фоновой задачи: run_polling ботов (TG/VK) рассчитан
+    на бесконечную работу, поэтому если он вообще завершился с исключением —
+    это ненормально (сеть, сбой API и т.п.). Перезапускаем с нарастающей
+    паузой и алертим владельца площадки после нескольких падений подряд
+    (тем же механизмом, что и ошибки планировщика) — иначе бот молча
+    замолкает для всех клиентов до ручного рестарта на Railway.
+
+    Если задача завершилась БЕЗ исключения (например, токен бота не
+    настроен и функция сразу вернулась) — это штатное поведение,
+    перезапускать не нужно.
+    """
+    backoff = base_backoff
+    fails = 0
+    while True:
+        try:
+            await coro_factory()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            fails += 1
+            logger.exception("Фоновая задача '%s' упала (%d раз подряд)",
+                             name, fails)
+            if fails >= 3:
+                await _alert_admins(name, e)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+
 # после стольких неудачных попыток сообщение считается недоставляемым и
 # снимается с очереди (не ретраим вечно — например, бот заблокирован юзером)
 MAX_OUTBOX_ATTEMPTS = 5

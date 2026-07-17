@@ -104,9 +104,11 @@ async def lifespan(app: FastAPI):
         _background.append(asyncio.create_task(tasks.deliver_outbox_loop()))
         _background.append(asyncio.create_task(tasks.scheduler_loop()))
     if settings.tg_mode == "polling" and settings.tg_token:
-        _background.append(asyncio.create_task(tg.run_polling()))
+        _background.append(asyncio.create_task(
+            tasks.supervise("Telegram-поллинг", tg.run_polling)))
     if settings.run_vk_polling and settings.vk_token:
-        _background.append(asyncio.create_task(vk.run_polling()))
+        _background.append(asyncio.create_task(
+            tasks.supervise("VK-поллинг", vk.run_polling)))
 
     logger.info("Старт завершён. Фоновых задач: %d", len(_background))
     try:

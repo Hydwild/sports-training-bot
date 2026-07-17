@@ -189,9 +189,15 @@ async def _upsert_vk_user(svc: BookingService, user_id: int) -> str:
 async def _resolve_tenant(session, group_id):
     """
     Находит клуб по vk_group_id. Приоритет:
-    1) group_id из события (если пришёл),
-    2) _group_id самого бота (узнаём при старте — самый надёжный),
-    3) первый клуб с непустым vk_group_id (запасной путь).
+    1) group_id из события (если пришёл) или _group_id самого бота
+       (узнаём при старте) — если он известен, ищем ТОЛЬКО точное
+       совпадение. Если совпадения нет — клуб не определён (не гадаем),
+       иначе при временном сбое определения group_id можно было бы
+       случайно отдать данные чужого клуба в мультиклиентной установке.
+    2) Если group_id вообще неизвестен (редкий случай) и во всей базе
+       есть РОВНО один клуб с заданным vk_group_id — это точно он,
+       единственный кандидат, тут гадать не нужно. При двух и более
+       кандидатах — тоже не гадаем, возвращаем None.
     """
     g = GlobalRepository(session)
     tenants = await g.list_tenants()
@@ -200,10 +206,9 @@ async def _resolve_tenant(session, group_id):
         for t in tenants:
             if t.vk_group_id == gid:
                 return t
-    for t in tenants:
-        if t.vk_group_id:
-            return t
-    return None
+        return None
+    with_vk = [t for t in tenants if t.vk_group_id]
+    return with_vk[0] if len(with_vk) == 1 else None
 
 
 async def _is_full(svc, training) -> bool:
@@ -2080,7 +2085,6 @@ async def setup() -> None:
 async def _load_client_bots(attach) -> None:
     """(Пере)читывает клиентских VK-ботов из базы; поднимает новых,
     гасит убранных. Задачи поллинга создаются, если поллинг уже запущен."""
-    import asyncio as _aio
     from vkbottle.bot import Bot
     from sqlalchemy import select
     from app.models.entities import Tenant
@@ -2116,7 +2120,7 @@ async def _load_client_bots(attach) -> None:
             _api_by_tenant[tid] = cb.api
             _client_tokens[tid] = tok
             if _vk_polling_active:
-                _client_tasks[tid] = _aio.create_task(cb.run_polling())
+                _client_tasks[tid] = _spawn_client_poll(tid, cb)
             logger.info("VK: клиентский бот клуба id=%s (группа %s) поднят",
                         tid, g0.id)
         except Exception as e:
@@ -2133,15 +2137,24 @@ async def reload_client_bots() -> None:
     logger.info("VK: клиентские боты перечитаны (%d)", len(_client_bots))
 
 
+def _spawn_client_poll(tid: int, bot):
+    """Запускает поллинг клиентского бота под супервизором: если Long Poll
+    этого клуба упадёт с исключением, перезапустится сам (с бэкоффом),
+    не утаскивая за собой ни платформенного бота, ни остальных клиентов."""
+    import asyncio as _aio
+    from app.services import tasks as _tasks
+    return _aio.create_task(
+        _tasks.supervise(f"VK-поллинг клиента id={tid}", bot.run_polling))
+
+
 async def run_polling() -> None:
     global _vk_polling_active
     if _bot:
-        import asyncio as _aio
         _vk_polling_active = True
         n = 1 + len(_client_bots)
         logger.info("VK: запускаю Long Poll (ботов: %d)…", n)
         for tid, b in _client_bots.items():
-            _client_tasks[tid] = _aio.create_task(b.run_polling())
+            _client_tasks[tid] = _spawn_client_poll(tid, b)
         try:
             await _bot.run_polling()
         finally:

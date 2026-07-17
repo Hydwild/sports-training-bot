@@ -1659,7 +1659,12 @@ async def run_polling() -> None:
                 logger.info("Telegram: перезапускаю поллинг с новыми ботами…")
                 continue
             waiter.cancel()
-            return
+            # poll завершился САМ (не из-за reload) — start_polling рассчитан
+            # на бесконечную работу, значит это сбой. Пробрасываем исключение
+            # наружу (await на уже завершённой задаче — не блокирует), чтобы
+            # внешний супервизор (tasks.supervise) перезапустил run_polling
+            # целиком, а не молча замолчал до ручного рестарта.
+            return await poll
     finally:
         _polling_active = False
 
