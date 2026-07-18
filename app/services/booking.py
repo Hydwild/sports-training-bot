@@ -115,18 +115,20 @@ class BookingService:
         """
         s = await self.repo.get_signup_by_id(signup_id)
         if not s or not s.is_guest:
-            return {"rejected": False, "promoted": None}
+            return {"rejected": False, "promoted": None, "training_id": None}
         was_active = s.status == "active"
         name = s.name
+        training_id = s.training_id
         await self.repo.delete_signup(s)
         promoted = None
         if was_active:
-            promoted_list = await self._rebalance(s.training_id)
+            promoted_list = await self._rebalance(training_id)
             promoted = promoted_list[0] if promoted_list else None
         else:
-            await self._renumber_queue(s.training_id)
+            await self._renumber_queue(training_id)
         await self.session.commit()
-        return {"rejected": True, "promoted": promoted, "name": name}
+        return {"rejected": True, "promoted": promoted, "name": name,
+                "training_id": training_id}
 
     async def list_unconfirmed_guests(self, training_id: int) -> list[Signup]:
         signups = (await self.repo.get_signups(training_id, "active")

@@ -295,6 +295,19 @@ async def _edit_card(peer_id: int, cmid: int, tid: int, group_id=None,
         logger.warning("VK: не удалось обновить карточку: %s", e)
 
 
+async def _notify_tg_card_changed(tenant_id: int, training_id: int) -> None:
+    """Кросс-платформенно: запись/отмена через VK должна обновить ранее
+    опубликованную карточку тренировки в TG-группе клуба (если есть) —
+    иначе список записавшихся там не узнает о VK-изменениях до следующего
+    нажатия кнопки в самой TG-группе. Обратное не нужно: у VK нет своей
+    "живой" карточки в сообществе — анонс на стене статичен по дизайну."""
+    try:
+        from app.bots import telegram as tg
+        await tg._refresh_group_card(tenant_id, training_id)
+    except Exception as e:
+        logger.debug("Не удалось обновить TG-карточку из VK: %s", e)
+
+
 async def _do_signup(user_id: int, tid: int, group_id=None) -> str:
     async with SessionLocal() as session:
         tenant = await _resolve_tenant(session, group_id)
@@ -305,12 +318,15 @@ async def _do_signup(user_id: int, tid: int, group_id=None) -> str:
         await session.commit()
         res = await svc.sign_up(tid, PLATFORM, user_id, name)
         await session.commit()
-        return {
-            "active": "✅ Вы записаны!",
-            "queue": f"⏳ Вы в очереди №{res.position}.",
-            "already": "Вы уже записаны.",
-            "closed": "Запись закрыта.",
-        }.get(res.result, "Готово.")
+        tenant_id = tenant.id
+    if res.result in ("active", "queue"):
+        await _notify_tg_card_changed(tenant_id, tid)
+    return {
+        "active": "✅ Вы записаны!",
+        "queue": f"⏳ Вы в очереди №{res.position}.",
+        "already": "Вы уже записаны.",
+        "closed": "Запись закрыта.",
+    }.get(res.result, "Готово.")
 
 
 async def _do_cancel(user_id: int, tid: int, group_id=None) -> str:
@@ -322,10 +338,14 @@ async def _do_cancel(user_id: int, tid: int, group_id=None) -> str:
         res = await svc.cancel_signup(tid, PLATFORM, user_id,
                                       lock_minutes=tenant.cancel_lock_minutes)
         await session.commit()
-        if res.get("locked"):
-            return (f"Отмена закрыта: до тренировки меньше "
-                    f"{res['lock_minutes']} мин.")
-        return "Запись отменена." if res["cancelled"] else "Вы не были записаны."
+        tenant_id = tenant.id
+    if res.get("locked"):
+        return (f"Отмена закрыта: до тренировки меньше "
+                f"{res['lock_minutes']} мин.")
+    if res["cancelled"]:
+        await _notify_tg_card_changed(tenant_id, tid)
+        return "Запись отменена."
+    return "Вы не были записаны."
 
 
 # ─────────── Админские действия (только тренер) ───────────

@@ -353,6 +353,13 @@ async def _run_scheduler() -> None:
                             "tg", tenant.admin_tg_id,
                             f"♻️ «{training.title}»: {len(guests)} неподтверждённых "
                             f"гостей автоматически сняты, места освобождены.")
+                    # карточка в TG-группе обновляется один раз после всех
+                    # снятий (не в цикле — не спамим edit_message на гостя)
+                    try:
+                        from app.bots import telegram as _tg
+                        await _tg._refresh_group_card(training.tenant_id, training.id)
+                    except Exception as e:
+                        logger.debug("Не удалось обновить карточку в группе: %s", e)
                 training.guests_expired = True
 
         await session.commit()

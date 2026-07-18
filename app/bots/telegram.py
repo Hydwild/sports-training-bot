@@ -150,12 +150,11 @@ def _kb(tid: int, is_admin: bool = False,
         is_full: bool = False) -> InlineKeyboardMarkup:
     # когда мест нет — кнопка честно предлагает встать в очередь
     signup_text = "⏳ Встать в очередь" if is_full else "✅ Записаться"
-    rows = []
-    if is_admin:
-        # у админа кнопка обновления списка — самой первой, наверху
-        rows.append([
-            InlineKeyboardButton(text="🔄 Обновить список", callback_data=f"ref:{tid}"),
-        ])
+    # кнопка обновления — самой первой, наверху; доступна всем участникам
+    # (не только админу), чтобы видеть актуальный список записавшихся
+    rows = [[
+        InlineKeyboardButton(text="🔄 Обновить список", callback_data=f"ref:{tid}"),
+    ]]
     rows.append([
         InlineKeyboardButton(text=signup_text, callback_data=f"su:{tid}"),
         InlineKeyboardButton(text="❌ Отменить", callback_data=f"cx:{tid}"),
@@ -766,6 +765,8 @@ async def guest_name(message: Message, state: FSMContext) -> None:
                              f"⏳ Требует подтверждения тренером.")
     else:
         await message.answer("Запись закрыта или тренировка отменена.")
+        return
+    await _refresh_group_card(data["tenant_id"], data["train_id"])
 
 
 async def _admin_guard(message: Message) -> int | None:
@@ -1204,6 +1205,7 @@ async def cb_guest_confirm(query: CallbackQuery) -> None:
     await query.answer("Гость подтверждён." if s else "Не найдено", show_alert=True)
     if s:
         await query.message.edit_text(f"✅ Гость «{s.name}» подтверждён как реально занятый.")
+        await _refresh_group_card(tid, s.training_id)
 
 
 @router.callback_query(F.data.startswith("gno:"))
@@ -1222,6 +1224,7 @@ async def cb_guest_reject(query: CallbackQuery) -> None:
     if res.get("promoted"):
         msg += f"\n🎉 Из очереди поднят: {res['promoted'].name}."
     await query.message.edit_text(msg)
+    await _refresh_group_card(tid, res["training_id"])
 
 
 @router.message(Command("attend"))

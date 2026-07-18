@@ -431,6 +431,8 @@ async def public_signup(tenant_id: int,
            "already": "Вы уже записаны на эту тренировку.",
            "closed": "Запись на эту тренировку закрыта."}.get(
                res.result, "Готово.")
+    if res.result in ("active", "queue"):
+        await _notify_group_card_changed(tenant_id, training_id)
     cancel_link = ""
     if res.result in ("active", "queue"):
         token = _cancel_token(tenant_id, training_id, uid)
@@ -443,6 +445,18 @@ async def public_signup(tenant_id: int,
     title = tenant.brand_name or tenant.name
     return _PAGE.format(title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
+
+
+async def _notify_group_card_changed(tenant_id: int, training_id: int) -> None:
+    """Запись/отмена с публичной веб-страницы должна обновить ранее
+    опубликованную карточку тренировки в TG-группе клуба (если есть) —
+    иначе список записавшихся там останется устаревшим до следующего
+    нажатия кнопки внутри самой группы."""
+    try:
+        from app.bots import telegram as tg
+        await tg._refresh_group_card(tenant_id, training_id)
+    except Exception:
+        pass  # TG может быть не настроен/недоступен — не критично для веб-записи
 
 
 def _cancel_token(tenant_id: int, training_id: int, uid: int) -> str:
@@ -466,8 +480,10 @@ async def public_cancel(tenant_id: int, t: int, u: int, s: str,
     if not _hmac.compare_digest(s, _cancel_token(tenant_id, t, u)):
         raise HTTPException(status_code=403, detail="Неверная ссылка отмены")
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
-    await svc.cancel_signup(t, "web", u)
+    res = await svc.cancel_signup(t, "web", u)
     await session.commit()
+    if res.get("cancelled"):
+        await _notify_group_card_changed(tenant_id, t)
     body = ('<div class="card"><p class="ok">✅ Запись отменена.</p>'
             f'<p style="text-align:center"><a href="/club/{tenant_id}">'
             '← к списку тренировок</a></p></div>')

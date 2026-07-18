@@ -53,6 +53,8 @@ async def test_guest_reject_frees_slot_and_promotes(session):
     rej = await svc.reject_guest(g.id)
     assert rej["rejected"] is True
     assert rej["promoted"].name == "Боря"
+    # training_id нужен вызывающему коду, чтобы обновить карточку в группе
+    assert rej["training_id"] == tid
 
 
 async def test_guest_isolated_per_tenant(session):
