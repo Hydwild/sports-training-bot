@@ -410,14 +410,26 @@ class BookingService:
         training.publish_at = None
         await self.session.flush()
         if notify:
-            subs = await self.repo.get_subscribers()
-            when = self.format_local(training.start_at)
-            text = (f"🏸 Открыта запись на «{training.title}»\n📅 {when}"
-                    + (f"\n📍 {training.location}" if training.location else ""))
-            for sub in subs:
-                await self.repo.enqueue(sub.platform, sub.user_id, text)
+            await self.notify_new_training(training)
         await self.session.commit()
         return training
+
+    async def notify_new_training(self, training) -> int:
+        """
+        Личное уведомление о новой/открытой тренировке ВСЕМ подписчикам
+        клуба — не только тем, кто состоит в привязанной TG-группе/
+        VK-сообществе. Публикация карточки туда (см. _publish_to_group/
+        publish_to_wall в слое ботов) — отдельный, статичный канал: его
+        видят только зашедшие в группу/паблик, а не каждый, кто хоть раз
+        писал боту в личку. Возвращает число адресатов.
+        """
+        subs = await self.repo.get_subscribers()
+        when = self.format_local(training.start_at)
+        text = (f"🏸 Открыта запись на «{training.title}»\n📅 {when}"
+                + (f"\n📍 {training.location}" if training.location else ""))
+        for sub in subs:
+            await self.repo.enqueue(sub.platform, sub.user_id, text)
+        return len(subs)
 
     # ---------- Посещаемость / оплата ----------
 

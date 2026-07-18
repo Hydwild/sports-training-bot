@@ -1112,6 +1112,7 @@ async def new_pubmode(query: CallbackQuery, state: FSMContext) -> None:
                                    reply_markup=_kb(tid, is_admin=True))
         await _publish_to_group(tenant_id, tid)  # сразу в группу клуба
         await _publish_to_vk(tenant_id, tid)     # анонс на стене ВК
+        await _notify_subscribers_new_training(tenant_id, tid)  # личка подписчикам
     elif mode == "draft":
         card, _, tid = await _finalize(state, "draft", None)
         await query.message.edit_text("📝 Черновик создан (/drafts чтобы запустить):")
@@ -1462,6 +1463,24 @@ async def _publish_to_vk(tenant_id: int, training_id: int) -> None:
         await vk.publish_to_wall(tenant_id, training_id)
     except Exception as e:
         logger.warning("Не удалось опубликовать анонс в ВК: %s", e)
+
+
+async def _notify_subscribers_new_training(tenant_id: int, training_id: int) -> None:
+    """
+    Личное уведомление в личку каждому подписчику клуба (TG и VK) о новой
+    открытой тренировке. Публикация карточки в группу/на стену (см. выше)
+    видят только зашедшие туда — подписчик, который просто писал боту в
+    личку, узнавал о новой тренировке только сам открыв «🏸 Тренировки».
+    """
+    try:
+        async with SessionLocal() as session:
+            svc = BookingService(session, tenant_id)
+            training = await svc.repo.get_training(training_id)
+            if training:
+                await svc.notify_new_training(training)
+            await session.commit()
+    except Exception as e:
+        logger.warning("Не удалось разослать уведомление подписчикам: %s", e)
 
 
 async def _publish_to_group(tenant_id: int, training_id: int) -> None:
