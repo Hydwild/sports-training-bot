@@ -11,8 +11,8 @@ PORT="${PORT:-8000}"
 
 if [ "$EDITION" = "pro" ]; then
   echo "PRO: applying migrations..."
-  if ! alembic upgrade head; then
-    echo "FATAL: alembic upgrade head failed — остановка деплоя (схема БД" \
+  if ! python -m scripts.pre_migrate; then
+    echo "FATAL: миграция не удалась — остановка деплоя (схема БД" \
          "могла остаться в неконсистентном состоянии, запуск приложения" \
          "против неё рискованнее, чем падение деплоя)"
     exit 1
