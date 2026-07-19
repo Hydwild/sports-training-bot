@@ -5,11 +5,20 @@ import io
 import re
 import zipfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 
 H = {"x-admin-token": "tok"}
+
+
+@pytest.fixture(autouse=True)
+def _clear_rate_limit():
+    from app.api import routes as api_routes
+    api_routes._ip_hits.clear()
+    yield
+    api_routes._ip_hits.clear()
 
 
 def _mk_training(c, tid, title="Игра", days=10, maxp=2):

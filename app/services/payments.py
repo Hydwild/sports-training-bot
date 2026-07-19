@@ -44,6 +44,17 @@ class PaymentProvider(ABC):
         """Возвращает {'provider_payment_id', 'status', 'metadata'}."""
         ...
 
+    @abstractmethod
+    async def fetch_payment_status(self, provider_payment_id: str) -> dict | None:
+        """
+        Переспрашивает у провайдера актуальное состояние платежа напрямую
+        (не из тела вебхука — оно не подписано, доверять ему напрямую
+        нельзя). Возвращает {'status', 'amount_minor', 'currency'} или None,
+        если подтвердить не удалось (в этом случае платёж НЕ зачисляется —
+        безопасный отказ, провайдер повторит вебхук позже).
+        """
+        ...
+
 
 # ---------- ЮKassa (рабочая) ----------
 
@@ -92,7 +103,9 @@ class YooKassaProvider(PaymentProvider):
 
     def verify_webhook(self, *, body, headers, remote_ip) -> bool:
         # ЮKassa не подписывает уведомления — безопасность строится на
-        # проверке IP-источника и последующем подтверждении статуса по API.
+        # проверке IP-источника и последующем подтверждении статуса по API
+        # (см. fetch_payment_status — вызывается из handle_webhook перед
+        # тем, как зачесть платёж; телу вебхука напрямую не доверяем).
         if remote_ip is None:
             return False
         try:
@@ -107,6 +120,30 @@ class YooKassaProvider(PaymentProvider):
             "provider_payment_id": obj.get("id"),
             "status": obj.get("status"),     # succeeded | canceled | ...
             "metadata": obj.get("metadata", {}),
+        }
+
+    async def fetch_payment_status(self, provider_payment_id: str) -> dict | None:
+        if not self._configured:
+            return None
+        try:
+            return await asyncio.to_thread(self._fetch_sync, provider_payment_id)
+        except Exception as e:
+            logger.warning("Не удалось получить статус платежа %s через API: %s",
+                          provider_payment_id, e)
+            return None
+
+    def _fetch_sync(self, provider_payment_id: str) -> dict | None:
+        from yookassa import Payment as YkPayment
+        payment = YkPayment.find_one(provider_payment_id)
+        amount = getattr(payment, "amount", None)
+        value = getattr(amount, "value", None) if amount else None
+        currency = getattr(amount, "currency", None) if amount else None
+        if value is None or currency is None:
+            return None
+        return {
+            "status": payment.status,
+            "amount_minor": round(float(value) * 100),
+            "currency": currency,
         }
 
 
@@ -133,6 +170,10 @@ class StripeProvider(PaymentProvider):
 
     def parse_webhook(self, payload: dict) -> dict:
         return {"provider_payment_id": None, "status": None, "metadata": {}}
+
+    async def fetch_payment_status(self, provider_payment_id: str) -> dict | None:
+        # КАРКАС: здесь будет stripe.checkout.Session.retrieve(...).
+        return None
 
 
 def get_provider(name: str) -> PaymentProvider:

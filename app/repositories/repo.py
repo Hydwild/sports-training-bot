@@ -495,11 +495,39 @@ class GlobalRepository:
 
     async def fetch_pending_outbox(self, platform: str,
                                    limit: int = 50) -> list[Outbox]:
+        """Только чтение — для инспекции состояния очереди (тесты, отладка).
+        Реальная доставка (tasks.py) должна использовать claim_pending_outbox,
+        которая захватывает записи атомарно перед отправкой."""
         stmt = select(Outbox).where(
             Outbox.platform == platform,
             Outbox.sent.is_(False),
         ).order_by(Outbox.id.asc()).limit(limit)
         return list((await self.session.execute(stmt)).scalars())
+
+    async def claim_pending_outbox(self, platform: str,
+                                   limit: int = 50) -> list[Outbox]:
+        """Атомарно захватывает пачку неотправленных сообщений: сразу
+        помечает их sent=True (UPDATE ... WHERE sent=False ... RETURNING),
+        до того как реальная отправка вообще началась. Если приложение
+        когда-нибудь запустят в нескольких экземплярах одновременно, каждое
+        сообщение достанется только одному из них — второй UPDATE для тех
+        же id не найдёт строк с sent=False и вернёт пустой список. Если
+        отправка не удастся, вызывающий код возвращает sent обратно в False
+        через record_outbox_failure — для повтора на следующем проходе."""
+        subq = (
+            select(Outbox.id)
+            .where(Outbox.platform == platform, Outbox.sent.is_(False))
+            .order_by(Outbox.id.asc())
+            .limit(limit)
+        )
+        stmt = (
+            update(Outbox)
+            .where(Outbox.id.in_(subq))
+            .values(sent=True)
+            .returning(Outbox)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars())
 
     async def mark_outbox_sent(self, outbox_id: int) -> None:
         await self.session.execute(
@@ -507,11 +535,12 @@ class GlobalRepository:
         )
 
     async def record_outbox_failure(self, outbox_id: int, attempts: int) -> None:
-        """Фиксирует неудачную попытку доставки (для повтора на следующем
-        проходе очереди или отказа после превышения лимита — см. tasks.py)."""
+        """Фиксирует неудачную попытку доставки и снимает захват (sent=False),
+        чтобы сообщение снова стало доступно для повтора на следующем
+        проходе очереди (см. claim_pending_outbox и tasks.py)."""
         await self.session.execute(
             update(Outbox).where(Outbox.id == outbox_id)
-            .values(attempts=attempts)
+            .values(attempts=attempts, sent=False)
         )
 
     async def trainings_needing_reminder(self, window_min: int = 60) -> list[Training]:

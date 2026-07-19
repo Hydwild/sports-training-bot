@@ -6,7 +6,7 @@
 import gzip
 
 from app.core.config import settings
-from app.services import backup
+from app.services import backup, tasks
 
 
 async def test_no_owner_id_returns_clear_message(monkeypatch):
@@ -164,3 +164,33 @@ def test_dump_sqlite_missing_file_returns_none(monkeypatch):
     monkeypatch.setattr(settings, "database_url",
                         "sqlite+aiosqlite:///./does_not_exist_xyz.db")
     assert backup._dump_sqlite_sync() is None
+
+
+# ---------- Регресс: день бэкапа помечается только после попытки ----------
+
+async def test_offsite_backup_marks_day_only_after_attempt(monkeypatch):
+    """Раньше last_day помечался ДО вызова send_backup_to_owner — необработанное
+    исключение внутри него всё равно "съедало" сегодняшнюю попытку и откладывало
+    следующую на завтра. Теперь при падении last_day должен остаться прежним."""
+    async def fake_send_raises():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(backup, "send_backup_to_owner", fake_send_raises)
+    last_day = [None]
+    try:
+        await tasks._offsite_backup(last_day)
+        assert False, "ожидалось исключение"
+    except RuntimeError:
+        pass
+    assert last_day[0] is None  # день НЕ помечен — повтор возможен на следующем проходе
+
+
+async def test_offsite_backup_marks_day_after_successful_attempt(monkeypatch):
+    async def fake_send_ok():
+        return "Бэкап отправлен: ok"
+
+    monkeypatch.setattr(backup, "send_backup_to_owner", fake_send_ok)
+    last_day = [None]
+    await tasks._offsite_backup(last_day)
+    import datetime as dt
+    assert last_day[0] == dt.date.today().isoformat()

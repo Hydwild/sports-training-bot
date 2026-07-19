@@ -11,7 +11,12 @@ PORT="${PORT:-8000}"
 
 if [ "$EDITION" = "pro" ]; then
   echo "PRO: applying migrations..."
-  alembic upgrade head || echo "WARN: alembic failed (продолжаем старт)"
+  if ! alembic upgrade head; then
+    echo "FATAL: alembic upgrade head failed — остановка деплоя (схема БД" \
+         "могла остаться в неконсистентном состоянии, запуск приложения" \
+         "против неё рискованнее, чем падение деплоя)"
+    exit 1
+  fi
 fi
 
 # Если в образе есть seed.db (собран конфигуратором /admin/builder) и на

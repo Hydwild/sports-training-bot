@@ -177,9 +177,20 @@ if settings.is_pro:
 
 
 @app.get("/health")
-async def health() -> dict:
-    return {"status": "ok", "edition": settings.edition,
-            "db": "sqlite" if settings.is_sqlite else "postgres"}
+async def health(response: Response) -> dict:
+    """Проверяет реальную доступность БД (SELECT 1), а не только что процесс
+    жив — платформа (Railway) должна видеть падение соединения с базой как
+    нездоровый контейнер, а не как постоянный 'ok'."""
+    from sqlalchemy import text
+    db_kind = "sqlite" if settings.is_sqlite else "postgres"
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return {"status": "ok", "edition": settings.edition, "db": db_kind}
+    except Exception as e:
+        logger.error("Health check: БД недоступна: %s", e)
+        response.status_code = 503
+        return {"status": "error", "edition": settings.edition, "db": db_kind}
 
 
 # ---------- Telegram webhook ----------

@@ -71,6 +71,27 @@ async def test_outbox_retries_transient_failure_then_gives_up(monkeypatch, maker
         tasks._senders.pop("tg", None)
 
 
+async def test_claim_pending_outbox_is_atomic_no_double_claim(maker):
+    """Регресс: раньше выборка неотправленных сообщений была простым SELECT
+    без блокировки — если бы приложение запустили в двух экземплярах
+    одновременно, оба забрали бы одну и ту же запись и оба бы её отправили.
+    claim_pending_outbox — атомарный UPDATE ... WHERE sent=False ...
+    RETURNING: вторая "параллельная" попытка захвата той же записи должна
+    вернуть пустой список."""
+    await _seed_outbox_message(maker)
+
+    async with maker() as s1:
+        g1 = GlobalRepository(s1)
+        first = await g1.claim_pending_outbox("tg")
+        await s1.commit()
+        assert len(first) == 1
+
+    async with maker() as s2:
+        g2 = GlobalRepository(s2)
+        second = await g2.claim_pending_outbox("tg")
+        assert second == []  # уже захвачено первым "экземпляром"
+
+
 async def test_outbox_delivers_on_success_without_retry(monkeypatch, maker):
     monkeypatch.setattr(tasks, "SessionLocal", maker)
     await _seed_outbox_message(maker)

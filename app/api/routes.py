@@ -88,7 +88,8 @@ async def delete_tenant(tenant_id: int,
     return {"ok": True, "deleted_tenant_id": tenant_id, "skipped_tables": skipped}
 
 
-@router.get("/tenants/{tenant_id}/trainings", response_model=list[TrainingOut])
+@router.get("/tenants/{tenant_id}/trainings", response_model=list[TrainingOut],
+            dependencies=[Depends(require_admin)])
 async def tenant_trainings(tenant_id: int,
                            include_drafts: bool = False,
                            session: AsyncSession = Depends(get_session)):
@@ -119,7 +120,7 @@ async def create_training(tenant_id: int, body: TrainingCreate,
 
 
 @router.get("/tenants/{tenant_id}/trainings/{training_id}/signups",
-            response_model=list[SignupOut])
+            response_model=list[SignupOut], dependencies=[Depends(require_admin)])
 async def training_signups(tenant_id: int, training_id: int,
                            session: AsyncSession = Depends(get_session)):
     await _ensure_tenant(session, tenant_id)
@@ -195,7 +196,8 @@ async def update_chat(tenant_id: int,
 
 # ---------- Старт платежа ----------
 
-@router.post("/tenants/{tenant_id}/payments/start")
+@router.post("/tenants/{tenant_id}/payments/start",
+             dependencies=[Depends(require_admin)])
 async def start_payment(tenant_id: int, body: PaymentStart,
                         session: AsyncSession = Depends(get_session)):
     from app.core.features import features
@@ -511,10 +513,20 @@ async def club_qr(tenant_id: int, request: Request,
 
 @public_router.post("/club/{tenant_id}/my", response_class=HTMLResponse)
 async def public_my(tenant_id: int,
+                    request: Request,
                     phone: str = Form(...),
                     session: AsyncSession = Depends(get_session)):
-    """Мои записи по телефону: список с персональными ссылками отмены."""
+    """
+    Мои записи по телефону: список с персональными ссылками отмены.
+    Телефон здесь фактически работает как пароль (даёт доступ к чужим
+    записям и ссылкам их отмены) — лимитируем попытки по IP, как и для
+    самой записи, иначе телефон можно перебирать без ограничений.
+    """
     import html as _h
+    ip = (request.client.host if request.client else "?")
+    if not _rate_ok(ip):
+        raise HTTPException(status_code=429,
+                            detail="Слишком много запросов, попробуйте через минуту")
     tenant = await _ensure_tenant(session, tenant_id)
     from app.core.config import tenant_suspended
     if tenant_suspended(tenant):

@@ -80,7 +80,13 @@ async def _deliver_once() -> None:
     async with SessionLocal() as session:
         g = GlobalRepository(session)
         for platform, sender in _senders.items():
-            pending = await g.fetch_pending_outbox(platform, limit=25)
+            # claim_pending_outbox сразу помечает захваченные записи sent=True
+            # (UPDATE ... WHERE sent=False ... RETURNING) — коммитим это до
+            # начала отправки, чтобы другой экземпляр приложения (если
+            # когда-нибудь будет работать несколько одновременно) не увидел
+            # эти же записи как ещё не отправленные и не продублировал их
+            pending = await g.claim_pending_outbox(platform, limit=25)
+            await session.commit()
             for item in pending:
                 try:
                     try:
@@ -214,9 +220,13 @@ async def _offsite_backup(last_day: list) -> None:
     today = dt.date.today().isoformat()
     if last_day[0] == today:
         return
-    last_day[0] = today
     from app.services import backup
     result = await backup.send_backup_to_owner()
+    # день помечаем выполненным только после попытки: если send_backup_to_owner
+    # упадёт необработанным исключением, last_day останется прежним и
+    # scheduler_loop (уже оборачивающий вызов в try/except) повторит попытку
+    # на следующем проходе (через 60 секунд), а не будет молчать до завтра
+    last_day[0] = today
     logger.info("Внешний бэкап: %s", result)
 
 

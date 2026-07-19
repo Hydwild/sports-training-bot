@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TenantCreate(BaseModel):
@@ -50,6 +50,17 @@ class PaymentStart(BaseModel):
     platform: str = "tg"
     user_id: int
     return_url: str
+
+    @field_validator("return_url")
+    @classmethod
+    def _return_url_must_be_http(cls, v: str) -> str:
+        """Эндпойнт уже защищён require_admin, но не полагаемся только на
+        это: провайдер оплаты перенаправит пользователя по этому адресу
+        после оплаты — ограничиваем схему, чтобы сюда нельзя было
+        подсунуть javascript:/data: и т.п."""
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("return_url должен начинаться с http:// или https://")
+        return v
 
 
 class BrandUpdate(BaseModel):
