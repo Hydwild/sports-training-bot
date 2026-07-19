@@ -7,9 +7,20 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /code
 
 # системные зависимости: gcc/libpq-dev — сборка asyncpg/matplotlib;
-# postgresql-client — pg_dump для внешних бэкапов (app/services/backup.py)
+# postgresql-client-18 — pg_dump для внешних бэкапов (app/services/backup.py).
+# pg_dump отказывается снимать дамп с сервера НОВЕЕ самого себя — Railway
+# Managed Postgres сейчас на 18.x, а в стандартном репозитории Debian есть
+# только 17.x, поэтому клиент берём из официального репозитория PostgreSQL
+# (apt.postgresql.org). Если Railway обновит Postgres до 19.x, здесь тоже
+# нужно будет поднять версию пакета.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc libpq-dev postgresql-client \
+        gcc libpq-dev curl ca-certificates gnupg lsb-release \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-18 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
