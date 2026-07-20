@@ -49,6 +49,10 @@ async def _ensure_columns(conn) -> None:
         ("tenants", "vertical", "VARCHAR(20) DEFAULT 'sport'"),
         ("trainings", "master_id", "INTEGER"),
         ("tenants", "last_digest_date", "VARCHAR(10) DEFAULT \'\'"),
+        ("tenants", "cover_url", "VARCHAR(500)"),
+        ("tenants", "about", "VARCHAR(2000)"),
+        ("tenants", "address", "VARCHAR(300)"),
+        ("tenants", "contact_phone", "VARCHAR(32)"),
     ]
     for table, column, coltype in wanted:
         try:

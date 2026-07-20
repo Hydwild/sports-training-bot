@@ -406,6 +406,10 @@ async def platform_edit_submit(tenant_id: int, request: Request,
                                admin_vk_id: str = Form(""),
                                is_demo: str = Form(""),
                                vertical: str = Form("sport"),
+                               cover_url: str = Form(""),
+                               about: str = Form(""),
+                               address: str = Form(""),
+                               contact_phone: str = Form(""),
                                session: AsyncSession = Depends(get_session)):
     g = GlobalRepository(session)
     tenant = await g.get_tenant(tenant_id)
@@ -427,6 +431,18 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     tenant.is_demo = bool(is_demo)
     from app.core.verticals import VERTICALS
     tenant.vertical = vertical if vertical in VERTICALS else "sport"
+    # витрина: обложка попадает в <img src> публичной страницы —
+    # принимаем только http(s), иначе показываем ошибку
+    cover_url = cover_url.strip()
+    if cover_url and not cover_url.startswith(("http://", "https://")):
+        return templates.TemplateResponse(request, "platform_edit.html",
+            _ctx(request, t=tenant, saved=False,
+                 error="Фото-обложка должна быть http(s)-ссылкой на картинку"),
+            status_code=400)
+    tenant.cover_url = cover_url[:500] or None
+    tenant.about = about.strip()[:2000] or None
+    tenant.address = address.strip()[:300] or None
+    tenant.contact_phone = contact_phone.strip()[:32] or None
     await session.commit()
 
     try:

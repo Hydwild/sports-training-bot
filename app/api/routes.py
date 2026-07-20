@@ -410,6 +410,8 @@ _I_CLOCK = ('<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/>'
             '<path d="M12 7.5V12l3 2"/></svg>')
 _I_INFO = ('<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/>'
            '<path d="M12 11v5M12 8v.01"/></svg>')
+_I_PHONE = ('<svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 '
+            '005 5L15 13l5 2v4a2 2 0 01-2 2A16 16 0 013 6a2 2 0 012-2z"/></svg>')
 
 # Страница записи клуба: тёплая палитра общего сайта (/promo, /faq, /reviews),
 # фирменный цвет клуба ({color}) — акцент кнопок/ссылок/прогресса.
@@ -514,6 +516,30 @@ font:600 15px/1 -apple-system,system-ui,sans-serif;color:var(--accent)}}
 .master span{{display:block;font:400 12px/1.35 -apple-system,system-ui,sans-serif;
 color:var(--muted)}}
 .free-one{{color:var(--accent)}}
+.cover{{max-width:560px;margin:0 auto 20px}}
+.cover img{{display:block;width:100%;height:180px;object-fit:cover;
+border-radius:16px;box-shadow:var(--shadow)}}
+.about{{max-width:520px;margin:-8px auto 16px;text-align:center;
+color:var(--muted);font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
+.biz-info{{display:flex;justify-content:center;align-items:center;gap:20px;
+flex-wrap:wrap;max-width:560px;margin:0 auto 24px}}
+.biz-info .m{{margin:0}}
+.biz-info a{{text-decoration:none}}
+.ms-strip{{display:flex;gap:16px;overflow-x:auto;max-width:560px;
+margin:0 auto 24px;padding:4px 2px;justify-content:safe center;
+scrollbar-width:none}}
+.ms-strip::-webkit-scrollbar{{display:none}}
+.ms-item{{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;
+gap:6px;min-width:68px;max-width:88px}}
+.ms-item img,.ms-item .mi{{width:56px;height:56px;border-radius:50%;
+object-fit:cover}}
+.ms-item .mi{{display:flex;align-items:center;justify-content:center;
+background:var(--surface-2);border:1px solid var(--border);
+font:600 19px/1 -apple-system,system-ui,sans-serif;color:var(--accent)}}
+.ms-item b{{font:600 12px/1.3 -apple-system,system-ui,sans-serif;
+text-align:center}}
+.ms-item span{{font:400 10.5px/1.3 -apple-system,system-ui,sans-serif;
+color:var(--muted);text-align:center}}
 .danger{{color:#b23a2e}}
 .note{{text-align:center;color:var(--muted);
 font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
@@ -521,7 +547,7 @@ font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
 font:400 12.5px/1.6 -apple-system,system-ui,sans-serif}}
 .foot a{{color:var(--muted)}}
 </style></head><body>
-<span class="eyebrow">{eyebrow}</span>
+{cover}<span class="eyebrow">{eyebrow}</span>
 <h1>{title}</h1>{body}
 <p class="foot">Запись онлайн — без регистрации ·
 <a href="/promo">платформа «Боты для записей»</a></p>
@@ -539,12 +565,52 @@ async def public_club(tenant_id: int,
     from app.core.config import tenant_suspended
     if tenant_suspended(tenant):
         import html as _h2
-        return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
+        return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
                             body='<div class="card note">Работа клуба временно '
                                  'приостановлена. Обратитесь к тренеру.</div>')
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
     vc = _vcfg(tenant.vertical)
+
+    # ─── витрина клуба: обложка, описание, адрес/телефон, мастера ───
+    cover_html = ""
+    if tenant.cover_url and tenant.cover_url.startswith(("http://", "https://")):
+        cover_html = (f'<div class="cover"><img '
+                      f'src="{_h.escape(tenant.cover_url, quote=True)}" '
+                      f'alt=""></div>')
+    profile_parts = []
+    if tenant.about:
+        profile_parts.append(
+            f'<p class="about">{_h.escape(tenant.about)}</p>')
+    info_items = []
+    if tenant.address:
+        info_items.append(
+            f'<div class="m">{_I_PIN} {_h.escape(tenant.address)}</div>')
+    if tenant.contact_phone:
+        tel = "".join(c for c in tenant.contact_phone
+                      if c.isdigit() or c == "+")
+        info_items.append(
+            f'<div class="m">{_I_PHONE} <a href="tel:{tel}">'
+            f'{_h.escape(tenant.contact_phone)}</a></div>')
+    if info_items:
+        profile_parts.append(
+            '<div class="biz-info">' + "".join(info_items) + '</div>')
+    strip_masters = await svc.repo.list_masters()   # только активные
+    if strip_masters:
+        ms = []
+        for m in strip_masters[:12]:
+            if m.photo_url:
+                av = (f'<img src="{_h.escape(m.photo_url, quote=True)}" '
+                      f'alt="" loading="lazy">')
+            else:
+                av = f'<span class="mi">{_h.escape(m.name[:1].upper())}</span>'
+            spec = (f'<span>{_h.escape(m.specialty)}</span>'
+                    if m.specialty else "")
+            ms.append(f'<div class="ms-item">{av}'
+                      f'<b>{_h.escape(m.name)}</b>{spec}</div>')
+        profile_parts.append('<div class="ms-strip">' + "".join(ms) + '</div>')
+    profile_html = "".join(profile_parts)
+
     trainings = await svc.repo.list_upcoming()
     masters = await svc.repo.masters_map() if trainings else {}
     cards = []
@@ -622,13 +688,15 @@ async def public_club(tenant_id: int,
             f'<span class="mon">{day_labels[d][2]}</span></button>'
             for d in day_order)
         days_html = f'<div class="days" role="tablist">{chips}</div>'
-    body = (days_html
-            + '<div class="list" id="list">' + "".join(cards) + '</div>'
-            + my_form + _DAYS_JS
-            if cards else
-            f'<div class="card note">{vc["web_empty"]}</div>' + my_form)
+    body = profile_html + (
+        days_html
+        + '<div class="list" id="list">' + "".join(cards) + '</div>'
+        + my_form + _DAYS_JS
+        if cards else
+        f'<div class="card note">{vc["web_empty"]}</div>' + my_form)
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h.escape(title),
+    return _PAGE.format(cover=cover_html, eyebrow=_eyebrow(tenant),
+                        title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
 
 
@@ -651,7 +719,7 @@ async def public_signup(tenant_id: int,
     from app.core.config import tenant_suspended
     if tenant_suspended(tenant):
         import html as _h2
-        return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
+        return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
                             body='<div class="card note">Работа клуба временно '
                                  'приостановлена. Обратитесь к тренеру.</div>')
@@ -685,7 +753,7 @@ async def public_signup(tenant_id: int,
             f'<div class="links">{cancel_link}<a href="/club/{tenant_id}">'
             f'← к списку тренировок</a></div></div>')
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h.escape(title),
+    return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
 
 
@@ -731,7 +799,7 @@ async def public_cancel(tenant_id: int, t: int, u: int, s: str,
             f'<div class="links"><a href="/club/{tenant_id}">'
             '← к списку тренировок</a></div></div>')
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h.escape(title),
+    return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
 
 
@@ -772,7 +840,7 @@ async def public_my(tenant_id: int,
     from app.core.config import tenant_suspended
     if tenant_suspended(tenant):
         import html as _h2
-        return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
+        return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
                             body='<div class="card note">Работа клуба временно '
                                  'приостановлена.</div>')
@@ -805,7 +873,7 @@ async def public_my(tenant_id: int,
                      f'<a href="/club/{tenant_id}">← к списку</a></div>')
         body = "".join(items)
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h.escape(title),
+    return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
 
 

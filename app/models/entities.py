@@ -86,6 +86,11 @@ class Tenant(Base):
     # Дата (ISO, в таймзоне клуба) последнего утреннего дайджеста админу —
     # маркер «на сегодня уже отправляли» (см. tasks._admin_daily_digest)
     last_digest_date: Mapped[str] = mapped_column(String(10), default="")
+    # --- Витрина на публичной странице записи (/club/{id}) ---
+    cover_url: Mapped[str | None] = mapped_column(String(500))   # фото-обложка
+    about: Mapped[str | None] = mapped_column(String(2000))      # описание
+    address: Mapped[str | None] = mapped_column(String(300))
+    contact_phone: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )

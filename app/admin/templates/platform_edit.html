@@ -44,6 +44,25 @@
       <input name="admin_vk_id" type="number" value="{{ t.admin_vk_id or '' }}"
              placeholder="987654321" style="width:100%;padding:8px"></label></p>
 
+    <h3>Витрина на странице записи</h3>
+    <p class="muted">Показывается посетителям на публичной странице
+      /club/{{ t.id }} — фото, описание и контакты.</p>
+    <p><label>Фото-обложка (http(s)-ссылка на картинку)<br>
+      <input name="cover_url" maxlength="500" value="{{ t.cover_url or '' }}"
+             placeholder="https://example.com/salon.jpg"
+             style="width:100%;padding:8px"></label></p>
+    <p><label>Описание (до 2000 символов)<br>
+      <textarea name="about" rows="3" maxlength="2000"
+        placeholder="Барбершоп в центре города: стрижки, бритьё, укладки..."
+        style="width:100%;padding:8px">{{ t.about or '' }}</textarea></label></p>
+    <p><label>Адрес<br>
+      <input name="address" maxlength="300" value="{{ t.address or '' }}"
+             placeholder="ул. Ленина, 10" style="width:100%;padding:8px"></label></p>
+    <p><label>Телефон для клиентов<br>
+      <input name="contact_phone" maxlength="32"
+             value="{{ t.contact_phone or '' }}"
+             placeholder="+7 900 000-00-00" style="width:100%;padding:8px"></label></p>
+
     <h3>Демо</h3>
     <p><label><input type="checkbox" name="is_demo" value="1"
        {% if t.is_demo %}checked{% endif %}>
