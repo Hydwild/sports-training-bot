@@ -145,6 +145,10 @@ async def scheduler_loop() -> None:
             await _demo_reset_daily(_last_demo_reset_day)
         except Exception:
             logger.exception("Ошибка сброса демо-клубов")
+        try:
+            await _admin_daily_digest()
+        except Exception:
+            logger.exception("Ошибка утреннего дайджеста")
         await asyncio.sleep(60)
 
 
@@ -472,6 +476,65 @@ _DEMO_SEED = [
     {"title": "Турнир выходного дня", "days": 5, "hour": 12, "duration_min": 180,
      "max_participants": 16, "location": "Главный корт"},
 ]
+
+
+# час (в таймзоне клуба), начиная с которого отправляется утренний дайджест
+DIGEST_HOUR = 8
+
+
+async def _admin_daily_digest() -> None:
+    """Утренний дайджест админам клубов: сколько человек записано на
+    сегодняшние слоты/тренировки. Отправляется раз в сутки после
+    DIGEST_HOUR по местному времени клуба; маркер last_digest_date хранится
+    в базе — рестарт сервиса не приводит к повторной отправке. Демо-клубы
+    пропускаются (данные фиктивные). Если на сегодня ничего нет — день
+    помечается без отправки (не спамим пустыми сводками)."""
+    from app.models.entities import Tenant
+    from app.repositories.repo import TenantRepository
+    from sqlalchemy import select
+
+    async with SessionLocal() as session:
+        tenants = list((await session.execute(
+            select(Tenant).where(Tenant.is_active.is_(True)))).scalars())
+        for t in tenants:
+            if t.is_demo or not (t.admin_tg_id or t.admin_vk_id):
+                continue
+            svc = BookingService(session, t.id, tz=t.timezone)
+            local_now = dt.datetime.now(svc.tz)
+            today = local_now.date().isoformat()
+            if t.last_digest_date == today or local_now.hour < DIGEST_HOUR:
+                continue
+            repo = TenantRepository(session, t.id)
+            todays = []
+            for tr in await repo.list_upcoming():
+                start = (tr.start_at if tr.start_at.tzinfo
+                         else tr.start_at.replace(tzinfo=dt.timezone.utc))
+                if start.astimezone(svc.tz).date().isoformat() == today:
+                    todays.append((start.astimezone(svc.tz), tr))
+            t.last_digest_date = today
+            if not todays:
+                await session.commit()
+                continue
+            masters = await repo.masters_map()
+            lines = [f"📋 Записи на сегодня, {local_now.strftime('%d.%m')}:"]
+            total = 0
+            for local_start, tr in sorted(todays, key=lambda x: x[0]):
+                active = await repo.get_signups(tr.id, "active")
+                queue = await repo.get_signups(tr.id, "queue")
+                total += len(active)
+                m = masters.get(tr.master_id) if tr.master_id else None
+                master = f", {m.name}" if m else ""
+                q = f" (+{len(queue)} в очереди)" if queue else ""
+                lines.append(
+                    f"• {local_start.strftime('%H:%M')} «{tr.title}»{master} — "
+                    f"{len(active)}/{tr.max_participants}{q}")
+            lines.append(f"Всего записано: {total}")
+            text = "\n".join(lines)
+            if t.admin_tg_id:
+                await repo.enqueue("tg", t.admin_tg_id, text)
+            if t.admin_vk_id:
+                await repo.enqueue("vk", t.admin_vk_id, text)
+            await session.commit()
 
 
 async def _demo_reset_daily(last_day: list) -> None:

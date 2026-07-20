@@ -369,8 +369,85 @@ async def btn_my(message: Message) -> None:
             cards.append((training.id, f"{mark}\n\n{card}", full))
     await message.answer("📅 <b>Ваши записи:</b>", parse_mode="HTML")
     for tid_, text, full in cards:
-        await message.answer(text, reply_markup=_kb(tid_, is_admin, full),
+        await message.answer(text, reply_markup=_my_kb(tid_),
                              parse_mode="HTML")
+
+
+def _my_kb(train_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура карточки в «Моих записях»: отмена и перенос."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Отменить", callback_data=f"cx:{train_id}"),
+        InlineKeyboardButton(text="🔁 Перенести", callback_data=f"mv:{train_id}"),
+    ]])
+
+
+@router.callback_query(F.data.startswith("mv:"))
+async def cb_move_pick(query: CallbackQuery) -> None:
+    """Перенос записи: показывает список других слотов для выбора."""
+    from_id = int(query.data.split(":")[1])
+    async with SessionLocal() as session:
+        tid, _ = await _resolve_tenant(session, query.message.chat.id,
+                                       query.from_user.id)
+        if tid is None:
+            await query.answer("Чат не привязан к клубу.", show_alert=True)
+            return
+        svc = BookingService(session, tid)
+        targets = [t for t in await svc.repo.list_upcoming()
+                   if t.id != from_id][:8]
+        labels = [(t.id, f"{svc.format_local(t.start_at)} {t.title}"[:60])
+                  for t in targets]
+    if not labels:
+        await query.answer("Других слотов для переноса пока нет.",
+                           show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label,
+                              callback_data=f"mvto:{from_id}:{to_id}")]
+        for to_id, label in labels])
+    await query.answer()
+    await query.message.answer("🔁 Куда перенести запись?", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("mvto:"))
+async def cb_move_do(query: CallbackQuery) -> None:
+    _, from_id, to_id = query.data.split(":")
+    from_id, to_id = int(from_id), int(to_id)
+    async with SessionLocal() as session:
+        tid, _ = await _resolve_tenant(session, query.message.chat.id,
+                                       query.from_user.id)
+        if tid is None:
+            await query.answer("Чат не привязан к клубу.", show_alert=True)
+            return
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        lock = tenant.cancel_lock_minutes if tenant else 0
+        svc = BookingService(session, tid, tz=tenant.timezone if tenant
+                             else "Europe/Moscow")
+        res = await svc.reschedule_signup(from_id, to_id, PLATFORM,
+                                          query.from_user.id,
+                                          lock_minutes=lock)
+    if not res.get("ok"):
+        msg = {"same": "Это тот же слот.",
+               "not_signed": "Вы не записаны на исходный слот.",
+               "locked": f"Перенос закрыт: до начала меньше "
+                         f"{res.get('lock_minutes', 0)} минут.",
+               "closed": "Запись на выбранный слот закрыта.",
+               "already": "Вы уже записаны на выбранный слот.",
+               }.get(res.get("reason"), "Не получилось перенести.")
+        await query.answer(msg, show_alert=True)
+        return
+    note = (f"⏳ Вы в очереди (№{res['position']})."
+            if res["result"] == "queue" else "✅ Вы записаны.")
+    try:
+        await query.message.edit_text(
+            f"🔁 Запись перенесена: «{res['to_title']}», {res['to_when']}.\n"
+            f"{note}")
+    except Exception:
+        pass
+    await query.answer("Перенесено ✅")
+    await _refresh_group_card(tid, from_id)
+    await _refresh_group_card(tid, to_id)
+
+
 @router.message(F.text == BTN_PROFILE)
 async def btn_profile(message: Message) -> None:
     await cmd_profile(message)

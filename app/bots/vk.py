@@ -250,9 +250,8 @@ async def _show_my(user_id: int, group_id=None) -> None:
             card = await views.training_card_plain(svc, training)
             mark = ("✅ Вы записаны" if status == "active"
                     else f"⏳ Вы в очереди (№{position})")
-            full = await _is_full(svc, training)
             await _send(user_id, f"{mark}\n\n{card}",
-                        keyboard=_kb(training.id, full, is_admin))
+                        keyboard=_my_kb_vk(training.id))
         await _send(user_id, "⌨️ Меню внизу 👇", keyboard=_menu_kb(is_admin))
 
 
@@ -362,6 +361,66 @@ async def _do_cancel(user_id: int, tid: int, group_id=None) -> str:
         await _notify_tg_card_changed(tenant_id, tid)
         return "Запись отменена."
     return "Вы не были записаны."
+
+
+def _my_kb_vk(tid: int) -> str:
+    """Клавиатура карточки в «Моих записях»: отмена и перенос."""
+    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    kb = Keyboard(inline=True)
+    kb.add(Callback("❌ Отменить", payload={"a": "cx", "tid": tid}),
+           color=KeyboardButtonColor.NEGATIVE)
+    kb.add(Callback("🔁 Перенести", payload={"a": "mv", "tid": tid}))
+    return kb.get_json()
+
+
+async def _move_pick(user_id: int, from_id: int, group_id=None) -> None:
+    """Перенос записи: список других слотов кнопками."""
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            await _send(user_id, "Клуб не привязан."); return
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        targets = [t for t in await svc.repo.list_upcoming()
+                   if t.id != from_id][:6]
+        labels = [(t.id, f"{svc.format_local(t.start_at)} {t.title}"[:40])
+                  for t in targets]
+    if not labels:
+        await _send(user_id, "Других слотов для переноса пока нет.")
+        return
+    from vkbottle import Keyboard, Callback
+    kb = Keyboard(inline=True)
+    for i, (to_id, label) in enumerate(labels):
+        if i:
+            kb.row()
+        kb.add(Callback(label, payload={"a": "mvto", "f": from_id, "t": to_id}))
+    await _send(user_id, "🔁 Куда перенести запись?", keyboard=kb.get_json())
+
+
+async def _do_move(user_id: int, from_id, to_id, group_id=None) -> str:
+    if not from_id or not to_id:
+        return "Не получилось перенести."
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            return "Клуб не привязан."
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        res = await svc.reschedule_signup(
+            int(from_id), int(to_id), PLATFORM, user_id,
+            lock_minutes=tenant.cancel_lock_minutes)
+        tenant_id = tenant.id
+    if not res.get("ok"):
+        return {"same": "Это тот же слот.",
+                "not_signed": "Вы не записаны на исходный слот.",
+                "locked": (f"Перенос закрыт: до начала меньше "
+                           f"{res.get('lock_minutes', 0)} мин."),
+                "closed": "Запись на выбранный слот закрыта.",
+                "already": "Вы уже записаны на выбранный слот.",
+                }.get(res.get("reason"), "Не получилось перенести.")
+    await _notify_tg_card_changed(tenant_id, int(from_id))
+    await _notify_tg_card_changed(tenant_id, int(to_id))
+    note = (f"Вы в очереди (№{res['position']})."
+            if res["result"] == "queue" else "Вы записаны.")
+    return f"🔁 Перенесено: «{res['to_title']}», {res['to_when']}. {note}"
 
 
 # ─────────── Админские действия (только тренер) ───────────
@@ -1902,6 +1961,13 @@ async def setup() -> None:
         elif action == "cx":
             snackbar = await _do_cancel(user_id, tid, gid)
             await _edit_card(peer_id, cmid, tid, gid, user_id)
+        elif action == "mv":                         # перенос: выбор слота
+            await _move_pick(user_id, tid, gid)
+            snackbar = "🔁 Выберите новое время"
+        elif action == "mvto":                       # перенос: выполнить
+            snackbar = await _do_move(user_id, payload.get("f"),
+                                      payload.get("t"), gid)
+            await _send(user_id, snackbar)
         elif action == "list":
             await _show_list(user_id, gid)
         elif action == "refresh":                    # обновить карточку на месте

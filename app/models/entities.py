@@ -83,6 +83,9 @@ class Tenant(Base):
     # Вертикаль бизнеса: sport | beauty (терминология бота и страницы
     # записи — см. app/core/verticals.py)
     vertical: Mapped[str] = mapped_column(String(20), default="sport")
+    # Дата (ISO, в таймзоне клуба) последнего утреннего дайджеста админу —
+    # маркер «на сегодня уже отправляли» (см. tasks._admin_daily_digest)
+    last_digest_date: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )

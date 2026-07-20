@@ -135,8 +135,38 @@ class BookingService:
                    + await self.repo.get_signups(training_id, "queue"))
         return [s for s in signups if s.is_guest and not s.confirmed]
 
+    async def _admin_ids(self) -> list[tuple[str, int]]:
+        from app.models.entities import Tenant
+        t = await self.session.get(Tenant, self.tenant_id)
+        out: list[tuple[str, int]] = []
+        if t and t.admin_tg_id:
+            out.append(("tg", t.admin_tg_id))
+        if t and t.admin_vk_id:
+            out.append(("vk", t.admin_vk_id))
+        return out
+
+    async def _notify_admins(self, text: str,
+                             exclude: tuple[str, int] | None = None) -> None:
+        """Кладёт сообщение админам клуба в outbox. exclude — не слать тому,
+        кто сам совершил действие (админ отменил собственную запись)."""
+        for platform, uid in await self._admin_ids():
+            if exclude and (platform, uid) == exclude:
+                continue
+            await self.repo.enqueue(platform, uid, text)
+
+    def _is_locked(self, training, lock_minutes: int) -> bool:
+        """Окно отмены: до начала осталось меньше lock_minutes минут."""
+        if lock_minutes <= 0 or not training:
+            return False
+        start = training.start_at
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=dt.timezone.utc)
+        left = (start - dt.datetime.now(dt.timezone.utc)).total_seconds() / 60
+        return 0 <= left < lock_minutes
+
     async def cancel_signup(self, training_id: int, platform: str,
-                            user_id: int, lock_minutes: int = 0) -> dict:
+                            user_id: int, lock_minutes: int = 0,
+                            notify_admin: bool = True) -> dict:
         # блокируем строку тренировки — защита от гонок при отмене/rebalance
         await self.repo.get_training_for_update(training_id)
         signup = await self.repo.get_user_signup(training_id, platform, user_id)
@@ -146,16 +176,12 @@ class BookingService:
         # окно отмены: запрещаем отписку, если до начала меньше lock_minutes
         if lock_minutes > 0:
             training = await self.repo.get_training(training_id)
-            if training:
-                start = training.start_at
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=dt.timezone.utc)
-                left = (start - dt.datetime.now(dt.timezone.utc)).total_seconds() / 60
-                if 0 <= left < lock_minutes:
-                    return {"cancelled": False, "promoted": None, "locked": True,
-                            "lock_minutes": lock_minutes}
+            if self._is_locked(training, lock_minutes):
+                return {"cancelled": False, "promoted": None, "locked": True,
+                        "lock_minutes": lock_minutes}
 
         was_active = signup.status == "active"
+        cancelled_name = signup.name
         await self.repo.delete_signup(signup)
 
         promoted = None
@@ -165,8 +191,59 @@ class BookingService:
         else:
             await self._renumber_queue(training_id)
 
+        if notify_admin:
+            training = await self.repo.get_training(training_id)
+            if training:
+                await self._notify_admins(
+                    f"❌ {cancelled_name} отменил(а) запись: "
+                    f"«{training.title}», {self.format_local(training.start_at)}",
+                    exclude=(platform, user_id))
+
         await self.session.commit()
         return {"cancelled": True, "promoted": promoted}
+
+    async def reschedule_signup(self, from_id: int, to_id: int, platform: str,
+                                user_id: int, lock_minutes: int = 0) -> dict:
+        """
+        Перенос записи на другой слот/тренировку: сначала записываем на цель
+        (чтобы при отказе цели исходная запись не потерялась), затем снимаем
+        исходную. Окно отмены действует как при обычной отмене. Админам
+        уходит одно уведомление о переносе (не пара отмена+запись).
+        """
+        if from_id == to_id:
+            return {"ok": False, "reason": "same"}
+        src = await self.repo.get_user_signup(from_id, platform, user_id)
+        if not src:
+            return {"ok": False, "reason": "not_signed"}
+        old_training = await self.repo.get_training(from_id)
+        if lock_minutes > 0 and self._is_locked(old_training, lock_minutes):
+            return {"ok": False, "reason": "locked", "lock_minutes": lock_minutes}
+
+        name, username = src.name, src.username
+        res = await self.sign_up(to_id, platform, user_id, name,
+                                 username=username)
+        if res.result not in ("active", "queue"):
+            return {"ok": False, "reason": res.result}
+        await self.cancel_signup(from_id, platform, user_id,
+                                 notify_admin=False)
+
+        new_training = await self.repo.get_training(to_id)
+        old_when = (self.format_local(old_training.start_at)
+                    if old_training else "?")
+        new_when = (self.format_local(new_training.start_at)
+                    if new_training else "?")
+        queue_note = (f" (в очереди №{res.position})"
+                      if res.result == "queue" else "")
+        await self._notify_admins(
+            f"🔁 {name} перенёс(ла) запись: "
+            f"«{old_training.title if old_training else '?'}» {old_when} → "
+            f"«{new_training.title if new_training else '?'}» {new_when}"
+            f"{queue_note}",
+            exclude=(platform, user_id))
+        await self.session.commit()
+        return {"ok": True, "result": res.result, "position": res.position,
+                "to_title": new_training.title if new_training else "",
+                "to_when": new_when}
 
     async def set_max_participants(self, training_id: int,
                                    new_max: int) -> list[Signup]:
