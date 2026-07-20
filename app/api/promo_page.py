@@ -28,12 +28,18 @@ _EXTRA_CSS = """
   stroke-linecap:round;stroke-linejoin:round}
 .feature-card h3{font:400 17.5px/1.35 Georgia,serif;margin:0 0 8px;text-wrap:balance}
 .feature-card p{margin:0;font:400 14px/1.6 -apple-system,system-ui,sans-serif;color:var(--muted)}
-.trust{display:flex;gap:24px;flex-wrap:wrap;padding:24px;border-radius:16px;
-  background:var(--surface-2);border:1px solid var(--border)}
-.trust .item{flex:1;min-width:180px;font:400 14px/1.6 -apple-system,system-ui,sans-serif;
-  color:var(--muted)}
-.trust .item b{display:block;color:var(--ink);font:600 13.5px/1.35
-  -apple-system,system-ui,sans-serif;margin-bottom:4px}
+/* тёмная панель в языке hero: фиксированные цвета (фон всегда тёмный,
+   тема на него не влияет) */
+.trust{background:radial-gradient(120% 160% at 20% 0%,#332a17,#15120a 70%);
+  border-radius:20px;padding:32px;display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:24px}
+.trust-item{display:flex;flex-direction:column;align-items:flex-start;gap:10px}
+.trust-item svg{width:22px;height:22px;stroke:#d9a94a;fill:none;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
+.trust-item b{font:600 14px/1.35 -apple-system,system-ui,sans-serif;color:#f4f1e6;
+  text-wrap:balance}
+.trust-item p{margin:0;font:400 13px/1.55 -apple-system,system-ui,sans-serif;
+  color:#b9b39d}
 .price-card{border:1px solid var(--gold);border-radius:20px;padding:32px;
   text-align:center;background:var(--surface);box-shadow:var(--shadow)}
 .price-card .tag{display:inline-block;font:700 11px/1 -apple-system,system-ui,sans-serif;
@@ -140,15 +146,34 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
 </div>
 
 <h2 class="section">Надёжность и данные</h2>
+<p class="section-lead">Инженерная часть, о которой не нужно думать —
+  она просто работает.</p>
 <div class="trust">
-  <div class="item"><b>Ежедневные бэкапы</b>резервная копия базы хранится вне
-    сервера, переживает падение платформы</div>
-  <div class="item"><b>Изоляция клубов</b>данные каждого клуба технически
-    недоступны другим</div>
-  <div class="item"><b>Алерты о сбоях</b>владелец сразу узнаёт, если что-то
-    пошло не так</div>
-  <div class="item"><b>Автотесты при каждом обновлении</b>изменения не
-    выкатываются без проверки</div>
+  <div class="trust-item">
+    <svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7.5" ry="3"/>
+      <path d="M4.5 6v12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3V6"/>
+      <path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3"/></svg>
+    <b>Ежедневные бэкапы</b>
+    <p>Копия базы хранится вне сервера и переживает даже падение хостинга.</p>
+  </div>
+  <div class="trust-item">
+    <svg viewBox="0 0 24 24"><rect x="5.5" y="10.5" width="13" height="9" rx="2"/>
+      <path d="M8.5 10.5V8a3.5 3.5 0 017 0v2.5"/></svg>
+    <b>Изоляция клубов</b>
+    <p>Данные каждого клуба технически недоступны другим.</p>
+  </div>
+  <div class="trust-item">
+    <svg viewBox="0 0 24 24"><path d="M3.5 12h4l2.5-6 4 12 2.5-6h4"/></svg>
+    <b>Алерты о сбоях</b>
+    <p>Владелец сразу узнаёт, если что-то пошло не так.</p>
+  </div>
+  <div class="trust-item">
+    <svg viewBox="0 0 24 24">
+      <path d="M12 3.5l7 2.5v5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5v-5z"/>
+      <path d="M9 12l2 2 4-4.5"/></svg>
+    <b>Автотесты при обновлениях</b>
+    <p>Изменения не выкатываются в работу без проверки.</p>
+  </div>
 </div>
 
 <h2 class="section" id="price">Тариф под задачу</h2>
