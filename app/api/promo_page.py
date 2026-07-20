@@ -60,12 +60,28 @@ _EXTRA_CSS = """
 .demo-card .btn-ghost{color:var(--ink);border-color:var(--border)}
 .demo-card .btn-ghost:hover{border-color:var(--gold)}
 @media (max-width:640px){.demo-grid{grid-template-columns:1fr}}
+.vertical-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+  gap:16px}
+.vertical-card{background:var(--surface);border:1px solid var(--border);
+  border-radius:16px;padding:24px;box-shadow:var(--shadow)}
+.vertical-card .vi{width:40px;height:40px;border-radius:12px;
+  border:1px solid var(--gold);display:flex;align-items:center;
+  justify-content:center;margin-bottom:16px}
+.vertical-card .vi svg{width:19px;height:19px;stroke:var(--gold);fill:none;
+  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.vertical-card h3{font:400 17.5px/1.35 Georgia,serif;margin:0 0 8px}
+.vertical-card p{margin:0;font:400 14px/1.6 -apple-system,system-ui,sans-serif;
+  color:var(--muted)}
+.vertical-card .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.vertical-card .tags span{font:600 11.5px/1 -apple-system,system-ui,sans-serif;
+  color:var(--muted);border:1px solid var(--border);border-radius:999px;
+  padding:6px 10px}
 """
 
 PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
-    "Бот записи на тренировки — Telegram и ВКонтакте",
-    "Запись на спортивные тренировки в Telegram, ВКонтакте и браузере: "
-    "очередь, напоминания, явка и оплата, статистика. Есть живое демо.",
+    "Боты для записей — Telegram и ВКонтакте",
+    "Онлайн-запись для спортивных клубов и салонов красоты: Telegram, "
+    "ВКонтакте и сайт. Очередь, напоминания, оплата, статистика. Живое демо.",
 ) + """<style>
 """ + SITE_CSS + _EXTRA_CSS + """
 </style></head><body>
@@ -74,13 +90,50 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
 
 <div class="hero">
   <span class="eyebrow">Telegram · ВКонтакте · веб-страница записи</span>
-  <h1>Пока вы тренируете —<br>запись ведёт себя сама</h1>
-  <p>Участники записываются сами, встают в очередь и получают напоминания.
-    Расписание создаёт тренировки автоматически, вы просто отмечаете явку.</p>
+  <h1>Пока вы работаете —<br>запись ведёт себя сама</h1>
+  <p>Клиенты записываются сами, встают в очередь и получают напоминания.
+    Подходит спортивным клубам, секциям и салонам красоты.</p>
   <div class="cta-row">
     <a class="btn-gold" href="#demo">Живое демо</a>
     <a class="btn-ghost" href="#price">Как подключить</a>
   </div>
+</div>
+
+<h2 class="section">Под ваш бизнес</h2>
+<p class="section-lead">Терминология, кнопки бота и страница записи
+  настраиваются под направление — клиент видит привычные слова.</p>
+<div class="vertical-grid">
+<div class="vertical-card">
+  <div class="vi"><svg viewBox="0 0 24 24">
+    <path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11"/>
+  </svg></div>
+  <h3>Спорт и тренировки</h3>
+  <p>Групповые и персональные тренировки: запись, очередь на место,
+    явка, рейтинг посещаемости.</p>
+  <div class="tags"><span>клубы</span><span>секции</span>
+    <span>персональные тренеры</span><span>аренда кортов</span></div>
+</div>
+<div class="vertical-card">
+  <div class="vi"><svg viewBox="0 0 24 24">
+    <circle cx="6.5" cy="6.5" r="2.8"/><circle cx="6.5" cy="17.5" r="2.8"/>
+    <path d="M9 8.5L20.5 20M9 15.5L20.5 4"/>
+  </svg></div>
+  <h3>Салоны красоты</h3>
+  <p>Индивидуальные окна записи к мастеру: имя, фото и специализация
+    мастера прямо на странице записи.</p>
+  <div class="tags"><span>барберы</span><span>маникюр</span>
+    <span>волосы</span><span>депиляция</span><span>косметология</span></div>
+</div>
+<div class="vertical-card">
+  <div class="vi"><svg viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8.5"/><path d="M12 8v4l2.5 2.5"/>
+  </svg></div>
+  <h3>Любые услуги по записи</h3>
+  <p>Репетиторы, мастер-классы, студии, консультации — всё, где клиент
+    выбирает время.</p>
+  <div class="tags"><span>репетиторы</span><span>студии</span>
+    <span>мастер-классы</span></div>
+</div>
 </div>
 
 <h2 class="section">Что умеет</h2>
@@ -89,7 +142,7 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
 <div class="feature-card">
   <div class="feature-icon"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></div>
   <h3>Запись в один клик</h3>
-  <p>Из Telegram, ВК или браузера — участнику не нужно ничего устанавливать.
+  <p>Из Telegram, ВК или браузера — клиенту не нужно ничего устанавливать.
     Очередь при заполнении мест, автоматический подъём при отмене.</p>
 </div>
 <div class="feature-card">
@@ -97,7 +150,7 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
     <rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/>
   </svg></div>
   <h3>Автопилот расписания</h3>
-  <p>Задайте «вторник и четверг 19:00» — тренировки создаются сами,
+  <p>Задайте «вторник и четверг 19:00» — слоты создаются сами,
     подписчики получают уведомление об открытии записи.</p>
 </div>
 <div class="feature-card">
@@ -105,7 +158,7 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
     <path d="M6.5 9a5.5 5.5 0 0111 0c0 5.5 2 6.5 2 6.5h-15s2-1 2-6.5z"/><path d="M10.3 19.5a1.9 1.9 0 003.4 0"/>
   </svg></div>
   <h3>Напоминания</h3>
-  <p>«Скоро тренировка» за выбранное время до начала — меньше неявок и путаницы.</p>
+  <p>Напоминание за выбранное время до визита — меньше неявок и путаницы.</p>
 </div>
 <div class="feature-card">
   <div class="feature-icon"><svg viewBox="0 0 24 24">
@@ -120,8 +173,8 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
     <path d="M4.5 20V11M12 20V4M19.5 20v-6.5"/>
   </svg></div>
   <h3>Статистика и рейтинг</h3>
-  <p>Топ посещаемости клуба, личный профиль участника — мотивирует не
-    пропускать.</p>
+  <p>Посещаемость, личный профиль клиента, история визитов — всё
+    считается само.</p>
 </div>
 <div class="feature-card">
   <div class="feature-icon"><svg viewBox="0 0 24 24">
@@ -129,19 +182,20 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
     <rect x="3.5" y="14" width="6.5" height="6.5" rx="1"/><path d="M14 15h3v3h-3zM20.5 14v3M14 20.5h3M20.5 20.5v.01"/>
   </svg></div>
   <h3>Страница записи + QR</h3>
-  <p>Ссылка и QR-код для зала — записываются даже те, у кого нет мессенджеров.</p>
+  <p>Ссылка и QR-код для зала или салона — записываются даже те, у кого
+    нет мессенджеров.</p>
 </div>
 </div>
 
 <h2 class="section">Как это работает</h2>
 <div class="card" style="max-width:640px;margin:0 auto">
 <div class="steps">
-<div class="step"><div><b>Разворачиваем бота под ваш клуб</b>
+<div class="step"><div><b>Разворачиваем бота под ваш бизнес</b>
   <p>Ваше название, ваши боты, ваши цвета — готово за один день.</p></div></div>
-<div class="step"><div><b>Даёте участникам ссылку</b>
-  <p>Они записываются сами — из Telegram, ВК или по QR прямо в зале.</p></div></div>
-<div class="step"><div><b>Тренируете, а не администрируете</b>
-  <p>Расписание, напоминания и списки участников бот ведёт сам.</p></div></div>
+<div class="step"><div><b>Даёте клиентам ссылку</b>
+  <p>Они записываются сами — из Telegram, ВК или по QR на месте.</p></div></div>
+<div class="step"><div><b>Работаете, а не администрируете</b>
+  <p>Расписание, напоминания и списки клиентов бот ведёт сам.</p></div></div>
 </div>
 </div>
 
@@ -177,11 +231,11 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
 </div>
 
 <h2 class="section" id="price">Тариф под задачу</h2>
-<p class="section-lead">От одного тренера до сети клубов — редакция включается флагом,
-  код общий.</p>
+<p class="section-lead">От одного мастера или тренера до сети филиалов —
+  редакция под ваш масштаб.</p>
 <div class="price-card">
   <span class="tag">Свой бот под ключ</span>
-  <h3>Настройка под клуб + запуск + инструкция</h3>
+  <h3>Настройка под ваш бизнес + запуск + инструкция</h3>
   <p>Стоимость и условия — по запросу, зависят от редакции (Lite/Pro) и числа групп.</p>
   <a class="btn-gold" href=\"""" + TELEGRAM_CONTACT + """\">Написать в Telegram</a>
 </div>

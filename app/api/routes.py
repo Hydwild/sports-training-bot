@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import (
     BrandUpdate,
+    MasterCreate,
+    MasterOut,
     MembershipSet,
     PaymentStart,
     SignupOut,
@@ -17,6 +19,7 @@ from app.api.schemas import (
     TrainingOut,
 )
 from app.core.config import settings, safe_color as _safe_color
+from app.core.verticals import vcfg as _vcfg
 from app.db.engine import get_session
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
@@ -111,12 +114,58 @@ async def create_training(tenant_id: int, body: TrainingCreate,
         state=body.state, publish_at=body.publish_at,
         platform="api", user_id=0,
     )
-    # цена задаётся отдельно (create_training в сервисе её не принимает)
+    # цена/мастер задаются отдельно (create_training в сервисе их не принимает)
+    extra_commit = False
     if body.price_minor:
         training.price_minor = body.price_minor
         training.currency = body.currency
+        extra_commit = True
+    if body.master_id is not None:
+        if await svc.repo.get_master(body.master_id) is None:
+            raise HTTPException(status_code=400, detail="Мастер не найден")
+        training.master_id = body.master_id
+        extra_commit = True
+    if extra_commit:
         await session.commit()
     return TrainingOut.model_validate(training)
+
+
+# ---------- Мастера (салоны/тренеры) ----------
+
+@router.get("/tenants/{tenant_id}/masters", response_model=list[MasterOut],
+            dependencies=[Depends(require_admin)])
+async def list_masters(tenant_id: int,
+                       session: AsyncSession = Depends(get_session)):
+    await _ensure_tenant(session, tenant_id)
+    svc = BookingService(session, tenant_id)
+    return [MasterOut.model_validate(m)
+            for m in await svc.repo.list_masters(active_only=False)]
+
+
+@router.post("/tenants/{tenant_id}/masters", response_model=MasterOut,
+             dependencies=[Depends(require_admin)])
+async def create_master(tenant_id: int, body: MasterCreate,
+                        session: AsyncSession = Depends(get_session)):
+    await _ensure_tenant(session, tenant_id)
+    svc = BookingService(session, tenant_id)
+    m = await svc.repo.add_master(name=body.name.strip(),
+                                  specialty=body.specialty.strip(),
+                                  photo_url=body.photo_url)
+    await session.commit()
+    return MasterOut.model_validate(m)
+
+
+@router.delete("/tenants/{tenant_id}/masters/{master_id}",
+               dependencies=[Depends(require_admin)])
+async def delete_master(tenant_id: int, master_id: int,
+                        session: AsyncSession = Depends(get_session)):
+    """Скрывает мастера (active=False) — история слотов сохраняется."""
+    await _ensure_tenant(session, tenant_id)
+    svc = BookingService(session, tenant_id)
+    if not await svc.repo.deactivate_master(master_id):
+        raise HTTPException(status_code=404, detail="Мастер не найден")
+    await session.commit()
+    return {"ok": True}
 
 
 @router.get("/tenants/{tenant_id}/trainings/{training_id}/signups",
@@ -290,6 +339,10 @@ public_router = APIRouter(tags=["public"])
 _ip_hits: dict[str, list[float]] = {}
 
 
+def _eyebrow(tenant) -> str:
+    return _vcfg(getattr(tenant, "vertical", None))["web_eyebrow"]
+
+
 def _phone_uid(digits: str) -> int:
     """Стабильный числовой id по телефону (только цифры). Берём телефон целиком
     — он помещается в BigInteger, поэтому у разных телефонов разные id (в отличие
@@ -314,6 +367,37 @@ def _rate_ok(ip: str, limit: int = 5, window: int = 60) -> bool:
         for k in stale:
             del _ip_hits[k]
     return True
+
+import datetime as _dt
+
+_RU_DOW = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+_RU_MON = ["янв", "фев", "мар", "апр", "мая", "июн",
+           "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+# Лента дней: фильтрация карточек по выбранному дню. Прогрессивное
+# улучшение — без JS видны все дни сразу (класс js не ставится).
+_DAYS_JS = """<script>
+(function(){
+  var list = document.getElementById('list');
+  var days = document.querySelectorAll('.day');
+  if (!list || !days.length) return;
+  list.classList.add('js');
+  function show(d){
+    days.forEach(function(b){
+      var on = b.dataset.day === d;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    list.querySelectorAll('.card[data-day]').forEach(function(c){
+      c.classList.toggle('show', c.dataset.day === d);
+    });
+  }
+  days.forEach(function(b){
+    b.addEventListener('click', function(){ show(b.dataset.day); });
+  });
+  show(days[0].dataset.day);
+})();
+</script>"""
 
 # Мелкие line-иконки в стиле /promo (обводка наследует цвет через CSS)
 _I_CAL = ('<svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" '
@@ -401,6 +485,35 @@ font:400 14px/1.6 -apple-system,system-ui,sans-serif}}
 padding:6px 10px;border-radius:999px;border:1px solid var(--accent);
 color:var(--accent);white-space:nowrap}}
 .chip.q{{border-color:#b8791a;color:#b8791a}}
+.days{{display:flex;gap:8px;overflow-x:auto;padding:4px 2px 12px;
+margin:0 auto 8px;max-width:560px;scrollbar-width:none;
+-webkit-overflow-scrolling:touch}}
+.days::-webkit-scrollbar{{display:none}}
+.day{{flex:0 0 auto;min-width:56px;display:flex;flex-direction:column;
+align-items:center;gap:2px;padding:10px 8px;border-radius:14px;
+border:1px solid var(--border);background:var(--surface);cursor:pointer;
+font-family:inherit;
+transition:border-color .15s var(--ease),background-color .15s var(--ease)}}
+.day .dow{{font:600 10.5px/1 -apple-system,system-ui,sans-serif;
+text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}}
+.day .num{{font:600 17px/1.2 -apple-system,system-ui,sans-serif;
+font-variant-numeric:tabular-nums;color:var(--ink)}}
+.day .mon{{font:500 10.5px/1 -apple-system,system-ui,sans-serif;
+color:var(--muted)}}
+.day.on{{background:var(--accent);border-color:var(--accent)}}
+.day.on .dow,.day.on .num,.day.on .mon{{color:#fff}}
+.list.js .card[data-day]{{display:none}}
+.list.js .card[data-day].show{{display:block}}
+.master{{display:flex;align-items:center;gap:10px;margin-top:12px}}
+.master img,.master .mi{{width:40px;height:40px;border-radius:50%;
+object-fit:cover;flex-shrink:0}}
+.master .mi{{display:flex;align-items:center;justify-content:center;
+background:var(--surface-2);border:1px solid var(--border);
+font:600 15px/1 -apple-system,system-ui,sans-serif;color:var(--accent)}}
+.master b{{display:block;font:600 13.5px/1.3 -apple-system,system-ui,sans-serif}}
+.master span{{display:block;font:400 12px/1.35 -apple-system,system-ui,sans-serif;
+color:var(--muted)}}
+.free-one{{color:var(--accent)}}
 .danger{{color:#b23a2e}}
 .note{{text-align:center;color:var(--muted);
 font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
@@ -408,10 +521,10 @@ font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
 font:400 12.5px/1.6 -apple-system,system-ui,sans-serif}}
 .foot a{{color:var(--muted)}}
 </style></head><body>
-<span class="eyebrow">Запись на тренировки</span>
+<span class="eyebrow">{eyebrow}</span>
 <h1>{title}</h1>{body}
 <p class="foot">Запись онлайн — без регистрации ·
-<a href="/promo">платформа «Бот записи на тренировки»</a></p>
+<a href="/promo">платформа «Боты для записей»</a></p>
 </body></html>"""
 
 
@@ -426,40 +539,73 @@ async def public_club(tenant_id: int,
     from app.core.config import tenant_suspended
     if tenant_suspended(tenant):
         import html as _h2
-        return _PAGE.format(title=_h2.escape(tenant.brand_name or tenant.name),
+        return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
                             body='<div class="card note">Работа клуба временно '
                                  'приостановлена. Обратитесь к тренеру.</div>')
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
+    vc = _vcfg(tenant.vertical)
     trainings = await svc.repo.list_upcoming()
+    masters = await svc.repo.masters_map() if trainings else {}
     cards = []
+    day_order: list[str] = []       # ISO-даты в порядке следования
+    day_labels: dict[str, tuple] = {}
     for t in trainings:
+        start = (t.start_at if t.start_at.tzinfo
+                 else t.start_at.replace(tzinfo=_dt.timezone.utc))
+        local = start.astimezone(svc.tz)
+        day_key = local.date().isoformat()
+        if day_key not in day_labels:
+            day_order.append(day_key)
+            day_labels[day_key] = (_RU_DOW[local.weekday()], local.day,
+                                   _RU_MON[local.month - 1])
         active = await svc.repo.get_signups(t.id, "active")
         filled, mx = len(active), t.max_participants
-        pct = min(100, round(filled / mx * 100)) if mx else 100
         price = (f'<span class="price">{t.price_minor // 100} ₽</span>'
                  if getattr(t, "price_minor", 0) else "")
-        state = ('<span class="full">мест нет — запись в очередь</span>'
-                 if filled >= mx
-                 else f"<span>свободно: {mx - filled} из {mx}</span>")
+        if mx == 1:
+            # индивидуальный слот (салон/персональная тренировка):
+            # прогресс-бар из одного деления не имеет смысла
+            cap = ('<div class="cap"><span class="full">'
+                   + vc["web_full"] + '</span></div>' if filled >= mx else
+                   '<div class="cap"><span class="free-one">время свободно'
+                   '</span></div>')
+        else:
+            pct = min(100, round(filled / mx * 100)) if mx else 100
+            state = (f'<span class="full">{vc["web_full"]}</span>'
+                     if filled >= mx
+                     else f"<span>свободно: {mx - filled} из {mx}</span>")
+            cap = (f'<div class="cap"><div class="bar">'
+                   f'<i style="width:{pct}%"></i></div>{state}</div>')
         names = ", ".join(_h.escape(s.name) for s in active[:12])
         who = (f'<div class="who">Записаны: {names}'
                + ("…" if len(active) > 12 else "") + "</div>") if active else ""
         loc = (f'<div class="m">{_I_PIN} {_h.escape(t.location)}</div>'
                if t.location else "")
+        m = masters.get(t.master_id) if t.master_id else None
+        master_html = ""
+        if m:
+            if m.photo_url:
+                avatar = (f'<img src="{_h.escape(m.photo_url, quote=True)}" '
+                          f'alt="" loading="lazy">')
+            else:
+                avatar = f'<span class="mi">{_h.escape(m.name[:1].upper())}</span>'
+            spec = (f'<span>{_h.escape(m.specialty)}</span>'
+                    if m.specialty else "")
+            master_html = (f'<div class="master">{avatar}'
+                           f'<div><b>{_h.escape(m.name)}</b>{spec}</div></div>')
         cards.append(
-            f'<div class="card">'
+            f'<div class="card" data-day="{day_key}">'
             f'<div class="head"><div class="t">{_h.escape(t.title)}</div>{price}</div>'
             f'<div class="m">{_I_CAL} {svc.format_local(t.start_at)}</div>{loc}'
-            f'<div class="cap"><div class="bar"><i style="width:{pct}%"></i></div>'
-            f'{state}</div>{who}'
+            f'{master_html}{cap}{who}'
             f'<form method="post" action="/club/{tenant_id}/signup">'
             f'<input type="hidden" name="training_id" value="{t.id}">'
             f'<input name="name" autocomplete="name" required minlength="2" '
             f'maxlength="100" placeholder="Ваше имя" aria-label="Ваше имя">'
             f'<input name="phone" type="tel" autocomplete="tel" required '
             f'minlength="10" maxlength="16" '
-            f'placeholder="Телефон (для тренера)" aria-label="Телефон">'
+            f'placeholder="Телефон (для мастера)" aria-label="Телефон">'
             f'<button>Записаться</button></form></div>')
     my_form = (f'<div class="card"><div class="t">Мои записи</div>'
                f'<form method="post" action="/club/{tenant_id}/my">'
@@ -467,10 +613,22 @@ async def public_club(tenant_id: int,
                f'minlength="10" maxlength="16" '
                f'placeholder="Телефон, указанный при записи" aria-label="Телефон">'
                f'<button class="ghost">Показать мои записи</button></form></div>')
-    body = ("".join(cards) or ('<div class="card note">Ближайших тренировок '
-                               'нет — загляните позже.</div>')) + my_form
+    days_html = ""
+    if len(day_order) > 1:
+        chips = "".join(
+            f'<button type="button" class="day" data-day="{d}">'
+            f'<span class="dow">{day_labels[d][0]}</span>'
+            f'<span class="num">{day_labels[d][1]}</span>'
+            f'<span class="mon">{day_labels[d][2]}</span></button>'
+            for d in day_order)
+        days_html = f'<div class="days" role="tablist">{chips}</div>'
+    body = (days_html
+            + '<div class="list" id="list">' + "".join(cards) + '</div>'
+            + my_form + _DAYS_JS
+            if cards else
+            f'<div class="card note">{vc["web_empty"]}</div>' + my_form)
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(title=_h.escape(title),
+    return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
 
 
@@ -493,7 +651,7 @@ async def public_signup(tenant_id: int,
     from app.core.config import tenant_suspended
     if tenant_suspended(tenant):
         import html as _h2
-        return _PAGE.format(title=_h2.escape(tenant.brand_name or tenant.name),
+        return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
                             body='<div class="card note">Работа клуба временно '
                                  'приостановлена. Обратитесь к тренеру.</div>')
@@ -527,7 +685,7 @@ async def public_signup(tenant_id: int,
             f'<div class="links">{cancel_link}<a href="/club/{tenant_id}">'
             f'← к списку тренировок</a></div></div>')
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(title=_h.escape(title),
+    return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
 
 
@@ -573,7 +731,7 @@ async def public_cancel(tenant_id: int, t: int, u: int, s: str,
             f'<div class="links"><a href="/club/{tenant_id}">'
             '← к списку тренировок</a></div></div>')
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(title=_h.escape(title),
+    return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
 
 
@@ -614,7 +772,7 @@ async def public_my(tenant_id: int,
     from app.core.config import tenant_suspended
     if tenant_suspended(tenant):
         import html as _h2
-        return _PAGE.format(title=_h2.escape(tenant.brand_name or tenant.name),
+        return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
                             body='<div class="card note">Работа клуба временно '
                                  'приостановлена.</div>')
@@ -647,7 +805,7 @@ async def public_my(tenant_id: int,
                      f'<a href="/club/{tenant_id}">← к списку</a></div>')
         body = "".join(items)
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(title=_h.escape(title),
+    return _PAGE.format(eyebrow=_eyebrow(tenant), title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
 
 

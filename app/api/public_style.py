@@ -47,7 +47,7 @@ def head_meta(title: str, description: str) -> str:
         f'<meta property="og:description" content="{description}">',
         '<meta property="og:type" content="website">',
         '<meta property="og:locale" content="ru_RU">',
-        '<meta property="og:site_name" content="Бот записи на тренировки">',
+        '<meta property="og:site_name" content="Боты для записей">',
         '<meta name="twitter:card" content="summary">',
         '<meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">',
         '<meta name="theme-color" content="#141310" media="(prefers-color-scheme: dark)">',
@@ -180,7 +180,7 @@ def site_nav(active: str) -> str:
         for key, href, label in items)
     return (
         '<div class="nav-bar"><nav class="site-nav" aria-label="Разделы сайта">'
-        '<a class="brand" href="/promo"><b>Бот записи</b> на тренировки</a>'
+        '<a class="brand" href="/promo"><b>Боты</b> для записей</a>'
         f'<div class="links">{links}</div>'
         '</nav></div>')
 
@@ -190,4 +190,4 @@ def site_footer() -> str:
         f'<footer class="site"><div class="links">'
         f'<a href="/promo">о продукте</a>·<a href="/faq">вопросы и ответы</a>'
         f'·<a href="/reviews">отзывы</a>·<a href="{TELEGRAM_CONTACT}">написать в Telegram</a>'
-        f'</div>© 2026 · Бот записи на тренировки — Telegram + ВКонтакте</footer>')
+        f'</div>© 2026 · Боты для записей — Telegram + ВКонтакте</footer>')

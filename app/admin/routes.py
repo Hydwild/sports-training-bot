@@ -399,7 +399,8 @@ async def builder_generate(request: Request,
                            tg_bot_username: str = Form(""),
                            public_base_url: str = Form(""),
                            yookassa_shop_id: str = Form(""),
-                           yookassa_secret_key: str = Form("")):
+                           yookassa_secret_key: str = Form(""),
+        vertical: str = Form("sport")):
     """Собирает готовую папку бота под клиента: код + .env + база с уже
     настроенным клубом и тренером (если указан Telegram/VK ID тренера).
     Логика сборки — в app/services/bot_builder.py (общая с /admin/platform/builder)."""
@@ -415,7 +416,8 @@ async def builder_generate(request: Request,
         cancel_lock_minutes=cancel_lock_minutes,
         signup_close_minutes=signup_close_minutes, welcome_text=welcome_text,
         tg_bot_username=tg_bot_username, public_base_url=public_base_url,
-        yookassa_shop_id=yookassa_shop_id, yookassa_secret_key=yookassa_secret_key)
+        yookassa_shop_id=yookassa_shop_id,
+        yookassa_secret_key=yookassa_secret_key, vertical=vertical)
     return StreamingResponse(
         io.BytesIO(zip_bytes), media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{out_name}"'})

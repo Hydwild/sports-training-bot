@@ -14,6 +14,13 @@ class TenantCreate(BaseModel):
     admin_vk_id: int | None = None
     timezone: str = "Europe/Moscow"
     is_demo: bool = False
+    vertical: str = "sport"
+
+    @field_validator("vertical")
+    @classmethod
+    def _vertical_known(cls, v: str) -> str:
+        from app.core.verticals import VERTICALS
+        return v if v in VERTICALS else "sport"
 
 
 class TenantOut(BaseModel):
@@ -39,6 +46,36 @@ class TrainingCreate(BaseModel):
     currency: str = "RUB"
     state: str = "published"
     publish_at: dt.datetime | None = None
+    master_id: int | None = None
+
+
+class MasterCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    specialty: str = Field(default="", max_length=160)
+    photo_url: str | None = Field(default=None, max_length=500)
+
+    @field_validator("photo_url")
+    @classmethod
+    def _photo_url_must_be_http(cls, v: str | None) -> str | None:
+        """URL фото вставляется в <img src> публичной страницы записи —
+        не даём подсунуть javascript:/data: и т.п."""
+        if v is None or not v.strip():
+            return None
+        v = v.strip()
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("photo_url должен начинаться с http:// или https://")
+        return v
+
+
+class MasterOut(BaseModel):
+    id: int
+    name: str
+    specialty: str
+    photo_url: str | None
+    active: bool
+
+    class Config:
+        from_attributes = True
 
 
 class MembershipSet(BaseModel):

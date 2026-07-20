@@ -11,6 +11,12 @@
       <input name="club_name" required value="{{ t.name }}"
              style="width:100%;padding:8px"></label></p>
 
+    <p><label>Направление бизнеса<br>
+      <select name="vertical" style="padding:8px">
+        <option value="sport" {% if t.vertical != 'beauty' %}selected{% endif %}>Спорт и тренировки</option>
+        <option value="beauty" {% if t.vertical == 'beauty' %}selected{% endif %}>Салон красоты</option>
+      </select></label></p>
+
     <p><label>Часовой пояс<br>
       <select name="timezone" style="padding:8px">
         {% for tz in ["Europe/Moscow", "Europe/Kaliningrad", "Europe/Samara",

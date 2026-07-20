@@ -80,6 +80,9 @@ class Tenant(Base):
     # Membership с role=coach) или "участник" — см. app/bots/telegram.py
     # (_resolve_tenant, cmd_start) и app/services/tasks.py (ночной сброс).
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Вертикаль бизнеса: sport | beauty (терминология бота и страницы
+    # записи — см. app/core/verticals.py)
+    vertical: Mapped[str] = mapped_column(String(20), default="sport")
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
@@ -100,6 +103,11 @@ class Training(Base):
     # Pro: опциональная привязка к группе внутри клуба (дети/взрослые и т.п.)
     group_id: Mapped[int | None] = mapped_column(
         ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+    # Опциональный мастер/тренер, ведущий это время (салоны: барбер,
+    # мастер маникюра и т.п.) — показывается на странице записи
+    master_id: Mapped[int | None] = mapped_column(
+        ForeignKey("masters.id", ondelete="SET NULL"), index=True
     )
     title: Mapped[str] = mapped_column(String(300))
     start_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
@@ -295,6 +303,23 @@ class Schedule(Base):
     days_ahead: Mapped[int] = mapped_column(Integer, default=3)  # за сколько дней создавать
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_date: Mapped[str] = mapped_column(String(10), default="")  # ISO даты последнего создания
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)
+
+
+class Master(Base):
+    """Мастер/специалист клуба (салоны: барбер, мастер маникюра; спорт:
+    тренер). Привязывается к слоту через Training.master_id — на странице
+    записи показываются имя, специализация и фото."""
+    __tablename__ = "masters"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    specialty: Mapped[str] = mapped_column(String(160), default="")
+    photo_url: Mapped[str | None] = mapped_column(String(500))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow)
 

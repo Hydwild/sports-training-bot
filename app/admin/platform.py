@@ -231,7 +231,8 @@ async def platform_builder_generate(
         tg_bot_username: str = Form(""),
         public_base_url: str = Form(""),
         yookassa_shop_id: str = Form(""),
-        yookassa_secret_key: str = Form("")):
+        yookassa_secret_key: str = Form(""),
+        vertical: str = Form("sport")):
     import io
     from fastapi.responses import StreamingResponse
     from app.services.bot_builder import build_bot_bundle
@@ -244,7 +245,8 @@ async def platform_builder_generate(
         cancel_lock_minutes=cancel_lock_minutes,
         signup_close_minutes=signup_close_minutes, welcome_text=welcome_text,
         tg_bot_username=tg_bot_username, public_base_url=public_base_url,
-        yookassa_shop_id=yookassa_shop_id, yookassa_secret_key=yookassa_secret_key)
+        yookassa_shop_id=yookassa_shop_id,
+        yookassa_secret_key=yookassa_secret_key, vertical=vertical)
     return StreamingResponse(
         io.BytesIO(zip_bytes), media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{out_name}"'})
@@ -269,6 +271,7 @@ async def platform_new_submit(request: Request,
                               vk_token: str = Form(""),
                               admin_tg_id: str = Form(""),
                               is_demo: str = Form(""),
+                              vertical: str = Form("sport"),
                               session: AsyncSession = Depends(get_session)):
     name = club_name.strip()[:200]
     if not name:
@@ -278,7 +281,8 @@ async def platform_new_submit(request: Request,
     admin_id = int(admin_tg_id) if admin_tg_id.strip().isdigit() else None
     tenant_out = await _create_tenant(
         TenantCreate(name=name, timezone=timezone.strip() or "Europe/Moscow",
-                    admin_tg_id=admin_id, is_demo=bool(is_demo)),
+                    admin_tg_id=admin_id, is_demo=bool(is_demo),
+                    vertical=vertical),
         session)
 
     reload_note = "Токены ботов не заданы — клуб создан, привяжите их позже."
@@ -329,6 +333,7 @@ async def platform_edit_submit(tenant_id: int, request: Request,
                                admin_tg_id: str = Form(""),
                                admin_vk_id: str = Form(""),
                                is_demo: str = Form(""),
+                               vertical: str = Form("sport"),
                                session: AsyncSession = Depends(get_session)):
     g = GlobalRepository(session)
     tenant = await g.get_tenant(tenant_id)
@@ -348,6 +353,8 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     tenant.admin_tg_id = int(admin_tg_id) if admin_tg_id.strip().isdigit() else None
     tenant.admin_vk_id = int(admin_vk_id) if admin_vk_id.strip().isdigit() else None
     tenant.is_demo = bool(is_demo)
+    from app.core.verticals import VERTICALS
+    tenant.vertical = vertical if vertical in VERTICALS else "sport"
     await session.commit()
 
     try:

@@ -13,6 +13,7 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import (
+    Master,
     Membership,
     Review,
     Schedule,
@@ -398,6 +399,43 @@ class TenantRepository:
             Payment.provider_payment_id == provider_payment_id,
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    # ---------- Мастера (салоны/тренеры) ----------
+
+    async def list_masters(self, active_only: bool = True) -> list[Master]:
+        stmt = select(Master).where(Master.tenant_id == self.tenant_id)
+        if active_only:
+            stmt = stmt.where(Master.active.is_(True))
+        stmt = stmt.order_by(Master.id.asc())
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def get_master(self, master_id: int) -> Master | None:
+        stmt = select(Master).where(Master.id == master_id,
+                                    Master.tenant_id == self.tenant_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def add_master(self, *, name: str, specialty: str = "",
+                         photo_url: str | None = None) -> Master:
+        m = Master(tenant_id=self.tenant_id, name=name, specialty=specialty,
+                   photo_url=photo_url, active=True)
+        self.session.add(m)
+        await self.session.flush()
+        return m
+
+    async def deactivate_master(self, master_id: int) -> bool:
+        """Скрывает мастера (active=False), не удаляя: у прошедших слотов
+        сохраняется привязка для истории."""
+        m = await self.get_master(master_id)
+        if m is None:
+            return False
+        m.active = False
+        return True
+
+    async def masters_map(self) -> dict[int, Master]:
+        """{id: Master} всех мастеров клуба (включая скрытых — для
+        отображения у существующих слотов)."""
+        stmt = select(Master).where(Master.tenant_id == self.tenant_id)
+        return {m.id: m for m in (await self.session.execute(stmt)).scalars()}
 
     # ---------- Роли (memberships) ----------
 

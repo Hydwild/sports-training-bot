@@ -195,7 +195,7 @@ def test_faq_page():
 def test_promo_and_demo_seed():
     with TestClient(app) as c:
         r = c.get("/promo")
-        assert r.status_code == 200 and "Бот записи" in r.text
+        assert r.status_code == 200 and "Боты" in r.text and "для записей" in r.text
         from app.api.promo_page import DEMO_BOT_URL
         assert DEMO_BOT_URL in r.text
         tid = c.post("/api/tenants", json={"name": "Демо"},

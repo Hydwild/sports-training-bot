@@ -16,8 +16,8 @@ from app.api.public_style import (
 from app.models.entities import Review
 
 _HEAD = """<!doctype html><html lang="ru"><head>""" + head_meta(
-    "Отзывы клиентов — Бот записи на тренировки",
-    "Что говорят тренеры и клубы, которые ведут запись на тренировки "
+    "Отзывы клиентов — Боты для записей",
+    "Что говорят тренеры, клубы и мастера, которые ведут онлайн-запись "
     "через бота — реальные отзывы клиентов.",
 ) + """<style>
 """ + SITE_CSS + """
@@ -98,9 +98,9 @@ def render_reviews_page(reviews: list[Review], notice: str | None = None,
     parts.append('<main class="wrap">')
     parts.append(
         '<div class="hero"><span class="eyebrow">Отзывы клиентов</span>'
-        '<h1>Что говорят тренеры и клубы</h1>'
-        '<p>Люди, которые каждый день ведут запись на тренировки через бота — '
-        'своими словами о том, что изменилось.</p>')
+        '<h1>Что говорят наши клиенты</h1>'
+        '<p>Тренеры, клубы и мастера, которые каждый день ведут запись '
+        'через бота — своими словами о том, что изменилось.</p>')
     if count:
         parts.append(
             '<div class="stats">'

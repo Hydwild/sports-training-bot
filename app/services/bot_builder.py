@@ -28,10 +28,13 @@ async def build_bot_bundle(
     cancel_lock_minutes: str = "0", signup_close_minutes: str = "0",
     welcome_text: str = "", tg_bot_username: str = "", public_base_url: str = "",
     yookassa_shop_id: str = "", yookassa_secret_key: str = "",
+    vertical: str = "sport",
 ) -> tuple[bytes, str]:
     """Возвращает (zip_bytes, filename) готовой сборки бота под клиента."""
     root = Path(__file__).resolve().parents[2]
+    from app.core.verticals import VERTICALS
     edition = "pro" if edition == "pro" else "lite"
+    vertical = vertical if vertical in VERTICALS else "sport"
     vk_token = vk_token.strip()
     tz = timezone.strip() or "Europe/Moscow"
     name = club_name.strip()[:100]
@@ -84,7 +87,7 @@ async def build_bot_bundle(
             TmpSession = async_sessionmaker(tmp_engine, expire_on_commit=False)
             async with TmpSession() as tmp_session:
                 tenant = Tenant(
-                    name=name, timezone=tz,
+                    name=name, timezone=tz, vertical=vertical,
                     admin_tg_id=admin_tg, admin_vk_id=admin_vk,
                     brand_name=brand_name.strip()[:200] or name,
                     brand_color=brand_color.strip() or "#3a7bd5",

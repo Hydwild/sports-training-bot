@@ -25,6 +25,7 @@ from app.bots import views
 from app.bots.user_info import fetch_tg_photo_ref
 from app.core.config import settings
 from app.core.features import features
+from app.core.verticals import VERTICALS, vcfg
 from app.db.engine import SessionLocal
 from app.repositories.repo import GlobalRepository
 from app.services import charts, tasks
@@ -105,20 +106,42 @@ BTN_NAMES = "✏️ Имена"
 BTN_SCHED = "📆 Расписание"
 BTN_REMIND = "⏰ Напоминание"
 
+# Вертикали (app/core/verticals.py): у салонов красоты часть кнопок меню
+# называется иначе («📅 Записаться», «➕ Добавить время», «✅ Визиты»,
+# «👤 Записать клиента»). Хендлеры матчатся по МНОЖЕСТВУ вариантов текста —
+# работает меню любой вертикали; тексты sport совпадают с историческими
+# константами BTN_*, существующие клубы ничего не замечают.
+_BTN_LIST_ALL = {v["btn_list"] for v in VERTICALS.values()}
+_BTN_NEW_ALL = {v["btn_new"] for v in VERTICALS.values()}
+_BTN_ATTEND_ALL = {v["btn_attend"] for v in VERTICALS.values()}
+_BTN_GUESTS_ALL = {v["btn_guest"] for v in VERTICALS.values()}
 
-def _menu(is_admin: bool, more: bool = False) -> ReplyKeyboardMarkup:
-    """Меню внизу экрана. У админа два экрана: основной и «⋯ Ещё»."""
+
+async def _tenant_vertical(session, tid: int) -> str:
+    t = await GlobalRepository(session).get_tenant(tid)
+    return (getattr(t, "vertical", None) or "sport") if t else "sport"
+
+
+def _menu(is_admin: bool, more: bool = False,
+          vertical: str = "sport") -> ReplyKeyboardMarkup:
+    """Меню внизу экрана. У админа два экрана: основной и «⋯ Ещё».
+    Тексты части кнопок зависят от вертикали клуба."""
+    vc = vcfg(vertical)
     B = KeyboardButton
     if not is_admin:
-        rows = [[B(text=BTN_LIST), B(text=BTN_MY)],
-                [B(text=BTN_RATING), B(text=BTN_PROFILE)]]
+        rows = [[B(text=vc["btn_list"]), B(text=BTN_MY)]]
+        rows.append([B(text=BTN_RATING), B(text=BTN_PROFILE)]
+                    if vc["show_rating"] else [B(text=BTN_PROFILE)])
     elif not more:
-        rows = [[B(text=BTN_NEW)],                       # широкая
-                [B(text=BTN_LIST), B(text=BTN_SCHED)],
-                [B(text=BTN_BROADCAST), B(text=BTN_GUESTS)],
-                [B(text=BTN_ATTEND), B(text=BTN_MORE)]]
+        rows = [[B(text=vc["btn_new"])],                 # широкая
+                [B(text=vc["btn_list"]), B(text=BTN_SCHED)],
+                [B(text=BTN_BROADCAST), B(text=vc["btn_guest"])],
+                [B(text=vc["btn_attend"]), B(text=BTN_MORE)]]
     else:
-        rows = [[B(text=BTN_MY), B(text=BTN_RATING)],
+        first = [B(text=BTN_MY)]
+        if vc["show_rating"]:
+            first.append(B(text=BTN_RATING))
+        rows = [first,
                 [B(text=BTN_PROFILE), B(text=BTN_STATS)],
                 [B(text=BTN_NAMES), B(text=BTN_DRAFTS)],
                 [B(text=BTN_REMIND)],
@@ -261,20 +284,16 @@ async def cmd_start(message: Message) -> None:
             "так что можно нажимать что угодно.",
             reply_markup=_demo_role_kb(), parse_mode="HTML")
         return
-    custom = None
+    custom, vert = None, "sport"
     try:
         async with SessionLocal() as _s:
             from app.repositories.repo import GlobalRepository as _G
             _t = await _G(_s).get_tenant(tid)
             custom = (_t.welcome_text or "").strip() if _t else None
+            vert = (getattr(_t, "vertical", None) or "sport") if _t else "sport"
     except Exception:
         custom = None
-    text = custom or (
-        "🏸 <b>Добро пожаловать!</b>\n\n"
-        "Это бот для записи на тренировки. Через меню внизу можно "
-        "посмотреть тренировки, записаться и увидеть свою статистику.\n\n"
-        "👇 Используйте кнопки меню под полем ввода."
-    )
+    text = custom or vcfg(vert)["welcome"]
     if is_admin:
         try:
             async with SessionLocal() as _s2:
@@ -286,7 +305,8 @@ async def cmd_start(message: Message) -> None:
         text += ("\n\n🛠 <b>Вы администратор клуба.</b>\n"
                  "Вам доступны кнопки создания тренировок, отметки явки, "
                  "подтверждения гостей, черновиков и рассылки.")
-    await message.answer(text, reply_markup=_menu(is_admin), parse_mode="HTML")
+    await message.answer(text, reply_markup=_menu(is_admin, vertical=vert),
+                         parse_mode="HTML")
 
 
 @router.callback_query(F.data.in_(("demo:coach", "demo:participant")))
@@ -301,6 +321,7 @@ async def cb_demo_role(query: CallbackQuery) -> None:
         tenant = await GlobalRepository(session).get_tenant(tid)
         if not (tenant and tenant.is_demo):
             await query.answer(); return
+        vert = getattr(tenant, "vertical", None) or "sport"
         if as_coach:
             svc = BookingService(session, tid)
             await svc.repo.upsert_membership(query.from_user.id, "coach", _name(query))
@@ -311,16 +332,18 @@ async def cb_demo_role(query: CallbackQuery) -> None:
             "🎓 <b>Вы тренер демо-клуба.</b>\nСоздавайте тренировки, "
             "отмечайте явку и оплату — всё как у настоящего клуба.",
             parse_mode="HTML")
-        await query.message.answer("👇 Меню тренера:", reply_markup=_menu(True))
+        await query.message.answer("👇 Меню тренера:",
+                                   reply_markup=_menu(True, vertical=vert))
     else:
         await query.answer("Вы участник демо-клуба ✅")
         await query.message.edit_text(
             "🙋 <b>Вы участник демо-клуба.</b>\nЗаписывайтесь на тренировки и "
             "смотрите статистику — как обычный клиент клуба.", parse_mode="HTML")
-        await query.message.answer("👇 Меню участника:", reply_markup=_menu(False))
+        await query.message.answer("👇 Меню участника:",
+                                   reply_markup=_menu(False, vertical=vert))
 
 
-@router.message(F.text == BTN_LIST)
+@router.message(F.text.in_(_BTN_LIST_ALL))
 async def btn_list(message: Message) -> None:
     await cmd_list(message)
 
@@ -358,17 +381,17 @@ async def btn_stats(message: Message) -> None:
     await cmd_stats(message)
 
 
-@router.message(F.text == BTN_NEW)
+@router.message(F.text.in_(_BTN_NEW_ALL))
 async def btn_new(message: Message, state: FSMContext) -> None:
     await cmd_new(message, state)
 
 
-@router.message(F.text == BTN_ATTEND)
+@router.message(F.text.in_(_BTN_ATTEND_ALL))
 async def btn_attend(message: Message) -> None:
     await cmd_attend(message)
 
 
-@router.message(F.text == BTN_GUESTS)
+@router.message(F.text.in_(_BTN_GUESTS_ALL))
 async def btn_guests(message: Message) -> None:
     await cmd_guests(message)
 
@@ -2112,9 +2135,11 @@ async def btn_more(message: Message) -> None:
     async with SessionLocal() as session:
         tid, is_admin = await _resolve_tenant(
             session, message.chat.id, message.from_user.id)
+        vert = await _tenant_vertical(session, tid) if tid else "sport"
     if tid is None or not is_admin:
         return
-    await message.answer("Дополнительно:", reply_markup=_menu(True, more=True))
+    await message.answer("Дополнительно:",
+                         reply_markup=_menu(True, more=True, vertical=vert))
 
 
 @router.message(F.text == BTN_BACK)
@@ -2122,6 +2147,8 @@ async def btn_back(message: Message) -> None:
     async with SessionLocal() as session:
         tid, is_admin = await _resolve_tenant(
             session, message.chat.id, message.from_user.id)
+        vert = await _tenant_vertical(session, tid) if tid else "sport"
     if tid is None:
         return
-    await message.answer("Главное меню:", reply_markup=_menu(is_admin))
+    await message.answer("Главное меню:",
+                         reply_markup=_menu(is_admin, vertical=vert))
