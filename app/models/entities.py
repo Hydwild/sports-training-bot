@@ -293,3 +293,19 @@ class Schedule(Base):
     last_date: Mapped[str] = mapped_column(String(10), default="")  # ISO даты последнего создания
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow)
+
+
+class Review(Base):
+    """Отзыв о сервисе (не о конкретном клубе) — публикуется на /reviews
+    только после ручного одобрения оператором площадки (защита от спама и
+    накрутки)."""
+    __tablename__ = "reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    club_name: Mapped[str] = mapped_column(String(160), default="")
+    rating: Mapped[int] = mapped_column(Integer)  # 1..5
+    text: Mapped[str] = mapped_column(Text)
+    approved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)

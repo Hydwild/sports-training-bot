@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import (
     Membership,
+    Review,
     Schedule,
     Outbox,
     Payment,
@@ -575,3 +576,36 @@ class GlobalRepository:
             Training.start_at <= now + dt.timedelta(hours=within_hours),
         )
         return list((await self.session.execute(stmt)).scalars())
+
+    # --- отзывы о сервисе (публичная страница /reviews) ---
+
+    async def add_review(self, *, name: str, club_name: str, rating: int,
+                         text: str) -> Review:
+        r = Review(name=name, club_name=club_name, rating=rating, text=text,
+                   approved=False)
+        self.session.add(r)
+        await self.session.flush()
+        return r
+
+    async def list_approved_reviews(self, limit: int = 50) -> list[Review]:
+        stmt = (select(Review).where(Review.approved.is_(True))
+                .order_by(Review.created_at.desc()).limit(limit))
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def list_pending_reviews(self) -> list[Review]:
+        stmt = (select(Review).where(Review.approved.is_(False))
+                .order_by(Review.created_at.asc()))
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def get_review(self, review_id: int) -> Review | None:
+        return await self.session.get(Review, review_id)
+
+    async def set_review_approved(self, review_id: int, approved: bool) -> None:
+        await self.session.execute(
+            update(Review).where(Review.id == review_id).values(approved=approved)
+        )
+
+    async def delete_review(self, review_id: int) -> None:
+        review = await self.session.get(Review, review_id)
+        if review:
+            await self.session.delete(review)

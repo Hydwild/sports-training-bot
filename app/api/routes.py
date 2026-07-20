@@ -576,3 +576,66 @@ async def faq_page():
     """FAQ для клиентов: как записаться, создать тренировку и т.д. — в faq_page.py."""
     from app.api.faq_page import FAQ_HTML
     return FAQ_HTML
+
+
+@public_router.get("/reviews", response_class=HTMLResponse)
+async def reviews_page(sent: str = "",
+                       session: AsyncSession = Depends(get_session)):
+    """Витрина отзывов + форма отправки — в reviews_page.py."""
+    from app.api.reviews_page import render_reviews_page
+    g = GlobalRepository(session)
+    reviews = await g.list_approved_reviews()
+    notice = ("Спасибо! Отзыв отправлен и появится на странице после проверки."
+              if sent == "1" else None)
+    return render_reviews_page(reviews, notice=notice)
+
+
+@public_router.post("/reviews", response_class=HTMLResponse)
+async def reviews_submit(request: Request,
+                         name: str = Form(...),
+                         club_name: str = Form(""),
+                         rating: int = Form(...),
+                         text: str = Form(...),
+                         website: str = Form(""),
+                         session: AsyncSession = Depends(get_session)):
+    """Приём нового отзыва: honeypot-поле + лимит по IP против спама,
+    отзыв уходит в модерацию (approved=False) и не виден на странице сразу."""
+    from fastapi.responses import RedirectResponse
+    from app.api.reviews_page import render_reviews_page
+    ip = (request.client.host if request.client else "?")
+    g = GlobalRepository(session)
+
+    if website.strip():
+        # honeypot заполнен — почти наверняка бот; тихо "принимаем",
+        # чтобы не подсказывать боту, что его вычислили
+        return RedirectResponse(url="/reviews?sent=1", status_code=303)
+
+    if not _rate_ok(ip):
+        reviews = await g.list_approved_reviews()
+        return render_reviews_page(
+            reviews, notice="Слишком много попыток, попробуйте через минуту.",
+            notice_kind="err")
+
+    name = name.strip()
+    text = text.strip()
+    if not name or not text or not (1 <= rating <= 5):
+        reviews = await g.list_approved_reviews()
+        return render_reviews_page(
+            reviews, notice="Заполните имя, текст отзыва и оценку.",
+            notice_kind="err")
+
+    await g.add_review(name=name[:120], club_name=club_name.strip()[:160],
+                       rating=rating, text=text[:1000])
+    await session.commit()
+
+    if settings.platform_owner_tg_id:
+        from app.bots import telegram as tg
+        try:
+            await tg.send_text_to_owner(
+                settings.platform_owner_tg_id,
+                f"⭐ Новый отзыв на модерации: «{name}», оценка {rating}/5.\n"
+                f"Проверить: /admin/platform/reviews")
+        except Exception:
+            pass
+
+    return RedirectResponse(url="/reviews?sent=1", status_code=303)

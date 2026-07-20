@@ -40,6 +40,15 @@
 </div>
 
 <div class="card">
+  <h2>Отзывы</h2>
+  <p class="muted">Публичная страница — <a href="/reviews" target="_blank">/reviews</a>.
+    Новые отзывы не публикуются сразу — проверьте и одобрите.</p>
+  <p><a class="btn" href="/admin/platform/reviews">📝 Модерация отзывов
+    {% if pending_reviews_count %}<span class="tag no">{{ pending_reviews_count }}</span>{% endif %}
+  </a></p>
+</div>
+
+<div class="card">
   <h2>Резервная копия базы</h2>
   <p class="muted">Раз в сутки автоматически, файлом в этот же Telegram-чат —
      хранится вне Railway, переживает падение платформы. План восстановления:

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Отзывы на модерации</h2>
+  <p class="muted">Публичная страница — <a href="/reviews" target="_blank">/reviews</a>.
+    Новый отзыв не виден там, пока вы его не одобрите.</p>
+
+  {% if pending %}
+  <table>
+    <tr><th>Оценка</th><th>Имя</th><th>Клуб</th><th>Текст</th><th></th></tr>
+    {% for r in pending %}
+    <tr>
+      <td>{{ r.rating }}/5</td>
+      <td>{{ r.name }}</td>
+      <td>{{ r.club_name or "—" }}</td>
+      <td style="max-width:360px">{{ r.text }}</td>
+      <td style="white-space:nowrap">
+        <form method="post" action="/admin/platform/reviews/{{ r.id }}/approve" style="display:inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn sm" type="submit">✅ Одобрить</button>
+        </form>
+        <form method="post" action="/admin/platform/reviews/{{ r.id }}/delete" style="display:inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn sm" type="submit">🗑 Удалить</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted" style="text-align:center;padding:24px 0">На модерации ничего нет.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Опубликованные ({{ approved|length }})</h2>
+  {% if approved %}
+  <table>
+    <tr><th>Оценка</th><th>Имя</th><th>Клуб</th><th>Текст</th><th></th></tr>
+    {% for r in approved %}
+    <tr>
+      <td>{{ r.rating }}/5</td>
+      <td>{{ r.name }}</td>
+      <td>{{ r.club_name or "—" }}</td>
+      <td style="max-width:360px">{{ r.text }}</td>
+      <td>
+        <form method="post" action="/admin/platform/reviews/{{ r.id }}/delete">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn sm" type="submit">🗑 Скрыть</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted" style="text-align:center;padding:24px 0">Пока ничего не опубликовано.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1604,6 +1604,19 @@ async def send_document_to_owner(user_id: int, filename: str, data: bytes,
         return False
 
 
+async def send_text_to_owner(user_id: int, text: str) -> bool:
+    """Текстовое уведомление владельцу площадки через ДЕФОЛТНОГО бота (не
+    привязано к конкретному клубу) — например, о новом отзыве на модерации."""
+    if not _bot:
+        return False
+    try:
+        await _bot.send_message(user_id, text)
+        return True
+    except Exception as e:
+        logger.warning("Не удалось отправить сообщение владельцу площадки: %s", e)
+        return False
+
+
 async def setup() -> None:
     global _bot, _dp
     if not settings.tg_token:

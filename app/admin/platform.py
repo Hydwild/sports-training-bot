@@ -137,8 +137,11 @@ async def platform_dashboard(request: Request,
                              _auth: None = Depends(require_platform_admin),
                              session: AsyncSession = Depends(get_session)):
     rows = await _dashboard_rows(request, session)
-    return templates.TemplateResponse(request, "platform_dashboard.html",
-                                      _ctx(request, tenants=rows, backup_msg=None))
+    pending = await GlobalRepository(session).list_pending_reviews()
+    return templates.TemplateResponse(
+        request, "platform_dashboard.html",
+        _ctx(request, tenants=rows, backup_msg=None,
+             pending_reviews_count=len(pending)))
 
 
 # ---------- Бэкап базы вручную (внешний, в Telegram) ----------
@@ -151,8 +154,47 @@ async def platform_backup_now(request: Request,
     from app.services import backup
     result = await backup.send_backup_to_owner()
     rows = await _dashboard_rows(request, session)
-    return templates.TemplateResponse(request, "platform_dashboard.html",
-                                      _ctx(request, tenants=rows, backup_msg=result))
+    pending = await GlobalRepository(session).list_pending_reviews()
+    return templates.TemplateResponse(
+        request, "platform_dashboard.html",
+        _ctx(request, tenants=rows, backup_msg=result,
+             pending_reviews_count=len(pending)))
+
+
+# ---------- Модерация отзывов (/reviews) ----------
+
+@router.get("/reviews", response_class=HTMLResponse)
+async def platform_reviews(request: Request,
+                           _auth: None = Depends(require_platform_admin),
+                           session: AsyncSession = Depends(get_session)):
+    g = GlobalRepository(session)
+    pending = await g.list_pending_reviews()
+    approved = await g.list_approved_reviews(limit=200)
+    return templates.TemplateResponse(
+        request, "platform_reviews.html",
+        _ctx(request, pending=pending, approved=approved))
+
+
+@router.post("/reviews/{review_id}/approve", response_class=HTMLResponse)
+async def platform_review_approve(review_id: int, request: Request,
+                                  _auth: None = Depends(require_platform_admin),
+                                  _csrf: None = Depends(require_csrf(COOKIE)),
+                                  session: AsyncSession = Depends(get_session)):
+    g = GlobalRepository(session)
+    await g.set_review_approved(review_id, True)
+    await session.commit()
+    return RedirectResponse(url="/admin/platform/reviews", status_code=303)
+
+
+@router.post("/reviews/{review_id}/delete", response_class=HTMLResponse)
+async def platform_review_delete(review_id: int, request: Request,
+                                 _auth: None = Depends(require_platform_admin),
+                                 _csrf: None = Depends(require_csrf(COOKIE)),
+                                 session: AsyncSession = Depends(get_session)):
+    g = GlobalRepository(session)
+    await g.delete_review(review_id)
+    await session.commit()
+    return RedirectResponse(url="/admin/platform/reviews", status_code=303)
 
 
 # ---------- Добавить клиента ----------
