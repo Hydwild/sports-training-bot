@@ -1,6 +1,11 @@
 """Промо-страница продукта: GET /promo. Отредактируйте текст ниже при необходимости."""
 from app.api.public_style import SITE_CSS, TELEGRAM_CONTACT, site_footer, site_nav
 
+# Демо-бот в Telegram: демо-клуб (Tenant.is_demo=True), любой посетитель
+# сам выбирает роль "тренер" или "участник" (см. app/bots/telegram.py,
+# app/services/tasks.py::_demo_reset_daily — данные сбрасываются каждую ночь).
+DEMO_BOT_URL = "https://t.me/Lecor3232_bot"
+
 _EXTRA_CSS = """
 .steps{counter-reset:s;display:flex;flex-direction:column;gap:0;margin-top:18px}
 .step{display:flex;gap:18px;align-items:flex-start;padding:18px 0;
@@ -29,6 +34,16 @@ _EXTRA_CSS = """
   max-width:44ch;margin:0 auto 22px}
 .demo{text-align:center;padding:8px 0 10px;font:400 14.5px/1.6 -apple-system,
   system-ui,sans-serif;color:var(--muted)}
+.demo-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+.demo-card{border-radius:16px;padding:26px 24px;text-align:center;
+  border:1px solid var(--border);background:var(--surface);box-shadow:var(--shadow)}
+.demo-card.primary{border-color:var(--gold)}
+.demo-card .tag{display:inline-block;font:700 11px/1 -apple-system,system-ui,sans-serif;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:10px}
+.demo-card h3{font:400 19px/1.3 Georgia,serif;margin:0 0 8px}
+.demo-card p{color:var(--muted);font:400 13.5px/1.55 -apple-system,system-ui,sans-serif;
+  margin:0 0 18px}
+@media (max-width:640px){.demo-grid{grid-template-columns:1fr}}
 """
 
 PROMO_HTML = ("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -104,8 +119,26 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 </div>
 
 <h2 class="section" id="demo">Живое демо</h2>
-<p class="demo">Посмотрите страницу записи демо-клуба:
-  <a href="/club/1">открыть демо</a> — можно записаться и отменить запись.</p>
+<p class="section-lead">Можно ничего не устанавливать и не регистрироваться —
+  просто нажать и посмотреть.</p>
+<div class="demo-grid">
+  <div class="demo-card primary">
+    <span class="tag">Полный опыт</span>
+    <h3>Демо-бот в Telegram</h3>
+    <p>Откройте бота и выберите роль — «Я тренер» или «Я участник». Можно
+      создавать тренировки, записываться, отмечать явку — всё как в
+      настоящем клубе. Данные сбрасываются каждую ночь.</p>
+    <a class="btn-gold" href=\"""" + DEMO_BOT_URL + """\">Открыть бота →</a>
+  </div>
+  <div class="demo-card">
+    <span class="tag">Быстрый взгляд</span>
+    <h3>Страница записи</h3>
+    <p>Как видит клуб участник без Telegram и ВК — по прямой ссылке
+      или QR-коду в зале.</p>
+    <a class="btn-ghost" style="color:var(--ink);border-color:var(--border)"
+      href="/club/1">Открыть страницу →</a>
+  </div>
+</div>
 
 """ + site_footer() + """
 </div>
