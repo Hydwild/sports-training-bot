@@ -203,6 +203,115 @@ async def test_cmd_start_beauty_welcome_and_menu():
     assert "➕ Добавить время" in texts
 
 
+def test_vk_menu_beauty_labels_and_sport_default():
+    import json
+    import app.bots.vk as vk
+
+    def labels(kb_json):
+        kb = json.loads(kb_json)
+        return [b["action"]["label"] for row in kb["buttons"] for b in row]
+
+    token = vk._ctx_vertical.set("beauty")
+    try:
+        texts = labels(vk._menu_kb(True))
+        assert "➕ Добавить время" in texts
+        assert "📅 Записаться" in texts
+        assert "✅ Визиты" in texts
+        assert "👤 Записать клиента" in texts
+        p_texts = labels(vk._menu_kb(False))
+        assert "🏆 Рейтинг" not in p_texts
+    finally:
+        vk._ctx_vertical.reset(token)
+    # sport (по умолчанию) — исторические подписи
+    texts = labels(vk._menu_kb(True))
+    assert "➕ Создать тренировку" in texts
+    assert "🏸 Тренировки" in texts
+    assert "🏆 Рейтинг" in labels(vk._menu_kb(False))
+
+
+async def test_vk_resolve_tenant_sets_vertical_ctx():
+    import app.bots.vk as vk
+    from app.db.engine import SessionLocal, engine
+    with TestClient(app) as c:
+        c.post("/api/tenants", json={
+            "name": "VK Салон", "vertical": "beauty", "vk_group_id": 555001,
+        }, headers=H)
+    await engine.dispose()
+    async with SessionLocal() as s:
+        t = await vk._resolve_tenant(s, 555001)
+        assert t is not None
+        assert vk._ctx_vertical.get() == "beauty"
+
+
+# ---------- UI мастеров в панели оператора ----------
+
+def _op_login(c):
+    login = c.post("/admin/platform/login", data={"token": "tok"},
+                   follow_redirects=False)
+    c.cookies.set("platform_token", login.cookies["platform_token"])
+    return re.search(r'name="csrf" value="([^"]+)"',
+                     c.get("/admin/platform").text).group(1)
+
+
+def test_platform_masters_page_requires_auth():
+    with TestClient(app) as c:
+        r = c.get("/admin/platform/1/masters", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin/platform/login"
+
+
+def test_platform_masters_add_toggle_flow():
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={
+            "name": "Салон UI", "vertical": "beauty"}, headers=H).json()["id"]
+        csrf = _op_login(c)
+        page = c.get(f"/admin/platform/{tid}/masters")
+        assert page.status_code == 200
+        assert "Мастеров пока нет" in page.text
+
+        # добавление
+        r = c.post(f"/admin/platform/{tid}/masters/add", data={
+            "csrf": csrf, "name": "Вера Кудрина",
+            "specialty": "Колорист"}, follow_redirects=False)
+        assert r.status_code == 303
+        page = c.get(f"/admin/platform/{tid}/masters").text
+        assert "Вера Кудрина" in page and "Колорист" in page
+        assert "активен" in page
+
+        # мастер доступен через API и на публичной странице после привязки
+        masters = c.get(f"/api/tenants/{tid}/masters", headers=H).json()
+        assert masters[0]["name"] == "Вера Кудрина"
+        _mk_training(c, tid, title="Окрашивание", maxp=1,
+                     master_id=masters[0]["id"])
+        assert "Вера Кудрина" in c.get(f"/club/{tid}").text
+
+        # скрыть / вернуть
+        mid = masters[0]["id"]
+        r = c.post(f"/admin/platform/{tid}/masters/{mid}/toggle",
+                   data={"csrf": csrf}, follow_redirects=False)
+        assert r.status_code == 303
+        assert "скрыт" in c.get(f"/admin/platform/{tid}/masters").text
+        c.post(f"/admin/platform/{tid}/masters/{mid}/toggle",
+               data={"csrf": csrf})
+        assert "активен" in c.get(f"/admin/platform/{tid}/masters").text
+
+
+def test_platform_masters_add_rejects_bad_photo_and_csrf():
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={"name": "Салон Валидации"},
+                     headers=H).json()["id"]
+        csrf = _op_login(c)
+        # javascript: в фото
+        r = c.post(f"/admin/platform/{tid}/masters/add", data={
+            "csrf": csrf, "name": "Злоумышленник",
+            "photo_url": "javascript:alert(1)"})
+        assert r.status_code == 400
+        assert "http(s)-ссылка" in r.text
+        # без csrf
+        assert c.post(f"/admin/platform/{tid}/masters/add", data={
+            "name": "Без токена"}).status_code == 403
+
+
 def test_builder_bundle_carries_vertical():
     with TestClient(app) as c:
         login = c.post("/admin/platform/login", data={"token": "tok"},

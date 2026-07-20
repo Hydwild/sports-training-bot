@@ -252,6 +252,78 @@ async def platform_builder_generate(
         headers={"Content-Disposition": f'attachment; filename="{out_name}"'})
 
 
+# ---------- Мастера клуба (салоны/тренеры) ----------
+
+async def _masters_ctx(request: Request, session: AsyncSession,
+                       tenant_id: int, **extra) -> dict:
+    from app.repositories.repo import TenantRepository
+    g = GlobalRepository(session)
+    tenant = await g.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+    masters = await TenantRepository(session, tenant_id).list_masters(
+        active_only=False)
+    return _ctx(request, t=tenant, masters=masters,
+                error=None, saved=False, **extra)
+
+
+@router.get("/{tenant_id}/masters", response_class=HTMLResponse)
+async def platform_masters(tenant_id: int, request: Request,
+                           _auth: None = Depends(require_platform_admin),
+                           session: AsyncSession = Depends(get_session)):
+    ctx = await _masters_ctx(request, session, tenant_id)
+    return templates.TemplateResponse(request, "platform_masters.html", ctx)
+
+
+@router.post("/{tenant_id}/masters/add", response_class=HTMLResponse)
+async def platform_masters_add(tenant_id: int, request: Request,
+                               _auth: None = Depends(require_platform_admin),
+                               _csrf: None = Depends(require_csrf(COOKIE)),
+                               name: str = Form(...),
+                               specialty: str = Form(""),
+                               photo_url: str = Form(""),
+                               session: AsyncSession = Depends(get_session)):
+    from pydantic import ValidationError
+    from app.api.schemas import MasterCreate
+    from app.repositories.repo import TenantRepository
+    try:
+        # та же валидация, что в API (в т.ч. http(s) для photo_url —
+        # адрес попадает в <img src> публичной страницы)
+        body = MasterCreate(name=name, specialty=specialty,
+                            photo_url=photo_url or None)
+    except ValidationError:
+        ctx = await _masters_ctx(request, session, tenant_id)
+        ctx["error"] = ("Проверьте поля: имя от 2 символов, фото — "
+                        "http(s)-ссылка на картинку")
+        return templates.TemplateResponse(
+            request, "platform_masters.html", ctx, status_code=400)
+    repo = TenantRepository(session, tenant_id)
+    await repo.add_master(name=body.name.strip(),
+                          specialty=body.specialty.strip(),
+                          photo_url=body.photo_url)
+    await session.commit()
+    return RedirectResponse(f"/admin/platform/{tenant_id}/masters",
+                            status_code=303)
+
+
+@router.post("/{tenant_id}/masters/{master_id}/toggle",
+             response_class=HTMLResponse)
+async def platform_masters_toggle(tenant_id: int, master_id: int,
+                                  request: Request,
+                                  _auth: None = Depends(require_platform_admin),
+                                  _csrf: None = Depends(require_csrf(COOKIE)),
+                                  session: AsyncSession = Depends(get_session)):
+    from app.repositories.repo import TenantRepository
+    repo = TenantRepository(session, tenant_id)
+    m = await repo.get_master(master_id)
+    if m is None:
+        raise HTTPException(status_code=404, detail="Мастер не найден")
+    await repo.set_master_active(master_id, not m.active)
+    await session.commit()
+    return RedirectResponse(f"/admin/platform/{tenant_id}/masters",
+                            status_code=303)
+
+
 # ---------- Добавить клиента ----------
 
 @router.get("/new", response_class=HTMLResponse)

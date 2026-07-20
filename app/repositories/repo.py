@@ -425,10 +425,13 @@ class TenantRepository:
     async def deactivate_master(self, master_id: int) -> bool:
         """Скрывает мастера (active=False), не удаляя: у прошедших слотов
         сохраняется привязка для истории."""
+        return await self.set_master_active(master_id, False)
+
+    async def set_master_active(self, master_id: int, active: bool) -> bool:
         m = await self.get_master(master_id)
         if m is None:
             return False
-        m.active = False
+        m.active = active
         return True
 
     async def masters_map(self) -> dict[int, Master]:

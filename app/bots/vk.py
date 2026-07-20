@@ -126,31 +126,43 @@ def _confirm_del_kb(tid: int) -> str:
     return kb.get_json()
 
 
+# Вертикаль текущего клуба (sport|beauty): выставляется в _resolve_tenant —
+# каждый хендлер проходит через него до построения меню, так что ~30 вызовов
+# _menu_kb() получают правильные подписи без изменения сигнатур. VK-роутинг
+# идёт по payload["a"], поэтому смена ПОДПИСЕЙ кнопок хендлеры не ломает.
+_ctx_vertical = _cv.ContextVar("vk_vertical", default="sport")
+
+
 def _menu_kb(is_admin: bool = False, more: bool = False) -> str:
-    """Меню снизу. У админа два экрана: основной и «⋯ Ещё»."""
+    """Меню снизу. У админа два экрана: основной и «⋯ Ещё».
+    Подписи части кнопок зависят от вертикали клуба (см. _ctx_vertical)."""
     from vkbottle import Keyboard, Text, KeyboardButtonColor
+    from app.core.verticals import vcfg
+    vc = vcfg(_ctx_vertical.get())
     kb = Keyboard(inline=False, one_time=False)
     if not is_admin:
-        kb.add(Text("🏸 Тренировки", payload={"a": "list"}))
+        kb.add(Text(vc["btn_list"], payload={"a": "list"}))
         kb.add(Text("📅 Мои записи", payload={"a": "my"}))
         kb.row()
         kb.add(Text("👤 Профиль", payload={"a": "profile"}))
-        kb.add(Text("🏆 Рейтинг", payload={"a": "rating"}))
+        if vc["show_rating"]:
+            kb.add(Text("🏆 Рейтинг", payload={"a": "rating"}))
     elif not more:
-        kb.add(Text("➕ Создать тренировку", payload={"a": "create"}),
+        kb.add(Text(vc["btn_new"], payload={"a": "create"}),
                color=KeyboardButtonColor.POSITIVE)
         kb.row()
-        kb.add(Text("🏸 Тренировки", payload={"a": "list"}))
+        kb.add(Text(vc["btn_list"], payload={"a": "list"}))
         kb.add(Text("📆 Расписание", payload={"a": "sched"}))
         kb.row()
         kb.add(Text("📢 Рассылка", payload={"a": "bcast"}))
-        kb.add(Text("👤 Записать гостя", payload={"a": "guest_pick"}))
+        kb.add(Text(vc["btn_guest"], payload={"a": "guest_pick"}))
         kb.row()
-        kb.add(Text("✅ Явки", payload={"a": "att_pick"}))
+        kb.add(Text(vc["btn_attend"], payload={"a": "att_pick"}))
         kb.add(Text("⋯ Ещё", payload={"a": "menu_more"}))
     else:
         kb.add(Text("📅 Мои записи", payload={"a": "my"}))
-        kb.add(Text("🏆 Рейтинг", payload={"a": "rating"}))
+        if vc["show_rating"]:
+            kb.add(Text("🏆 Рейтинг", payload={"a": "rating"}))
         kb.row()
         kb.add(Text("👤 Профиль", payload={"a": "profile"}))
         kb.add(Text("📊 Статистика", payload={"a": "stats"}))
@@ -205,10 +217,14 @@ async def _resolve_tenant(session, group_id):
     if gid:
         for t in tenants:
             if t.vk_group_id == gid:
+                _ctx_vertical.set(getattr(t, "vertical", None) or "sport")
                 return t
         return None
     with_vk = [t for t in tenants if t.vk_group_id]
-    return with_vk[0] if len(with_vk) == 1 else None
+    if len(with_vk) == 1:
+        _ctx_vertical.set(getattr(with_vk[0], "vertical", None) or "sport")
+        return with_vk[0]
+    return None
 
 
 async def _is_full(svc, training) -> bool:
