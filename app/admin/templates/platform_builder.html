@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>🛠 Конфигуратор бота для клиента</h2>
+  <p>Заполните поля — скачается готовая папка бота. Клуб и тренер будут
+     настроены сразу: клиенту не придётся ничего донастраивать через API.</p>
+  <form method="post" action="/admin/platform/builder">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+
+    <h3>Основное</h3>
+    <p><label>Название клуба<br>
+      <input name="club_name" required placeholder="Клуб «Волан»"
+             style="width:100%;padding:8px"></label></p>
+
+    <p><label>Редакция<br>
+      <select name="edition" id="edition" onchange="toggleEdition()"
+              style="padding:8px">
+        <option value="lite">Lite — запись, очередь, напоминания</option>
+        <option value="pro">Pro — + статистика, экспорт, оплаты, веб-админка</option>
+      </select></label></p>
+
+    <p><label>Часовой пояс<br>
+      <select name="timezone" style="padding:8px">
+        <option>Europe/Moscow</option><option>Europe/Kaliningrad</option>
+        <option>Europe/Samara</option><option>Asia/Yekaterinburg</option>
+        <option>Asia/Omsk</option><option>Asia/Novosibirsk</option>
+        <option>Asia/Krasnoyarsk</option><option>Asia/Irkutsk</option>
+        <option>Asia/Yakutsk</option><option>Asia/Vladivostok</option>
+      </select></label></p>
+
+    <h3>Токены ботов</h3>
+    <p><label>Токен Telegram-бота (от @BotFather)<br>
+      <input name="tg_token" required placeholder="123456:ABC..."
+             style="width:100%;padding:8px"></label></p>
+
+    <p><label>Токен сообщества ВКонтакте (пусто — без ВК)<br>
+      <input name="vk_token" placeholder="vk1.a...."
+             style="width:100%;padding:8px"></label></p>
+
+    <h3>Тренер клиента</h3>
+    <p class="muted">Если заполнить — бот сразу узнает тренера как админа
+       клуба, без ручной настройки. Узнать Telegram ID можно у @userinfobot.</p>
+    <p><label>Telegram ID тренера<br>
+      <input name="admin_tg_id" type="number" placeholder="123456789"
+             style="width:100%;padding:8px"></label></p>
+    <p><label>VK ID тренера (числовой, необязательно)<br>
+      <input name="admin_vk_id" type="number" placeholder="987654321"
+             style="width:100%;padding:8px"></label></p>
+    <p class="muted">Привязку к конкретному чату/группе клиент сделает
+       сам после первого сообщения боту (кнопкой в самом боте) — как обычно.</p>
+
+    <h3>Брендинг</h3>
+    <p><label>Отображаемое имя клуба (в сообщениях, по умолчанию = название выше)<br>
+      <input name="brand_name" placeholder="оставьте пустым — возьмётся из названия"
+             style="width:100%;padding:8px"></label></p>
+    <p><label>Цвет бренда (для веб-админки Pro)<br>
+      <input name="brand_color" type="color" value="#3a7bd5"></label></p>
+
+    <h3>Тексты</h3>
+    <p><label>Приветствие бота (пусто — стандартное)<br>
+      <textarea name="welcome_text" rows="3" placeholder="Привет! Это бот клуба «Волан»..."
+        style="width:100%;padding:8px"></textarea></label></p>
+
+    <h3>Напоминания и правила записи</h3>
+    <p><label><input type="checkbox" name="reminder_enabled" checked>
+       Напоминать участникам о тренировке</label></p>
+    <p><label>За сколько минут до начала напоминать<br>
+      <input name="reminder_minutes" type="number" min="1" value="60"
+             style="width:120px;padding:8px"></label></p>
+    <p><label>Закрывать запись за N минут до начала (0 — не закрывать)<br>
+      <input name="signup_close_minutes" type="number" min="0" value="0"
+             style="width:120px;padding:8px"></label></p>
+    <p><label>Запретить отмену записи за N минут до начала (0 — без ограничений)<br>
+      <input name="cancel_lock_minutes" type="number" min="0" value="0"
+             style="width:120px;padding:8px"></label></p>
+
+    <div id="pro-block" style="display:none">
+      <h3>Веб-админка (только Pro)</h3>
+      <p><label>Username Telegram-бота без @ (для входа через Telegram Login Widget)<br>
+        <input name="tg_bot_username" placeholder="MyClubBot"
+               style="width:100%;padding:8px"></label></p>
+      <p><label>Публичный адрес сайта (после первого деплоя на Railway, можно оставить пустым)<br>
+        <input name="public_base_url" placeholder="https://имя-проекта.up.railway.app"
+               style="width:100%;padding:8px"></label></p>
+
+      <h3>Приём оплаты ЮKassa (необязательно, можно настроить позже)</h3>
+      <p><label>Shop ID<br>
+        <input name="yookassa_shop_id"
+               style="width:100%;padding:8px"></label></p>
+      <p><label>Секретный ключ<br>
+        <input name="yookassa_secret_key"
+               style="width:100%;padding:8px"></label></p>
+    </div>
+
+    <p><button class="btn" type="submit">📦 Собрать и скачать бота</button></p>
+  </form>
+  <p class="muted">Секреты (JWT, API-токен) генерируются автоматически.
+     База — SQLite на диске /data (отдельный Postgres не нужен).</p>
+</div>
+<script>
+function toggleEdition() {
+  var pro = document.getElementById('edition').value === 'pro';
+  document.getElementById('pro-block').style.display = pro ? 'block' : 'none';
+}
+toggleEdition();
+</script>
+{% endblock %}

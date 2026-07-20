@@ -197,6 +197,59 @@ async def platform_review_delete(review_id: int, request: Request,
     return RedirectResponse(url="/admin/platform/reviews", status_code=303)
 
 
+# ---------- Конфигуратор бота для нового клиента ----------
+# Та же сборка, что и /admin/builder (для владельца клуба), но доступна
+# оператору площадки напрямую — без необходимости логиниться под кого-то
+# из клубов. Логика — в app/services/bot_builder.py.
+
+@router.get("/builder", response_class=HTMLResponse)
+async def platform_builder(request: Request,
+                           _auth: None = Depends(require_platform_admin)):
+    return templates.TemplateResponse(request, "platform_builder.html",
+                                      _ctx(request))
+
+
+@router.post("/builder")
+async def platform_builder_generate(
+        request: Request,
+        _auth: None = Depends(require_platform_admin),
+        _csrf: None = Depends(require_csrf(COOKIE)),
+        club_name: str = Form(...),
+        edition: str = Form("lite"),
+        timezone: str = Form("Europe/Moscow"),
+        tg_token: str = Form(...),
+        vk_token: str = Form(""),
+        admin_tg_id: str = Form(""),
+        admin_vk_id: str = Form(""),
+        brand_name: str = Form(""),
+        brand_color: str = Form("#3a7bd5"),
+        reminder_enabled: str = Form(""),
+        reminder_minutes: str = Form("60"),
+        cancel_lock_minutes: str = Form("0"),
+        signup_close_minutes: str = Form("0"),
+        welcome_text: str = Form(""),
+        tg_bot_username: str = Form(""),
+        public_base_url: str = Form(""),
+        yookassa_shop_id: str = Form(""),
+        yookassa_secret_key: str = Form("")):
+    import io
+    from fastapi.responses import StreamingResponse
+    from app.services.bot_builder import build_bot_bundle
+
+    zip_bytes, out_name = await build_bot_bundle(
+        club_name=club_name, edition=edition, timezone=timezone,
+        tg_token=tg_token, vk_token=vk_token, admin_tg_id=admin_tg_id,
+        admin_vk_id=admin_vk_id, brand_name=brand_name, brand_color=brand_color,
+        reminder_enabled=reminder_enabled, reminder_minutes=reminder_minutes,
+        cancel_lock_minutes=cancel_lock_minutes,
+        signup_close_minutes=signup_close_minutes, welcome_text=welcome_text,
+        tg_bot_username=tg_bot_username, public_base_url=public_base_url,
+        yookassa_shop_id=yookassa_shop_id, yookassa_secret_key=yookassa_secret_key)
+    return StreamingResponse(
+        io.BytesIO(zip_bytes), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'})
+
+
 # ---------- Добавить клиента ----------
 
 @router.get("/new", response_class=HTMLResponse)

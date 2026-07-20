@@ -1,50 +1,48 @@
 """Публичная FAQ-страница для клиентов: GET /faq. Правьте текст здесь."""
+from app.api.public_style import SITE_CSS, TELEGRAM_CONTACT, site_footer, site_nav
 
-FAQ_HTML = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+_EXTRA_CSS = """
+.faq-nav{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:0 0 30px}
+.faq-nav a{background:var(--surface);border:1px solid var(--border);color:var(--ink);
+  padding:8px 16px;border-radius:999px;text-decoration:none;font:600 13px/1
+  -apple-system,system-ui,sans-serif}
+.faq-nav a:hover{border-color:var(--gold)}
+h2.group{font:400 22px/1.3 Georgia,serif;margin:44px 0 14px;text-align:left}
+details{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  padding:2px 18px;margin-bottom:10px;box-shadow:var(--shadow)}
+summary{cursor:pointer;padding:14px 0;font:700 14.5px/1.4 -apple-system,system-ui,
+  sans-serif;list-style:none;display:flex;align-items:center;gap:10px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"+";color:var(--gold);font-weight:700;width:16px;flex-shrink:0;
+  font-size:18px}
+details[open] summary::before{content:"–"}
+details p, details ol, details ul{margin:0 0 16px;color:var(--ink);
+  font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}
+details ol, details ul{padding-left:20px}
+code{background:var(--surface-2);padding:1px 7px;border-radius:5px;font-size:.92em}
+"""
+
+FAQ_HTML = ("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Вопросы и ответы — бот записи на тренировки</title><style>
-:root{--bg:#f4f6fb;--surface:#fff;--text:#1a1a2e;--muted:#6b7280;
---border:#eceef4;--shadow:rgba(20,30,60,.08);--c:#3a7bd5}
-@media (prefers-color-scheme:dark){:root{--bg:#14161c;--surface:#1e2129;
---text:#e7e9ee;--muted:#9aa1ad;--border:#2b2f3a;--shadow:rgba(0,0,0,.35)}}
-*{box-sizing:border-box}
-body{font-family:system-ui,sans-serif;margin:0;color:var(--text);background:var(--bg)}
-.wrap{max-width:760px;margin:0 auto;padding:24px 16px 48px}
-.hero{background:linear-gradient(135deg,var(--c),#00d2ff);color:#fff;
-text-align:center;padding:40px 16px;margin-bottom:8px}
-.hero h1{font-size:26px;margin:0 0 8px}.hero p{margin:0;opacity:.95}
-h2{font-size:19px;margin:32px 0 12px;padding-bottom:6px;
-border-bottom:2px solid var(--border)}
-nav{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:18px 0}
-nav a{background:var(--surface);border:1px solid var(--border);color:var(--text);
-padding:8px 14px;border-radius:20px;text-decoration:none;font-size:14px}
-nav a:hover{border-color:var(--c)}
-details{background:var(--surface);border:1px solid var(--border);border-radius:12px;
-padding:2px 16px;margin-bottom:10px;box-shadow:0 1px 3px var(--shadow)}
-summary{cursor:pointer;padding:12px 0;font-weight:600;list-style:none;
-display:flex;align-items:center;gap:8px}
-summary::-webkit-details-marker{display:none}
-summary::before{content:"+";color:var(--c);font-weight:700;width:16px;flex-shrink:0}
-details[open] summary::before{content:"–"}
-details p, details ol, details ul{margin:0 0 14px;color:var(--text);line-height:1.55}
-details ol, details ul{padding-left:20px}
-a{color:var(--c)}
-code{background:var(--border);padding:1px 6px;border-radius:4px;font-size:.92em}
-footer{text-align:center;color:var(--muted);padding:30px 0 10px;font-size:13px}
+""" + SITE_CSS + _EXTRA_CSS + """
 </style></head><body>
-<div class="hero">
-  <h1>❓ Вопросы и ответы</h1>
-  <p>Как пользоваться ботом записи — для участников и для тренеров</p>
-</div>
+""" + site_nav("faq") + """
 <div class="wrap">
 
-<nav>
+<div class="hero">
+  <span class="eyebrow">Вопросы и ответы</span>
+  <h1>Как пользоваться ботом записи</h1>
+  <p>Для участников и для тренеров — коротко и по делу.</p>
+</div>
+
+<div class="faq-nav">
   <a href="#participants">Для участников</a>
   <a href="#trainers">Для тренеров</a>
   <a href="#tech">Технические вопросы</a>
-</nav>
+</div>
 
-<h2 id="participants">Для участников</h2>
+<h2 class="group" id="participants">Для участников</h2>
 
 <details>
 <summary>Как записаться на тренировку?</summary>
@@ -73,7 +71,7 @@ footer{text-align:center;color:var(--muted);padding:30px 0 10px;font-size:13px}
 явки, которые ставит тренер.</p>
 </details>
 
-<h2 id="trainers">Для тренеров</h2>
+<h2 class="group" id="trainers">Для тренеров</h2>
 
 <details>
 <summary>Как создать тренировку?</summary>
@@ -152,7 +150,7 @@ Telegram (без пароля, кнопка «Войти через Telegram»).
 неподтверждённых гостях и автоснятие гостей, которых не подтвердили.</p>
 </details>
 
-<h2 id="tech">Технические вопросы</h2>
+<h2 class="group" id="tech">Технические вопросы</h2>
 
 <details>
 <summary>Бот не отвечает — что делать?</summary>
@@ -183,6 +181,10 @@ Telegram (без пароля, кнопка «Войти через Telegram»).
 уточнения условий.</p>
 </details>
 
+<p style="text-align:center;margin-top:36px">
+  <a class="btn-gold" href=\"""" + TELEGRAM_CONTACT + """\">Остались вопросы — написать в Telegram</a>
+</p>
+
+""" + site_footer() + """
 </div>
-<footer>Остались вопросы — напишите администратору платформы.</footer>
-</body></html>"""
+</body></html>""")

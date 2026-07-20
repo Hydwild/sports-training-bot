@@ -263,6 +263,52 @@ def test_backup_now_shows_result_on_dashboard(monkeypatch):
         assert "Бэкап отправлен" in r.text
 
 
+# ---------- Конфигуратор бота доступен оператору напрямую ----------
+
+def test_platform_builder_requires_auth():
+    with TestClient(app) as c:
+        r = c.get("/admin/platform/builder", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin/platform/login"
+
+
+def test_platform_builder_generates_bundle_without_tenant_login():
+    """Оператор площадки не залогинен ни под одним клубом (у него вообще
+    нет tenant-роли) — конфигуратор всё равно должен работать через
+    platform_token, а не require_role('owner')."""
+    import io
+    import zipfile
+
+    with TestClient(app) as c:
+        login = c.post("/admin/platform/login", data={"token": TOKEN},
+                       follow_redirects=False)
+        c.cookies.set("platform_token", login.cookies["platform_token"])
+        page = c.get("/admin/platform/builder")
+        assert page.status_code == 200
+        csrf = _csrf(page.text)
+        r = c.post("/admin/platform/builder", data={
+            "csrf": csrf,
+            "club_name": "Клуб Оператора", "edition": "lite",
+            "timezone": "Europe/Moscow", "tg_token": "1:X", "vk_token": "",
+            "admin_tg_id": "777", "reminder_minutes": "60",
+            "cancel_lock_minutes": "0", "brand_color": "#3a7bd5"})
+        assert r.status_code == 200
+        z = zipfile.ZipFile(io.BytesIO(r.content))
+        names = z.namelist()
+        assert "app/main.py" in names and ".env" in names and "seed.db" in names
+        assert "TG_TOKEN=1:X" in z.read(".env").decode()
+
+
+def test_platform_builder_without_csrf_rejected():
+    with TestClient(app) as c:
+        login = c.post("/admin/platform/login", data={"token": TOKEN},
+                       follow_redirects=False)
+        c.cookies.set("platform_token", login.cookies["platform_token"])
+        r = c.post("/admin/platform/builder",
+                   data={"club_name": "X", "tg_token": "1:X"})
+        assert r.status_code == 403
+
+
 def test_rate_limit_on_login_attempts():
     from app.api import routes as api_routes
     api_routes._ip_hits.clear()
