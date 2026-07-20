@@ -117,7 +117,7 @@ def site_nav(active: str) -> str:
         for key, href, label in items)
     return (
         '<nav class="site-nav">'
-        '<a class="brand" href="/promo">🏸 <b>Бот записи</b> на тренировки</a>'
+        '<a class="brand" href="/promo"><b>Бот записи</b> на тренировки</a>'
         f'<div class="links">{links}</div>'
         '</nav>')
 
