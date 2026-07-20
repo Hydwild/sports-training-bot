@@ -315,30 +315,103 @@ def _rate_ok(ip: str, limit: int = 5, window: int = 60) -> bool:
             del _ip_hits[k]
     return True
 
+# Мелкие line-иконки в стиле /promo (обводка наследует цвет через CSS)
+_I_CAL = ('<svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" '
+          'rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></svg>')
+_I_PIN = ('<svg viewBox="0 0 24 24"><path d="M12 21s-6.5-5.2-6.5-10a6.5 6.5 0 '
+          '0113 0C18.5 15.8 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.5"/></svg>')
+_I_CHECK = ('<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/>'
+            '<path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>')
+_I_CLOCK = ('<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/>'
+            '<path d="M12 7.5V12l3 2"/></svg>')
+_I_INFO = ('<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/>'
+           '<path d="M12 11v5M12 8v.01"/></svg>')
+
+# Страница записи клуба: тёплая палитра общего сайта (/promo, /faq, /reviews),
+# фирменный цвет клуба ({color}) — акцент кнопок/ссылок/прогресса.
 _PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title><style>
-:root{{--bg:#f4f6fa;--surface:#fff;--text:#1a1a2e;--muted:#556;
---border:#ccd;--shadow:rgba(20,30,60,.08)}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#14161c;--surface:#1e2129;
---text:#e7e9ee;--muted:#9aa1ad;--border:#2b2f3a;--shadow:rgba(0,0,0,.4)}}}}
+:root{{--bg:#f6f5f1;--surface:#ffffff;--surface-2:#efece3;--ink:#20211d;
+--muted:#65645a;--border:#e4e1d6;--accent:{color};
+--shadow:0 1px 2px rgba(30,28,20,.05),0 10px 30px rgba(30,28,20,.06);
+--ease:cubic-bezier(.32,.72,.33,1)}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#141310;--surface:#1c1b17;
+--surface-2:#232019;--ink:#f1eee2;--muted:#a8a495;--border:#302c22;
+--shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.4)}}}}
 *{{box-sizing:border-box}}
-body{{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);
-margin:0;padding:16px}}
-.card{{background:var(--surface);border:1px solid var(--border);border-radius:14px;
-padding:16px;margin:0 auto 14px;max-width:520px;box-shadow:0 1px 4px var(--shadow)}}
-h1{{font-size:22px;color:{color};text-align:center}}
-.t{{font-weight:600;font-size:17px}} .m{{color:var(--muted);margin:4px 0}}
-input{{width:100%;box-sizing:border-box;padding:11px;margin:6px 0;
-border:1px solid var(--border);border-radius:8px;background:var(--surface);
-color:var(--text);font-size:15px}}
-button{{width:100%;padding:12px;border:0;border-radius:8px;background:{color};
-color:#fff;font-size:16px;cursor:pointer}}
-button:hover{{filter:brightness(1.07)}} .full{{color:#e0863b;font-weight:600}}
-.ok{{color:#2a9d5a;font-size:18px;text-align:center}}
-a{{color:{color}}}</style></head><body>
+body{{margin:0;padding:24px 16px 48px;background:var(--bg);color:var(--ink);
+font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}}
+:focus-visible{{outline:2px solid var(--accent);outline-offset:2px}}
+a,button{{transition:color .15s var(--ease),border-color .15s var(--ease),
+filter .15s var(--ease),transform .15s var(--ease);
+-webkit-tap-highlight-color:transparent;touch-action:manipulation}}
+@media (prefers-reduced-motion:reduce){{*,*::before,*::after{{
+transition:none!important;animation:none!important}}}}
+.eyebrow{{display:block;text-align:center;font:700 11px/1 -apple-system,system-ui,
+sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+margin:8px 0 12px}}
+h1{{font:400 28px/1.2 Georgia,"Times New Roman",serif;letter-spacing:-.01em;
+text-align:center;margin:0 0 24px;text-wrap:balance}}
+.card{{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+padding:20px;margin:0 auto 16px;max-width:560px;box-shadow:var(--shadow)}}
+.head{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}
+.t{{font:600 16.5px/1.35 -apple-system,system-ui,sans-serif}}
+.price{{flex-shrink:0;font:600 13px/1 -apple-system,system-ui,sans-serif;
+font-variant-numeric:tabular-nums;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:5px 10px}}
+.m{{display:flex;align-items:center;gap:8px;color:var(--muted);
+font:400 14px/1.5 -apple-system,system-ui,sans-serif;margin:8px 0 0}}
+.m svg{{width:15px;height:15px;stroke:var(--muted);fill:none;stroke-width:1.6;
+stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}}
+.cap{{margin:16px 0 0}}
+.bar{{height:6px;border-radius:999px;background:var(--surface-2);
+border:1px solid var(--border);overflow:hidden}}
+.bar i{{display:block;height:100%;background:var(--accent);border-radius:999px}}
+.cap span{{display:block;margin-top:8px;font:500 13px/1.4 -apple-system,system-ui,
+sans-serif;color:var(--muted)}}
+.full{{color:#b8791a;font-weight:600}}
+.who{{margin-top:8px;font:400 13px/1.55 -apple-system,system-ui,sans-serif;
+color:var(--muted)}}
+form{{margin-top:16px;display:flex;flex-direction:column;gap:8px}}
+input{{width:100%;padding:13px 16px;border:1px solid var(--border);
+border-radius:12px;background:var(--surface-2);color:var(--ink);font-size:16px;
+font-family:inherit;transition:border-color .15s var(--ease)}}
+input:hover{{border-color:var(--accent)}}
+input:focus{{outline:2px solid var(--accent);outline-offset:1px}}
+button{{width:100%;padding:15px;border:0;border-radius:12px;
+background:var(--accent);color:#fff;
+font:600 15px/1 -apple-system,system-ui,sans-serif;cursor:pointer}}
+button:hover{{filter:brightness(1.07)}}
+button:active{{transform:scale(.98)}}
+button.ghost{{background:transparent;color:var(--accent);
+border:1px solid var(--border)}}
+button.ghost:hover{{border-color:var(--accent);filter:none}}
+a{{color:var(--accent)}}
+.ok-icon{{display:flex;justify-content:center;margin:8px 0 12px}}
+.ok-icon svg{{width:44px;height:44px;stroke:var(--accent);fill:none;
+stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}}
+.ok{{text-align:center;font:600 17px/1.5 -apple-system,system-ui,sans-serif;
+margin:0 0 4px;text-wrap:balance}}
+.links{{text-align:center;margin-top:16px;
+font:400 14px/1.6 -apple-system,system-ui,sans-serif}}
+.links a{{display:inline-block;padding:6px 4px}}
+.chip{{flex-shrink:0;font:600 12px/1 -apple-system,system-ui,sans-serif;
+padding:6px 10px;border-radius:999px;border:1px solid var(--accent);
+color:var(--accent);white-space:nowrap}}
+.chip.q{{border-color:#b8791a;color:#b8791a}}
+.danger{{color:#b23a2e}}
+.note{{text-align:center;color:var(--muted);
+font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
+.foot{{text-align:center;color:var(--muted);margin-top:32px;
+font:400 12.5px/1.6 -apple-system,system-ui,sans-serif}}
+.foot a{{color:var(--muted)}}
+</style></head><body>
+<span class="eyebrow">Запись на тренировки</span>
 <h1>{title}</h1>{body}
-<p style="text-align:center;color:var(--muted)">Запись онлайн — без регистрации</p>
+<p class="foot">Запись онлайн — без регистрации ·
+<a href="/promo">платформа «Бот записи на тренировки»</a></p>
 </body></html>"""
 
 
@@ -355,7 +428,7 @@ async def public_club(tenant_id: int,
         import html as _h2
         return _PAGE.format(title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
-                            body='<div class="card">⏸ Работа клуба временно '
+                            body='<div class="card note">Работа клуба временно '
                                  'приостановлена. Обратитесь к тренеру.</div>')
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
     trainings = await svc.repo.list_upcoming()
@@ -363,32 +436,39 @@ async def public_club(tenant_id: int,
     for t in trainings:
         active = await svc.repo.get_signups(t.id, "active")
         filled, mx = len(active), t.max_participants
-        price = (f" · {t.price_minor // 100}₽" if getattr(t, "price_minor", 0)
-                 else "")
+        pct = min(100, round(filled / mx * 100)) if mx else 100
+        price = (f'<span class="price">{t.price_minor // 100} ₽</span>'
+                 if getattr(t, "price_minor", 0) else "")
         state = ('<span class="full">мест нет — запись в очередь</span>'
-                 if filled >= mx else f"свободно: {mx - filled} из {mx}")
+                 if filled >= mx
+                 else f"<span>свободно: {mx - filled} из {mx}</span>")
         names = ", ".join(_h.escape(s.name) for s in active[:12])
-        who = (f'<div class="m">Записаны: {names}'
+        who = (f'<div class="who">Записаны: {names}'
                + ("…" if len(active) > 12 else "") + "</div>") if active else ""
+        loc = (f'<div class="m">{_I_PIN} {_h.escape(t.location)}</div>'
+               if t.location else "")
         cards.append(
-            f'<div class="card"><div class="t">{_h.escape(t.title)}</div>'
-            f'<div class="m">📅 {svc.format_local(t.start_at)}'
-            f'{" · 📍 " + _h.escape(t.location) if t.location else ""}{price}</div>'
-            f'<div class="m">👥 {state}</div>{who}'
+            f'<div class="card">'
+            f'<div class="head"><div class="t">{_h.escape(t.title)}</div>{price}</div>'
+            f'<div class="m">{_I_CAL} {svc.format_local(t.start_at)}</div>{loc}'
+            f'<div class="cap"><div class="bar"><i style="width:{pct}%"></i></div>'
+            f'{state}</div>{who}'
             f'<form method="post" action="/club/{tenant_id}/signup">'
             f'<input type="hidden" name="training_id" value="{t.id}">'
-            f'<input name="name" required minlength="2" maxlength="100" '
-            f'placeholder="Ваше имя">'
-            f'<input name="phone" required minlength="10" maxlength="16" '
-            f'placeholder="Телефон (для тренера)">'
+            f'<input name="name" autocomplete="name" required minlength="2" '
+            f'maxlength="100" placeholder="Ваше имя" aria-label="Ваше имя">'
+            f'<input name="phone" type="tel" autocomplete="tel" required '
+            f'minlength="10" maxlength="16" '
+            f'placeholder="Телефон (для тренера)" aria-label="Телефон">'
             f'<button>Записаться</button></form></div>')
     my_form = (f'<div class="card"><div class="t">Мои записи</div>'
                f'<form method="post" action="/club/{tenant_id}/my">'
-               f'<input name="phone" required minlength="10" maxlength="16" '
-               f'placeholder="Телефон, указанный при записи">'
-               f'<button>Показать мои записи</button></form></div>')
-    body = ("".join(cards) or ('<div class="card">Ближайших тренировок нет — '
-                               'загляните позже.</div>')) + my_form
+               f'<input name="phone" type="tel" autocomplete="tel" required '
+               f'minlength="10" maxlength="16" '
+               f'placeholder="Телефон, указанный при записи" aria-label="Телефон">'
+               f'<button class="ghost">Показать мои записи</button></form></div>')
+    body = ("".join(cards) or ('<div class="card note">Ближайших тренировок '
+                               'нет — загляните позже.</div>')) + my_form
     title = tenant.brand_name or tenant.name
     return _PAGE.format(title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
@@ -415,7 +495,7 @@ async def public_signup(tenant_id: int,
         import html as _h2
         return _PAGE.format(title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
-                            body='<div class="card">⏸ Работа клуба временно '
+                            body='<div class="card note">Работа клуба временно '
                                  'приостановлена. Обратитесь к тренеру.</div>')
     name = name.strip()[:100]
     digits = "".join(c for c in phone if c.isdigit())
@@ -427,23 +507,25 @@ async def public_signup(tenant_id: int,
     await svc.repo.set_alias("web", uid, f"{name} 📱+{digits}")
     res = await svc.sign_up(training_id, "web", uid, name)
     await session.commit()
-    msg = {"active": f"✅ Вы записаны, {_h.escape(name)}!",
-           "queue": f"⏳ Мест нет — вы в очереди (№{res.position}). "
+    msg = {"active": f"Вы записаны, {_h.escape(name)}!",
+           "queue": f"Мест нет — вы в очереди (№{res.position}). "
                     "Если место освободится, тренер свяжется по телефону.",
            "already": "Вы уже записаны на эту тренировку.",
            "closed": "Запись на эту тренировку закрыта."}.get(
                res.result, "Готово.")
+    icon = {"active": _I_CHECK, "queue": _I_CLOCK}.get(res.result, _I_INFO)
     if res.result in ("active", "queue"):
         await _notify_group_card_changed(tenant_id, training_id)
     cancel_link = ""
     if res.result in ("active", "queue"):
         token = _cancel_token(tenant_id, training_id, uid)
         cancel_link = (
-            f'<p style="text-align:center"><a href="/club/{tenant_id}/cancel'
-            f'?t={training_id}&u={uid}&s={token}">Отменить эту запись</a></p>')
-    body = (f'<div class="card"><p class="ok">{msg}</p>{cancel_link}'
-            f'<p style="text-align:center"><a href="/club/{tenant_id}">'
-            f'← к списку тренировок</a></p></div>')
+            f'<a href="/club/{tenant_id}/cancel'
+            f'?t={training_id}&u={uid}&s={token}">Отменить эту запись</a><br>')
+    body = (f'<div class="card"><div class="ok-icon">{icon}</div>'
+            f'<p class="ok">{msg}</p>'
+            f'<div class="links">{cancel_link}<a href="/club/{tenant_id}">'
+            f'← к списку тренировок</a></div></div>')
     title = tenant.brand_name or tenant.name
     return _PAGE.format(title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
@@ -486,9 +568,10 @@ async def public_cancel(tenant_id: int, t: int, u: int, s: str,
     await session.commit()
     if res.get("cancelled"):
         await _notify_group_card_changed(tenant_id, t)
-    body = ('<div class="card"><p class="ok">✅ Запись отменена.</p>'
-            f'<p style="text-align:center"><a href="/club/{tenant_id}">'
-            '← к списку тренировок</a></p></div>')
+    body = (f'<div class="card"><div class="ok-icon">{_I_CHECK}</div>'
+            '<p class="ok">Запись отменена.</p>'
+            f'<div class="links"><a href="/club/{tenant_id}">'
+            '← к списку тренировок</a></div></div>')
     title = tenant.brand_name or tenant.name
     return _PAGE.format(title=_h.escape(title),
                         color=_safe_color(tenant.brand_color), body=body)
@@ -533,7 +616,7 @@ async def public_my(tenant_id: int,
         import html as _h2
         return _PAGE.format(title=_h2.escape(tenant.brand_name or tenant.name),
                             color="#888",
-                            body='<div class="card">⏸ Работа клуба временно '
+                            body='<div class="card note">Работа клуба временно '
                                  'приостановлена.</div>')
     digits = "".join(c for c in phone if c.isdigit())
     if not (10 <= len(digits) <= 15):
@@ -542,22 +625,26 @@ async def public_my(tenant_id: int,
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
     rows = await svc.my_trainings("web", uid)
     if not rows:
-        body = ('<div class="card">По этому телефону записей не найдено.</div>'
-                f'<p style="text-align:center"><a href="/club/{tenant_id}">'
-                '← к списку тренировок</a></p>')
+        body = ('<div class="card note">По этому телефону записей '
+                'не найдено.</div>'
+                f'<div class="links"><a href="/club/{tenant_id}">'
+                '← к списку тренировок</a></div>')
     else:
         items = []
         for t, status, position in rows:
-            mark = ("✅ записаны" if status == "active"
-                    else f"⏳ в очереди №{position}")
+            chip = ('<span class="chip">записаны</span>' if status == "active"
+                    else f'<span class="chip q">в очереди №{position}</span>')
             token = _cancel_token(tenant_id, t.id, uid)
             items.append(
-                f'<div class="card"><div class="t">{_h.escape(t.title)}</div>'
-                f'<div class="m">📅 {svc.format_local(t.start_at)} — {mark}</div>'
-                f'<p><a href="/club/{tenant_id}/cancel?t={t.id}&u={uid}'
-                f'&s={token}">Отменить запись</a></p></div>')
-        items.append(f'<p style="text-align:center">'
-                     f'<a href="/club/{tenant_id}">← к списку</a></p>')
+                f'<div class="card">'
+                f'<div class="head"><div class="t">{_h.escape(t.title)}</div>'
+                f'{chip}</div>'
+                f'<div class="m">{_I_CAL} {svc.format_local(t.start_at)}</div>'
+                f'<div class="links" style="text-align:left;margin-top:12px">'
+                f'<a href="/club/{tenant_id}/cancel?t={t.id}&u={uid}'
+                f'&s={token}" class="danger">Отменить запись</a></div></div>')
+        items.append(f'<div class="links">'
+                     f'<a href="/club/{tenant_id}">← к списку</a></div>')
         body = "".join(items)
     title = tenant.brand_name or tenant.name
     return _PAGE.format(title=_h.escape(title),
