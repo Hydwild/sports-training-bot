@@ -20,7 +20,9 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
 
     # подписи тренера подставляем только в карточке для тренера (в личке).
     # в группе for_admin=False → показываются обычные имена из Telegram.
-    aliases = await svc.repo.aliases_map("tg") if for_admin else {}
+    # Подписи берём по всем платформам: на тренировку записываются и из
+    # tg, и из vk, и с веб-страницы (у web-подписи — телефон участника).
+    aliases = await svc.repo.aliases_map_all() if for_admin else {}
 
     # прогресс-бар заполнения мест
     filled = len(active)
@@ -56,7 +58,8 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
 
 
 async def training_card_plain(svc: BookingService, t,
-                              aliases: dict[int, str] | None = None) -> str:
+                              aliases: dict[tuple[str, int], str] | None = None,
+                              ) -> str:
     """
     Карточка тренировки БЕЗ HTML — для VK (VK не поддерживает разметку).
     Показывает те же данные: дату, место, длительность, цену, счётчик,
@@ -114,16 +117,18 @@ def _progress_bar(filled: int, total: int, width: int = 10) -> str:
     return "▰" * full + "▱" * (width - full)
 
 
-def _label(s, aliases: dict[int, str] | None = None) -> str:
+def _label(s, aliases: dict[tuple[str, int], str] | None = None) -> str:
     """Имя участника с @username (если есть) и пометкой гостя.
-    Если передан словарь подписей и для участника есть подпись — она заменяет имя.
+    Если передан словарь подписей {(platform, user_id): alias} и для
+    участника есть подпись — она заменяет имя.
     """
     if getattr(s, "is_guest", False):
         mark = "✅" if s.confirmed else "⏳ требует подтверждения"
         return f"{s.name} (гость, {mark})"
     name = s.name
     if aliases:
-        alias = aliases.get(getattr(s, "user_id", None))
+        alias = aliases.get((getattr(s, "platform", None),
+                             getattr(s, "user_id", None)))
         if alias:
             name = alias
     uname = getattr(s, "username", None)

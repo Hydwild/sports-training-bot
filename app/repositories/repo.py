@@ -179,6 +179,19 @@ class TenantRepository:
         rows = (await self.session.execute(stmt)).all()
         return {uid: alias for uid, alias in rows}
 
+    async def aliases_map_all(self) -> dict[tuple[str, int], str]:
+        """{(platform, user_id): alias} — подписи участников ВСЕХ платформ.
+        Для карточки тренера: на одну тренировку могут быть записаны люди из
+        tg, vk и web одновременно (у web-записей в подписи хранится телефон) —
+        выборка по одной платформе теряла подписи остальных."""
+        stmt = select(Subscriber.platform, Subscriber.user_id,
+                      Subscriber.alias).where(
+            Subscriber.tenant_id == self.tenant_id,
+            Subscriber.alias.is_not(None),
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return {(p, uid): alias for p, uid, alias in rows}
+
     async def get_alias(self, platform: str, user_id: int) -> str | None:
         """Возвращает подпись участника от тренера, если задана."""
         stmt = select(Subscriber.alias).where(

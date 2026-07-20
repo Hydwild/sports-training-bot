@@ -1314,12 +1314,14 @@ async def cmd_attend(message: Message) -> None:
 
 async def _attend_kb(svc, train_id):
     active = await svc.repo.get_signups(train_id, "active")
-    aliases = await svc.repo.aliases_map("tg")
+    # подписи по всем платформам: у web-участников в подписи телефон
+    aliases = await svc.repo.aliases_map_all()
     rows = []
     for s in active:
         att = "✅" if s.attended else "⬜"
         pay = "💰" if s.paid else "🚫"
-        shown = aliases.get(getattr(s, "user_id", None)) or s.name
+        shown = aliases.get((getattr(s, "platform", None),
+                             getattr(s, "user_id", None))) or s.name
         rows.append([InlineKeyboardButton(text=f"{att} {shown}", callback_data=f"at:{s.id}"),
                      InlineKeyboardButton(text=f"{pay} оплата", callback_data=f"pa:{s.id}")])
     rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"al:{train_id}")])

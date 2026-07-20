@@ -251,7 +251,7 @@ async def _show_list(user_id: int, group_id=None) -> None:
         await _upsert_vk_user(svc, user_id)
         await session.commit()
         is_admin = tenant.admin_vk_id == user_id
-        aliases = await svc.repo.aliases_map("vk") if is_admin else None
+        aliases = await svc.repo.aliases_map_all() if is_admin else None
         trainings = await svc.repo.list_upcoming()
         if not trainings:
             await _send(user_id, "Ближайших тренировок нет.",
@@ -282,7 +282,7 @@ async def _edit_card(peer_id: int, cmid: int, tid: int, group_id=None,
         if not training:
             return
         is_admin = admin_uid is not None and tenant.admin_vk_id == admin_uid
-        aliases = await svc.repo.aliases_map("vk") if is_admin else None
+        aliases = await svc.repo.aliases_map_all() if is_admin else None
         card = await views.training_card_plain(svc, training, aliases)
         full = await _is_full(svc, training)
     try:
