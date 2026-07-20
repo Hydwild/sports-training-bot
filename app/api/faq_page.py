@@ -1,5 +1,7 @@
 """Публичная FAQ-страница для клиентов: GET /faq. Правьте текст здесь."""
-from app.api.public_style import SITE_CSS, TELEGRAM_CONTACT, site_footer, site_nav
+from app.api.public_style import (
+    SITE_CSS, TELEGRAM_CONTACT, head_meta, site_footer, site_nav,
+)
 
 _EXTRA_CSS = """
 .faq-nav{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:0 0 30px}
@@ -9,9 +11,12 @@ _EXTRA_CSS = """
 .faq-nav a:hover{border-color:var(--gold)}
 h2.group{font:400 22px/1.3 Georgia,serif;margin:44px 0 14px;text-align:left}
 details{background:var(--surface);border:1px solid var(--border);border-radius:14px;
-  padding:2px 18px;margin-bottom:10px;box-shadow:var(--shadow)}
+  padding:2px 18px;margin-bottom:10px;box-shadow:var(--shadow);
+  transition:border-color .15s ease}
+details[open]{border-color:var(--border-hover)}
 summary{cursor:pointer;padding:14px 0;font:700 14.5px/1.4 -apple-system,system-ui,
   sans-serif;list-style:none;display:flex;align-items:center;gap:10px}
+summary:hover{color:var(--gold)}
 summary::-webkit-details-marker{display:none}
 summary::before{content:"+";color:var(--gold);font-weight:700;width:16px;flex-shrink:0;
   font-size:18px}
@@ -22,13 +27,15 @@ details ol, details ul{padding-left:20px}
 code{background:var(--surface-2);padding:1px 7px;border-radius:5px;font-size:.92em}
 """
 
-FAQ_HTML = ("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Вопросы и ответы — бот записи на тренировки</title><style>
+FAQ_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
+    "Вопросы и ответы — Бот записи на тренировки",
+    "Как записаться на тренировку, создать расписание, отметить явку и "
+    "оплату — ответы на частые вопросы для участников и тренеров.",
+) + """<style>
 """ + SITE_CSS + _EXTRA_CSS + """
 </style></head><body>
 """ + site_nav("faq") + """
-<div class="wrap">
+<main class="wrap">
 
 <div class="hero">
   <span class="eyebrow">Вопросы и ответы</span>
@@ -186,5 +193,5 @@ Telegram (без пароля, кнопка «Войти через Telegram»).
 </p>
 
 """ + site_footer() + """
-</div>
+</main>
 </body></html>""")

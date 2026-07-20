@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import html as _h
 
-from app.api.public_style import SITE_CSS, TELEGRAM_CONTACT, site_footer, site_nav
+from app.api.public_style import (
+    SITE_CSS, TELEGRAM_CONTACT, head_meta, site_footer, site_nav,
+)
 from app.models.entities import Review
 
-_HEAD = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Отзывы клиентов — бот записи на тренировки</title><style>
+_HEAD = """<!doctype html><html lang="ru"><head>""" + head_meta(
+    "Отзывы клиентов — Бот записи на тренировки",
+    "Что говорят тренеры и клубы, которые ведут запись на тренировки "
+    "через бота — реальные отзывы клиентов.",
+) + """<style>
 """ + SITE_CSS + """
 .stats{display:flex;justify-content:center;gap:40px;margin-top:30px}
 .stat b{display:block;font:400 30px/1 Georgia,serif;color:var(--gold);
@@ -39,7 +43,7 @@ _HEAD = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
   overflow:hidden}
 .form-panel::before{content:"";position:absolute;top:-40%;right:-10%;width:220px;
   height:220px;border-radius:50%;background:radial-gradient(circle,
-  color-mix(in srgb, var(--gold) 18%, transparent),transparent 70%);pointer-events:none}
+  var(--gold-soft),transparent 70%);pointer-events:none}
 .form-panel h2{margin-top:0}
 .rating-pick{display:flex;gap:8px;justify-content:center;margin:6px 0 22px;
   flex-direction:row-reverse;position:relative}
@@ -49,6 +53,8 @@ _HEAD = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 .rating-pick input:checked ~ label,.rating-pick label:hover,
 .rating-pick label:hover ~ label{color:var(--gold)}
 .rating-pick label:hover{transform:scale(1.08)}
+.rating-pick input:focus-visible + label{outline:2px solid var(--gold);
+  outline-offset:2px;border-radius:6px}
 .field{margin-bottom:16px;position:relative}
 .field label{display:block;font:600 12.5px/1.3 -apple-system,system-ui,sans-serif;
   letter-spacing:.03em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
@@ -83,7 +89,7 @@ def render_reviews_page(reviews: list[Review], notice: str | None = None,
     avg = (sum(r.rating for r in reviews) / count) if count else 0
 
     parts = [_HEAD, site_nav("reviews")]
-    parts.append('<div class="wrap">')
+    parts.append('<main class="wrap">')
     parts.append(
         '<div class="hero"><span class="eyebrow">Отзывы клиентов</span>'
         '<h1>Что говорят тренеры и клубы</h1>'
@@ -128,9 +134,10 @@ def render_reviews_page(reviews: list[Review], notice: str | None = None,
         '<p class="section-lead">После отправки отзыв появится на странице после '
         'проверки — обычно в течение дня.</p>'
         '<form method="post" action="/reviews#leave">'
-        '<div class="rating-pick">'
+        '<div class="rating-pick" role="radiogroup" aria-label="Оценка">'
         + "".join(
-            f'<input type="radio" name="rating" value="{v}" id="r{v}"'
+            f'<input type="radio" name="rating" value="{v}" id="r{v}" '
+            f'aria-label="Оценка {v} из 5"'
             f'{" checked" if v == 5 else ""}><label for="r{v}">★</label>'
             for v in (5, 4, 3, 2, 1))
         + '</div>'
@@ -140,11 +147,12 @@ def render_reviews_page(reviews: list[Review], notice: str | None = None,
         '<input type="text" id="club_name" name="club_name" maxlength="160"></div>'
         '<div class="field"><label for="text">Отзыв</label>'
         '<textarea id="text" name="text" maxlength="1000" required></textarea></div>'
-        '<input class="hp" type="text" name="website" tabindex="-1" autocomplete="off">'
+        '<input class="hp" type="text" name="website" tabindex="-1" '
+        'autocomplete="off" aria-hidden="true">'
         '<button class="submit" type="submit">Отправить отзыв</button>'
         '</form></div>')
 
     parts.append(site_footer())
-    parts.append('</div>')
+    parts.append('</main>')
     parts.append(_FOOT)
     return "".join(parts)

@@ -1,5 +1,7 @@
 """Промо-страница продукта: GET /promo. Отредактируйте текст ниже при необходимости."""
-from app.api.public_style import SITE_CSS, TELEGRAM_CONTACT, site_footer, site_nav
+from app.api.public_style import (
+    SITE_CSS, TELEGRAM_CONTACT, head_meta, site_footer, site_nav,
+)
 
 # Демо-бот в Telegram: демо-клуб (Tenant.is_demo=True), любой посетитель
 # сам выбирает роль "тренер" или "участник" (см. app/bots/telegram.py,
@@ -38,8 +40,6 @@ _EXTRA_CSS = """
 .price-card h3{font:400 24px/1.3 Georgia,serif;margin:0 0 10px}
 .price-card p{color:var(--muted);font:400 14.5px/1.6 -apple-system,system-ui,sans-serif;
   max-width:44ch;margin:0 auto 22px}
-.demo{text-align:center;padding:8px 0 10px;font:400 14.5px/1.6 -apple-system,
-  system-ui,sans-serif;color:var(--muted)}
 .demo-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
 .demo-card{border-radius:16px;padding:26px 24px;text-align:center;
   border:1px solid var(--border);background:var(--surface);box-shadow:var(--shadow)}
@@ -49,16 +49,20 @@ _EXTRA_CSS = """
 .demo-card h3{font:400 19px/1.3 Georgia,serif;margin:0 0 8px}
 .demo-card p{color:var(--muted);font:400 13.5px/1.55 -apple-system,system-ui,sans-serif;
   margin:0 0 18px}
+.demo-card .btn-ghost{color:var(--ink);border-color:var(--border)}
+.demo-card .btn-ghost:hover{border-color:var(--gold)}
 @media (max-width:640px){.demo-grid{grid-template-columns:1fr}}
 """
 
-PROMO_HTML = ("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Бот записи на тренировки — Telegram + ВКонтакте</title><style>
+PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
+    "Бот записи на тренировки — Telegram и ВКонтакте",
+    "Запись на спортивные тренировки в Telegram, ВКонтакте и браузере: "
+    "очередь, напоминания, явка и оплата, статистика. Есть живое демо.",
+) + """<style>
 """ + SITE_CSS + _EXTRA_CSS + """
 </style></head><body>
 """ + site_nav("promo") + """
-<div class="wrap">
+<main class="wrap">
 
 <div class="hero">
   <span class="eyebrow">Telegram · ВКонтакте · веб-страница записи</span>
@@ -172,11 +176,10 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
     <h3>Страница записи</h3>
     <p>Как видит клуб участник без Telegram и ВК — по прямой ссылке
       или QR-коду в зале.</p>
-    <a class="btn-ghost" style="color:var(--ink);border-color:var(--border)"
-      href="/club/1">Открыть страницу →</a>
+    <a class="btn-ghost" href="/club/1">Открыть страницу →</a>
   </div>
 </div>
 
 """ + site_footer() + """
-</div>
+</main>
 </body></html>""")

@@ -1,8 +1,9 @@
 """
 Общий визуальный язык для публичных представительских страниц —
 /promo, /faq, /reviews (НЕ для /club/{id}, та утилитарная и осознанно
-проще). Единая палитра, типографика и навигация между тремя страницами,
-чтобы они читались как один сайт, а не три случайных экрана.
+проще). Единая палитра, типографика, метатеги (Open Graph — превью ссылок
+в Telegram/ВК) и навигация между тремя страницами, чтобы они читались
+как один сайт, а не три случайных экрана.
 """
 from __future__ import annotations
 
@@ -18,24 +19,67 @@ _GRAIN = (
     "<rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"
 )
 
+# Фавикон: тёмная плашка с золотой галочкой — та же палитра, что hero и
+# line-иконки на /promo. Inline data-URI, внешних файлов нет.
+_FAVICON = (
+    "data:image/svg+xml,"
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+    "<rect width='64' height='64' rx='14' fill='%2315120a'/>"
+    "<path d='M20 34l8 8 16-17' stroke='%23d9a94a' stroke-width='6.5' "
+    "fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>"
+)
+
+
+def head_meta(title: str, description: str) -> str:
+    """Единый head-блок: описание, Open Graph (по нему Telegram/ВК строят
+    превью ссылки — основной канал, где сайтом будут делиться), фавикон и
+    theme-color для адресной строки мобильных браузеров. Значения статичные,
+    не из пользовательского ввода — экранирование не требуется."""
+    return "".join([
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1">',
+        f"<title>{title}</title>",
+        f'<meta name="description" content="{description}">',
+        f'<meta property="og:title" content="{title}">',
+        f'<meta property="og:description" content="{description}">',
+        '<meta property="og:type" content="website">',
+        '<meta property="og:locale" content="ru_RU">',
+        '<meta property="og:site_name" content="Бот записи на тренировки">',
+        '<meta name="twitter:card" content="summary">',
+        '<meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">',
+        '<meta name="theme-color" content="#141310" media="(prefers-color-scheme: dark)">',
+        f'<link rel="icon" type="image/svg+xml" href="{_FAVICON}">',
+    ])
+
+
 SITE_CSS = """
 :root{
-  --bg:#f6f5f1;--surface:#ffffff;--surface-2:#efece3;--ink:#20211d;--muted:#6b6a60;
-  --border:#e4e1d6;--gold:#a3792c;--gold-ink:#2c2007;--ink-hero:#f4f1e6;
+  --bg:#f6f5f1;--surface:#ffffff;--surface-2:#efece3;--ink:#20211d;--muted:#65645a;
+  --border:#e4e1d6;--border-hover:#cdbd97;--gold:#a3792c;--gold-ink:#2c2007;
+  --gold-soft:rgba(163,121,44,.12);--selection:#eadfc2;--ink-hero:#f4f1e6;
   --shadow:0 1px 2px rgba(30,28,20,.05),0 10px 30px rgba(30,28,20,.06);
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#141310;--surface:#1c1b17;--surface-2:#232019;--ink:#f1eee2;--muted:#a8a495;
-  --border:#302c22;--gold:#d9a94a;--gold-ink:#241a04;--ink-hero:#f4f1e6;
+  --border:#302c22;--border-hover:#584a2b;--gold:#d9a94a;--gold-ink:#241a04;
+  --gold-soft:rgba(217,169,74,.14);--selection:#4a3d1f;--ink-hero:#f4f1e6;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.4);
 }}
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-  -webkit-font-smoothing:antialiased}
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 .wrap{max-width:880px;margin:0 auto;padding:0 20px 80px}
 a{color:inherit}
+::selection{background:var(--selection)}
+:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+a,button,summary{transition:color .15s ease,border-color .15s ease,
+  background-color .15s ease,box-shadow .15s ease,filter .15s ease}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{transition:none!important;animation:none!important}
+}
 
 /* ---------- навигация между тремя страницами ---------- */
 .site-nav{
@@ -51,6 +95,7 @@ a{color:inherit}
   font:600 12.5px/1 -apple-system,system-ui,sans-serif;text-decoration:none;
   color:var(--muted);padding:8px 14px;border-radius:999px;white-space:nowrap;
 }
+.site-nav .links a:hover{color:var(--ink)}
 .site-nav .links a.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
 @media (max-width:640px){
   .site-nav{flex-direction:column;align-items:stretch}
@@ -104,6 +149,7 @@ footer.site{text-align:center;color:var(--muted);padding:44px 0 6px;
   margin-top:20px}
 footer.site .links{margin-bottom:10px}
 footer.site a{color:var(--gold);text-decoration:none;font-weight:600;margin:0 8px}
+footer.site a:hover{text-decoration:underline}
 """.replace("GRAIN_URI", _GRAIN)
 
 
@@ -113,10 +159,11 @@ def site_nav(active: str) -> str:
             ("faq", "/faq", "Вопросы и ответы"),
             ("reviews", "/reviews", "Отзывы")]
     links = "".join(
-        f'<a class="{"on" if key == active else ""}" href="{href}">{label}</a>'
+        f'<a class="on" aria-current="page" href="{href}">{label}</a>'
+        if key == active else f'<a href="{href}">{label}</a>'
         for key, href, label in items)
     return (
-        '<nav class="site-nav">'
+        '<nav class="site-nav" aria-label="Разделы сайта">'
         '<a class="brand" href="/promo"><b>Бот записи</b> на тренировки</a>'
         f'<div class="links">{links}</div>'
         '</nav>')
@@ -127,4 +174,4 @@ def site_footer() -> str:
         f'<footer class="site"><div class="links">'
         f'<a href="/promo">о продукте</a>·<a href="/faq">вопросы и ответы</a>'
         f'·<a href="/reviews">отзывы</a>·<a href="{TELEGRAM_CONTACT}">написать в Telegram</a>'
-        f'</div>Бот записи на тренировки · Telegram + ВКонтакте</footer>')
+        f'</div>© 2026 · Бот записи на тренировки — Telegram + ВКонтакте</footer>')
