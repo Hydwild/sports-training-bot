@@ -21,34 +21,38 @@ _HEAD = """<!doctype html><html lang="ru"><head>""" + head_meta(
     "через бота — реальные отзывы клиентов.",
 ) + """<style>
 """ + SITE_CSS + """
-.stats{display:flex;justify-content:center;gap:40px;margin-top:30px}
+.stats{display:flex;justify-content:center;gap:40px;margin-top:32px}
 .stat b{display:block;font:400 30px/1 Georgia,serif;color:var(--gold);
   font-variant-numeric:tabular-nums}
 .stat span{font:600 11px/1.3 -apple-system,system-ui,sans-serif;letter-spacing:.06em;
   text-transform:uppercase;color:#b9b39d}
 .divider{display:flex;align-items:center;justify-content:center;gap:12px;
-  color:var(--gold);margin:0 auto;max-width:120px}
+  color:var(--gold);margin:40px auto 0;max-width:120px}
 .divider::before,.divider::after{content:"";height:1px;flex:1;background:var(--border)}
+.divider + h2.section{margin-top:24px}
 .review-card{display:flex;flex-direction:column}
 .stars{color:var(--gold);letter-spacing:2px;font-size:15px;margin-bottom:12px}
 .quote{font:400 15.5px/1.6 Georgia,serif;color:var(--ink);flex:1;margin:0 0 16px}
 .quote::before{content:"\\201C"}.quote::after{content:"\\201D"}
-.who{display:flex;flex-direction:column;border-top:1px solid var(--border);padding-top:12px}
-.who b{font:700 13.5px/1.3 -apple-system,system-ui,sans-serif}
-.who span{font:400 12.5px/1.3 -apple-system,system-ui,sans-serif;color:var(--muted)}
+.who{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--border);
+  padding-top:16px}
+.who b{font:600 13.5px/1.35 -apple-system,system-ui,sans-serif}
+.who span{font:400 12.5px/1.35 -apple-system,system-ui,sans-serif;color:var(--muted)}
 .empty{text-align:center;color:var(--muted);font:400 15px/1.6 Georgia,serif;
-  padding:30px 0}
+  padding:32px 0}
 .form-panel{background:var(--surface);border:1px solid var(--border);border-radius:20px;
-  padding:36px 32px;margin-top:54px;box-shadow:var(--shadow);position:relative;
+  padding:32px;margin-top:56px;box-shadow:var(--shadow);position:relative;
   overflow:hidden}
+@media (max-width:640px){.form-panel{padding:24px 20px}}
 .form-panel::before{content:"";position:absolute;top:-40%;right:-10%;width:220px;
   height:220px;border-radius:50%;background:radial-gradient(circle,
   var(--gold-soft),transparent 70%);pointer-events:none}
 .form-panel h2{margin-top:0}
-.rating-pick{display:flex;gap:8px;justify-content:center;margin:6px 0 22px;
+.rating-pick{display:flex;gap:8px;justify-content:center;margin:8px 0 24px;
   flex-direction:row-reverse;position:relative}
-.rating-pick label{cursor:pointer;font-size:28px;color:var(--border);
-  transition:color .12s ease,transform .12s ease}
+.rating-pick label{cursor:pointer;font-size:28px;line-height:44px;min-width:44px;
+  text-align:center;color:var(--border);
+  transition:color .15s var(--ease),transform .15s var(--ease)}
 .rating-pick input{position:absolute;opacity:0;pointer-events:none}
 .rating-pick input:checked ~ label,.rating-pick label:hover,
 .rating-pick label:hover ~ label{color:var(--gold)}
@@ -58,17 +62,19 @@ _HEAD = """<!doctype html><html lang="ru"><head>""" + head_meta(
 .field{margin-bottom:16px;position:relative}
 .field label{display:block;font:600 12.5px/1.3 -apple-system,system-ui,sans-serif;
   letter-spacing:.03em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-input[type=text],textarea{width:100%;padding:12px 14px;border:1px solid var(--border);
-  border-radius:10px;background:var(--surface-2);color:var(--ink);font-size:15px;
-  font-family:inherit}
-textarea{min-height:110px;resize:vertical}
+input[type=text],textarea{width:100%;padding:13px 16px;border:1px solid var(--border);
+  border-radius:12px;background:var(--surface-2);color:var(--ink);font-size:16px;
+  font-family:inherit;transition:border-color .15s var(--ease)}
+input[type=text]:hover,textarea:hover{border-color:var(--border-hover)}
+textarea{min-height:112px;resize:vertical}
 input[type=text]:focus,textarea:focus{outline:2px solid var(--gold);outline-offset:1px}
 .hp{position:absolute;left:-9999px;opacity:0}
-button.submit{width:100%;padding:14px;border:0;border-radius:10px;background:var(--gold);
+button.submit{width:100%;padding:15px;border:0;border-radius:12px;background:var(--gold);
   color:var(--gold-ink);font:700 15px/1 -apple-system,system-ui,sans-serif;cursor:pointer;
-  margin-top:6px;position:relative}
+  margin-top:8px;position:relative}
 button.submit:hover{filter:brightness(1.06)}
-.notice{border-radius:14px;padding:16px 18px;margin-top:54px;font:400 14.5px/1.55
+button.submit:active{transform:scale(.98)}
+.notice{border-radius:16px;padding:16px 20px;margin-top:48px;font:400 14.5px/1.55
   -apple-system,system-ui,sans-serif;text-align:center}
 .notice.ok{background:rgba(163,121,44,.12);color:var(--ink);border:1px solid var(--gold)}
 .notice.err{background:rgba(178,58,46,.1);color:var(--ink);border:1px solid #b23a2e}

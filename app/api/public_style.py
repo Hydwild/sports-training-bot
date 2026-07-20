@@ -4,6 +4,9 @@
 проще). Единая палитра, типографика, метатеги (Open Graph — превью ссылок
 в Telegram/ВК) и навигация между тремя страницами, чтобы они читались
 как один сайт, а не три случайных экрана.
+
+Ритм отступов — 8pt-сетка (8/16/24/32/48/64), кривая анимаций --ease
+(iOS-подобная), интерактив с press-feedback и тач-целями ≥44px.
 """
 from __future__ import annotations
 
@@ -57,12 +60,15 @@ SITE_CSS = """
   --bg:#f6f5f1;--surface:#ffffff;--surface-2:#efece3;--ink:#20211d;--muted:#65645a;
   --border:#e4e1d6;--border-hover:#cdbd97;--gold:#a3792c;--gold-ink:#2c2007;
   --gold-soft:rgba(163,121,44,.12);--selection:#eadfc2;--ink-hero:#f4f1e6;
+  --bg-glass:rgba(246,245,241,.82);
   --shadow:0 1px 2px rgba(30,28,20,.05),0 10px 30px rgba(30,28,20,.06);
+  --ease:cubic-bezier(.32,.72,.33,1);
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#141310;--surface:#1c1b17;--surface-2:#232019;--ink:#f1eee2;--muted:#a8a495;
   --border:#302c22;--border-hover:#584a2b;--gold:#d9a94a;--gold-ink:#241a04;
   --gold-soft:rgba(217,169,74,.14);--selection:#4a3d1f;--ink-hero:#f4f1e6;
+  --bg-glass:rgba(20,19,16,.8);
   --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.4);
 }}
 *{box-sizing:border-box}
@@ -70,21 +76,28 @@ html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-.wrap{max-width:880px;margin:0 auto;padding:0 20px 80px}
+.wrap{max-width:880px;margin:0 auto;padding:0 20px 96px}
 a{color:inherit}
+[id]{scroll-margin-top:88px}
 ::selection{background:var(--selection)}
 :focus-visible{outline:2px solid var(--gold);outline-offset:2px}
-a,button,summary{transition:color .15s ease,border-color .15s ease,
-  background-color .15s ease,box-shadow .15s ease,filter .15s ease}
+a,button,summary{transition:color .15s var(--ease),border-color .15s var(--ease),
+  background-color .15s var(--ease),box-shadow .15s var(--ease),
+  filter .15s var(--ease),transform .15s var(--ease);
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation}
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
   *,*::before,*::after{transition:none!important;animation:none!important}
 }
 
-/* ---------- навигация между тремя страницами ---------- */
+/* ---------- навигация: закреплённая полоса с блюром (iOS-стиль) ---------- */
+.nav-bar{position:sticky;top:0;z-index:100;background:var(--bg-glass);
+  -webkit-backdrop-filter:blur(14px) saturate(1.5);
+  backdrop-filter:blur(14px) saturate(1.5);
+  border-bottom:1px solid var(--border)}
 .site-nav{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  max-width:880px;margin:0 auto;padding:20px 20px 0;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  max-width:880px;margin:0 auto;padding:12px 20px;
 }
 .site-nav .brand{font:400 17px/1 Georgia,serif;letter-spacing:.01em;
   text-decoration:none;color:var(--ink)}
@@ -92,13 +105,15 @@ a,button,summary{transition:color .15s ease,border-color .15s ease,
 .site-nav .links{display:flex;gap:4px;background:var(--surface-2);
   border:1px solid var(--border);border-radius:999px;padding:4px}
 .site-nav .links a{
-  font:600 12.5px/1 -apple-system,system-ui,sans-serif;text-decoration:none;
-  color:var(--muted);padding:8px 14px;border-radius:999px;white-space:nowrap;
+  font:600 13px/1 -apple-system,system-ui,sans-serif;text-decoration:none;
+  color:var(--muted);padding:10px 16px;border-radius:999px;white-space:nowrap;
 }
 .site-nav .links a:hover{color:var(--ink)}
 .site-nav .links a.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
 @media (max-width:640px){
-  .site-nav{flex-direction:column;align-items:stretch}
+  .nav-bar{position:static}
+  .site-nav{flex-direction:column;align-items:stretch;gap:12px;padding:16px 20px 12px}
+  .site-nav .brand{text-align:center}
   .site-nav .links{justify-content:center}
 }
 
@@ -106,24 +121,24 @@ a,button,summary{transition:color .15s ease,border-color .15s ease,
 .hero{
   position:relative;overflow:hidden;
   background:radial-gradient(120% 160% at 20% 0%,#332a17,#15120a 70%);
-  color:var(--ink-hero);text-align:center;padding:64px 24px 54px;
-  border-radius:0 0 28px 28px;margin:8px 0 8px;isolation:isolate;
+  color:var(--ink-hero);text-align:center;padding:64px 24px 56px;
+  border-radius:0 0 28px 28px;margin:16px 0 8px;isolation:isolate;
 }
 .hero::after{
   content:"";position:absolute;inset:0;background-image:url("GRAIN_URI");
   opacity:.05;mix-blend-mode:overlay;pointer-events:none;z-index:-1;
 }
 .hero .eyebrow{display:block;font:700 12px/1 -apple-system,system-ui,sans-serif;
-  letter-spacing:.16em;text-transform:uppercase;color:var(--gold);margin-bottom:18px}
+  letter-spacing:.16em;text-transform:uppercase;color:var(--gold);margin-bottom:16px}
 .hero h1{font:400 40px/1.2 Georgia,"Times New Roman",serif;letter-spacing:-.01em;
   margin:0 0 16px;text-wrap:balance}
 .hero p{max-width:500px;margin:0 auto;font:400 16.5px/1.6 Georgia,serif;
   color:#d9d4c2;opacity:.92}
-.hero .cta-row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:28px}
+.hero .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:32px}
 
-/* ---------- кнопки ---------- */
+/* ---------- кнопки: тач-цель ≥44px, press-feedback ---------- */
 .btn-gold,.btn-ghost{
-  display:inline-flex;align-items:center;gap:6px;padding:13px 26px;border-radius:999px;
+  display:inline-flex;align-items:center;gap:6px;padding:15px 28px;border-radius:999px;
   font:700 14.5px/1 -apple-system,system-ui,sans-serif;text-decoration:none;
   border:1px solid transparent;cursor:pointer;
 }
@@ -131,23 +146,24 @@ a,button,summary{transition:color .15s ease,border-color .15s ease,
 .btn-gold:hover{filter:brightness(1.06)}
 .btn-ghost{background:transparent;color:var(--ink-hero);border-color:rgba(244,241,230,.35)}
 .btn-ghost:hover{border-color:rgba(244,241,230,.7)}
+.btn-gold:active,.btn-ghost:active{transform:scale(.97)}
 
-/* ---------- секции/заголовки ---------- */
-h2.section{font:400 26px/1.25 Georgia,serif;text-align:center;margin:52px 0 8px;
+/* ---------- секции/заголовки: ритм 64/8/32 ---------- */
+h2.section{font:400 26px/1.25 Georgia,serif;text-align:center;margin:64px 0 8px;
   text-wrap:balance}
 p.section-lead{text-align:center;color:var(--muted);font:400 15px/1.6 -apple-system,
-  system-ui,sans-serif;max-width:52ch;margin:0 auto 30px}
+  system-ui,sans-serif;max-width:52ch;margin:0 auto 32px}
 
 /* ---------- карточки ---------- */
 .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;
-  padding:22px 22px 20px;box-shadow:var(--shadow)}
+  padding:24px;box-shadow:var(--shadow)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
 
 /* ---------- footer ---------- */
-footer.site{text-align:center;color:var(--muted);padding:44px 0 6px;
+footer.site{text-align:center;color:var(--muted);padding:48px 0 8px;
   font:400 13px/1.4 -apple-system,system-ui,sans-serif;border-top:1px solid var(--border);
-  margin-top:20px}
-footer.site .links{margin-bottom:10px}
+  margin-top:24px}
+footer.site .links{margin-bottom:12px}
 footer.site a{color:var(--gold);text-decoration:none;font-weight:600;margin:0 8px}
 footer.site a:hover{text-decoration:underline}
 """.replace("GRAIN_URI", _GRAIN)
@@ -163,10 +179,10 @@ def site_nav(active: str) -> str:
         if key == active else f'<a href="{href}">{label}</a>'
         for key, href, label in items)
     return (
-        '<nav class="site-nav" aria-label="Разделы сайта">'
+        '<div class="nav-bar"><nav class="site-nav" aria-label="Разделы сайта">'
         '<a class="brand" href="/promo"><b>Бот записи</b> на тренировки</a>'
         f'<div class="links">{links}</div>'
-        '</nav>')
+        '</nav></div>')
 
 
 def site_footer() -> str:

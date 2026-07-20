@@ -4,28 +4,72 @@ from app.api.public_style import (
 )
 
 _EXTRA_CSS = """
-.faq-nav{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:0 0 30px}
+.faq-nav{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:0 0 32px}
 .faq-nav a{background:var(--surface);border:1px solid var(--border);color:var(--ink);
-  padding:8px 16px;border-radius:999px;text-decoration:none;font:600 13px/1
+  padding:12px 18px;border-radius:999px;text-decoration:none;font:600 13px/1
   -apple-system,system-ui,sans-serif}
 .faq-nav a:hover{border-color:var(--gold)}
-h2.group{font:400 22px/1.3 Georgia,serif;margin:44px 0 14px;text-align:left}
-details{background:var(--surface);border:1px solid var(--border);border-radius:14px;
-  padding:2px 18px;margin-bottom:10px;box-shadow:var(--shadow);
-  transition:border-color .15s ease}
-details[open]{border-color:var(--border-hover)}
-summary{cursor:pointer;padding:14px 0;font:700 14.5px/1.4 -apple-system,system-ui,
-  sans-serif;list-style:none;display:flex;align-items:center;gap:10px}
+h2.group{font:400 22px/1.3 Georgia,serif;margin:48px 0 16px;text-align:left}
+details{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:4px 20px;margin-bottom:12px;box-shadow:var(--shadow);
+  transition:border-color .2s var(--ease)}
+details[open]:not(.js-acc),details.expanded{border-color:var(--border-hover)}
+summary{cursor:pointer;padding:16px 0;font:600 14.5px/1.45 -apple-system,system-ui,
+  sans-serif;list-style:none;display:flex;align-items:center;
+  justify-content:space-between;gap:16px}
 summary:hover{color:var(--gold)}
 summary::-webkit-details-marker{display:none}
-summary::before{content:"+";color:var(--gold);font-weight:700;width:16px;flex-shrink:0;
-  font-size:18px}
-details[open] summary::before{content:"–"}
+summary::after{content:"";width:9px;height:9px;flex-shrink:0;position:relative;
+  top:-2px;border-right:2px solid var(--gold);border-bottom:2px solid var(--gold);
+  border-radius:1px;transform:rotate(45deg);
+  transition:transform .3s var(--ease)}
+details[open]:not(.js-acc) summary::after,
+details.expanded summary::after{transform:rotate(225deg);top:2px}
+/* JS-режим: плавное раскрытие через grid-rows 0fr->1fr. Состоянием управляет
+   класс .expanded (не события анимации — нечему «залипнуть»); visibility
+   убирает свёрнутые ответы из фокуса и дерева доступности. */
+details.js-acc .faq-body{display:grid;grid-template-rows:0fr;opacity:0;
+  visibility:hidden;
+  transition:grid-template-rows .32s var(--ease),opacity .25s var(--ease),
+    visibility .32s}
+details.js-acc.expanded .faq-body{grid-template-rows:1fr;opacity:1;
+  visibility:visible}
+details.js-acc .faq-inner{overflow:hidden;min-height:0}
 details p, details ol, details ul{margin:0 0 16px;color:var(--ink);
   font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}
 details ol, details ul{padding-left:20px}
 code{background:var(--surface-2);padding:1px 7px;border-radius:5px;font-size:.92em}
 """
+
+# Плавное раскрытие/закрытие вопросов. Прогрессивное улучшение: разметка
+# остаётся нативной details/summary (без JS работает как раньше), скрипт
+# оборачивает ответ в .faq-body>.faq-inner, держит details открытым и
+# переключает класс .expanded — весь моушен в CSS (grid-rows), состояние
+# не зависит от доставки событий анимации; reduced-motion гасится общим
+# правилом в SITE_CSS.
+_FAQ_JS = """<script>
+(function(){
+  document.querySelectorAll('details').forEach(function(d){
+    var s = d.querySelector('summary');
+    var body = document.createElement('div');
+    var inner = document.createElement('div');
+    body.className = 'faq-body'; inner.className = 'faq-inner';
+    Array.prototype.slice.call(d.children).forEach(function(c){
+      if (c.tagName !== 'SUMMARY') inner.appendChild(c);
+    });
+    body.appendChild(inner);
+    d.appendChild(body);
+    d.classList.add('js-acc');
+    d.open = true;
+    s.setAttribute('aria-expanded', 'false');
+    s.addEventListener('click', function(e){
+      e.preventDefault();
+      var expanded = d.classList.toggle('expanded');
+      s.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    });
+  });
+})();
+</script>"""
 
 FAQ_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
     "Вопросы и ответы — Бот записи на тренировки",
@@ -194,4 +238,5 @@ Telegram (без пароля, кнопка «Войти через Telegram»).
 
 """ + site_footer() + """
 </main>
+""" + _FAQ_JS + """
 </body></html>""")

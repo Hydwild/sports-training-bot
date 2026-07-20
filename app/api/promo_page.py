@@ -9,46 +9,48 @@ from app.api.public_style import (
 DEMO_BOT_URL = "https://t.me/Lecor3232_bot"
 
 _EXTRA_CSS = """
-.steps{counter-reset:s;display:flex;flex-direction:column;gap:0;margin-top:18px}
-.step{display:flex;gap:18px;align-items:flex-start;padding:18px 0;
+.steps{counter-reset:s;display:flex;flex-direction:column;gap:0}
+.step{display:flex;gap:16px;align-items:flex-start;padding:16px 0;
   border-bottom:1px solid var(--border)}
-.step:last-child{border-bottom:0}
+.step:first-child{padding-top:8px}
+.step:last-child{border-bottom:0;padding-bottom:8px}
 .step::before{counter-increment:s;content:counter(s);flex-shrink:0;
   font:400 20px/40px Georgia,serif;color:var(--gold);width:40px;height:40px;
   border-radius:50%;border:1px solid var(--gold);text-align:center}
-.step b{display:block;font:700 15px/1.4 -apple-system,system-ui,sans-serif;margin-bottom:4px}
-.step p{margin:0;font:400 14px/1.55 -apple-system,system-ui,sans-serif;color:var(--muted)}
+.step b{display:block;font:600 15px/1.4 -apple-system,system-ui,sans-serif;margin-bottom:4px}
+.step p{margin:0;font:400 14px/1.6 -apple-system,system-ui,sans-serif;color:var(--muted)}
 .feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
 .feature-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;
-  padding:26px 24px 24px;box-shadow:var(--shadow)}
-.feature-icon{width:40px;height:40px;border-radius:11px;border:1px solid var(--gold);
-  display:flex;align-items:center;justify-content:center;margin-bottom:18px}
+  padding:24px;box-shadow:var(--shadow)}
+.feature-icon{width:40px;height:40px;border-radius:12px;border:1px solid var(--gold);
+  display:flex;align-items:center;justify-content:center;margin-bottom:16px}
 .feature-icon svg{width:19px;height:19px;stroke:var(--gold);fill:none;stroke-width:1.6;
   stroke-linecap:round;stroke-linejoin:round}
 .feature-card h3{font:400 17.5px/1.35 Georgia,serif;margin:0 0 8px;text-wrap:balance}
 .feature-card p{margin:0;font:400 14px/1.6 -apple-system,system-ui,sans-serif;color:var(--muted)}
 .trust{display:flex;gap:24px;flex-wrap:wrap;padding:24px;border-radius:16px;
-  background:var(--surface-2);border:1px solid var(--border);margin-top:18px}
-.trust .item{flex:1;min-width:180px;font:400 14px/1.55 -apple-system,system-ui,sans-serif;
+  background:var(--surface-2);border:1px solid var(--border)}
+.trust .item{flex:1;min-width:180px;font:400 14px/1.6 -apple-system,system-ui,sans-serif;
   color:var(--muted)}
-.trust .item b{display:block;color:var(--ink);font:700 13.5px/1.3
-  -apple-system,system-ui,sans-serif;margin-bottom:3px}
-.price-card{border:1px solid var(--gold);border-radius:20px;padding:34px 30px;
+.trust .item b{display:block;color:var(--ink);font:600 13.5px/1.35
+  -apple-system,system-ui,sans-serif;margin-bottom:4px}
+.price-card{border:1px solid var(--gold);border-radius:20px;padding:32px;
   text-align:center;background:var(--surface);box-shadow:var(--shadow)}
 .price-card .tag{display:inline-block;font:700 11px/1 -apple-system,system-ui,sans-serif;
-  letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:10px}
-.price-card h3{font:400 24px/1.3 Georgia,serif;margin:0 0 10px}
+  letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:12px}
+.price-card h3{font:400 24px/1.3 Georgia,serif;margin:0 0 8px;text-wrap:balance}
 .price-card p{color:var(--muted);font:400 14.5px/1.6 -apple-system,system-ui,sans-serif;
-  max-width:44ch;margin:0 auto 22px}
-.demo-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
-.demo-card{border-radius:16px;padding:26px 24px;text-align:center;
-  border:1px solid var(--border);background:var(--surface);box-shadow:var(--shadow)}
+  max-width:44ch;margin:0 auto 24px}
+.demo-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.demo-card{border-radius:20px;padding:24px;text-align:center;
+  border:1px solid var(--border);background:var(--surface);box-shadow:var(--shadow);
+  display:flex;flex-direction:column;align-items:center}
 .demo-card.primary{border-color:var(--gold)}
 .demo-card .tag{display:inline-block;font:700 11px/1 -apple-system,system-ui,sans-serif;
-  letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:10px}
-.demo-card h3{font:400 19px/1.3 Georgia,serif;margin:0 0 8px}
-.demo-card p{color:var(--muted);font:400 13.5px/1.55 -apple-system,system-ui,sans-serif;
-  margin:0 0 18px}
+  letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:12px}
+.demo-card h3{font:400 19px/1.3 Georgia,serif;margin:0 0 8px;text-wrap:balance}
+.demo-card p{color:var(--muted);font:400 13.5px/1.6 -apple-system,system-ui,sans-serif;
+  margin:0 0 20px;flex:1}
 .demo-card .btn-ghost{color:var(--ink);border-color:var(--border)}
 .demo-card .btn-ghost:hover{border-color:var(--gold)}
 @media (max-width:640px){.demo-grid{grid-template-columns:1fr}}
