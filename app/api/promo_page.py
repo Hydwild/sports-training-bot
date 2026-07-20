@@ -16,9 +16,15 @@ _EXTRA_CSS = """
   border-radius:50%;border:1px solid var(--gold);text-align:center}
 .step b{display:block;font:700 15px/1.4 -apple-system,system-ui,sans-serif;margin-bottom:4px}
 .step p{margin:0;font:400 14px/1.55 -apple-system,system-ui,sans-serif;color:var(--muted)}
-.card b.title{display:block;font:700 15px/1.3 -apple-system,system-ui,sans-serif;
-  margin-bottom:6px}
-.card p{margin:0;font:400 14px/1.55 -apple-system,system-ui,sans-serif;color:var(--muted)}
+.feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+.feature-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:26px 24px 24px;box-shadow:var(--shadow)}
+.feature-icon{width:40px;height:40px;border-radius:11px;border:1px solid var(--gold);
+  display:flex;align-items:center;justify-content:center;margin-bottom:18px}
+.feature-icon svg{width:19px;height:19px;stroke:var(--gold);fill:none;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
+.feature-card h3{font:400 17.5px/1.35 Georgia,serif;margin:0 0 8px;text-wrap:balance}
+.feature-card p{margin:0;font:400 14px/1.6 -apple-system,system-ui,sans-serif;color:var(--muted)}
 .trust{display:flex;gap:24px;flex-wrap:wrap;padding:24px;border-radius:16px;
   background:var(--surface-2);border:1px solid var(--border);margin-top:18px}
 .trust .item{flex:1;min-width:180px;font:400 14px/1.55 -apple-system,system-ui,sans-serif;
@@ -67,21 +73,52 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 
 <h2 class="section">Что умеет</h2>
 <p class="section-lead">Всё, что обычно решают табличкой, перепиской и терпением.</p>
-<div class="grid">
-<div class="card"><b class="title">📲 Запись в один клик</b><p>Из Telegram, ВК
-  или браузера — участнику не нужно ничего устанавливать. Очередь при заполнении
-  мест, автоматический подъём при отмене.</p></div>
-<div class="card"><b class="title">📆 Автопилот расписания</b><p>Задайте
-  «вторник и четверг 19:00» — тренировки создаются сами, подписчики получают
-  уведомление об открытии записи.</p></div>
-<div class="card"><b class="title">⏰ Напоминания</b><p>«Скоро тренировка» за
-  выбранное время до начала — меньше неявок и путаницы.</p></div>
-<div class="card"><b class="title">✅ Явка и оплата</b><p>Отметки в одно
-  касание, список должников, экспорт в CSV / Excel / PDF для отчётов.</p></div>
-<div class="card"><b class="title">📊 Статистика и рейтинг</b><p>Топ
-  посещаемости клуба, личный профиль участника — мотивирует не пропускать.</p></div>
-<div class="card"><b class="title">🌐 Страница записи + QR</b><p>Ссылка и
-  QR-код для зала — записываются даже те, у кого нет мессенджеров.</p></div>
+<div class="feature-grid">
+<div class="feature-card">
+  <div class="feature-icon"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></div>
+  <h3>Запись в один клик</h3>
+  <p>Из Telegram, ВК или браузера — участнику не нужно ничего устанавливать.
+    Очередь при заполнении мест, автоматический подъём при отмене.</p>
+</div>
+<div class="feature-card">
+  <div class="feature-icon"><svg viewBox="0 0 24 24">
+    <rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/>
+  </svg></div>
+  <h3>Автопилот расписания</h3>
+  <p>Задайте «вторник и четверг 19:00» — тренировки создаются сами,
+    подписчики получают уведомление об открытии записи.</p>
+</div>
+<div class="feature-card">
+  <div class="feature-icon"><svg viewBox="0 0 24 24">
+    <path d="M6.5 9a5.5 5.5 0 0111 0c0 5.5 2 6.5 2 6.5h-15s2-1 2-6.5z"/><path d="M10.3 19.5a1.9 1.9 0 003.4 0"/>
+  </svg></div>
+  <h3>Напоминания</h3>
+  <p>«Скоро тренировка» за выбранное время до начала — меньше неявок и путаницы.</p>
+</div>
+<div class="feature-card">
+  <div class="feature-icon"><svg viewBox="0 0 24 24">
+    <path d="M4 7h8M4 12h8M4 17h5"/><path d="M15.5 6.5l2 2 3.5-3.5"/><path d="M15.5 15.5l2 2 3.5-3.5"/>
+  </svg></div>
+  <h3>Явка и оплата</h3>
+  <p>Отметки в одно касание, список должников, экспорт в CSV / Excel / PDF
+    для отчётов.</p>
+</div>
+<div class="feature-card">
+  <div class="feature-icon"><svg viewBox="0 0 24 24">
+    <path d="M4.5 20V11M12 20V4M19.5 20v-6.5"/>
+  </svg></div>
+  <h3>Статистика и рейтинг</h3>
+  <p>Топ посещаемости клуба, личный профиль участника — мотивирует не
+    пропускать.</p>
+</div>
+<div class="feature-card">
+  <div class="feature-icon"><svg viewBox="0 0 24 24">
+    <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1"/>
+    <rect x="3.5" y="14" width="6.5" height="6.5" rx="1"/><path d="M14 15h3v3h-3zM20.5 14v3M14 20.5h3M20.5 20.5v.01"/>
+  </svg></div>
+  <h3>Страница записи + QR</h3>
+  <p>Ссылка и QR-код для зала — записываются даже те, у кого нет мессенджеров.</p>
+</div>
 </div>
 
 <h2 class="section">Как это работает</h2>
