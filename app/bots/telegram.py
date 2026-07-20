@@ -48,6 +48,18 @@ async def _tenant_suspended_msg(session, tid: int) -> str | None:
     return None
 
 
+async def _is_admin_for(session, tenant, user_id: int) -> bool:
+    if tenant.admin_tg_id == user_id:
+        return True
+    if tenant.is_demo:
+        # демо-клуб: админом также считается любой, кто выбрал «Я тренер»
+        # (Membership с role=coach/owner) — см. cmd_start и cb_demo_role.
+        from app.repositories.repo import TenantRepository
+        m = await TenantRepository(session, tenant.id).get_membership(user_id)
+        return bool(m and m.role in ("owner", "coach"))
+    return False
+
+
 async def _resolve_tenant(session, chat_id: int, user_id: int):
     g = GlobalRepository(session)
     # мультиклиент: событие пришло клиентскому боту -> его клуб, без поиска
@@ -55,7 +67,7 @@ async def _resolve_tenant(session, chat_id: int, user_id: int):
     if ctx_tid is not None:
         t = await g.get_tenant(ctx_tid)
         if t is not None:
-            return t.id, (t.admin_tg_id == user_id)
+            return t.id, await _is_admin_for(session, t, user_id)
     tenant = await g.get_tenant_by_tg_chat(chat_id)
     if tenant is None:
         for t in await g.list_tenants():
@@ -64,7 +76,7 @@ async def _resolve_tenant(session, chat_id: int, user_id: int):
                 break
     if tenant is None:
         return None, False
-    return tenant.id, (tenant.admin_tg_id == user_id)
+    return tenant.id, await _is_admin_for(session, tenant, user_id)
 
 
 def _name(x) -> str:
@@ -210,8 +222,16 @@ class GuestSignup(StatesGroup):
     name = State()
 
 
+def _demo_role_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🎓 Я тренер", callback_data="demo:coach"),
+        InlineKeyboardButton(text="🙋 Я участник", callback_data="demo:participant"),
+    ]])
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
+    needs_role_pick = False
     async with SessionLocal() as session:
         tid, is_admin = await _resolve_tenant(session, message.chat.id, message.from_user.id)
         if tid is None:
@@ -225,9 +245,22 @@ async def cmd_start(message: Message) -> None:
             svc = BookingService(session, tid)
             await _upsert_user(svc, message.from_user)
             await svc.repo.set_subscription(PLATFORM, message.from_user.id, True)
+            tenant = await GlobalRepository(session).get_tenant(tid)
+            if tenant and tenant.is_demo and not is_admin:
+                existing = await svc.repo.get_membership(message.from_user.id)
+                needs_role_pick = existing is None
             await session.commit()
         except Exception as e:
             logger.warning("Не удалось обновить профиль при /start: %s", e)
+
+    if needs_role_pick:
+        await message.answer(
+            "🧪 <b>Демо-версия бота</b>\n\n"
+            "Здесь можно попробовать бота и как тренер, и как участник — "
+            "выберите роль. Демо-клуб каждую ночь обновляется заново, "
+            "так что можно нажимать что угодно.",
+            reply_markup=_demo_role_kb(), parse_mode="HTML")
+        return
     custom = None
     try:
         async with SessionLocal() as _s:
@@ -254,6 +287,37 @@ async def cmd_start(message: Message) -> None:
                  "Вам доступны кнопки создания тренировок, отметки явки, "
                  "подтверждения гостей, черновиков и рассылки.")
     await message.answer(text, reply_markup=_menu(is_admin), parse_mode="HTML")
+
+
+@router.callback_query(F.data.in_(("demo:coach", "demo:participant")))
+async def cb_demo_role(query: CallbackQuery) -> None:
+    """Выбор роли в демо-клубе (см. cmd_start): «тренер» получает Membership
+    role=coach (см. _is_admin_for), «участник» — обычный поток без изменений."""
+    as_coach = query.data == "demo:coach"
+    async with SessionLocal() as session:
+        tid, _ = await _resolve_tenant(session, query.message.chat.id, query.from_user.id)
+        if tid is None:
+            await query.answer("Чат не привязан к клубу.", show_alert=True); return
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        if not (tenant and tenant.is_demo):
+            await query.answer(); return
+        if as_coach:
+            svc = BookingService(session, tid)
+            await svc.repo.upsert_membership(query.from_user.id, "coach", _name(query))
+            await session.commit()
+    if as_coach:
+        await query.answer("Вы — тренер демо-клуба ✅")
+        await query.message.edit_text(
+            "🎓 <b>Вы тренер демо-клуба.</b>\nСоздавайте тренировки, "
+            "отмечайте явку и оплату — всё как у настоящего клуба.",
+            parse_mode="HTML")
+        await query.message.answer("👇 Меню тренера:", reply_markup=_menu(True))
+    else:
+        await query.answer("Вы участник демо-клуба ✅")
+        await query.message.edit_text(
+            "🙋 <b>Вы участник демо-клуба.</b>\nЗаписывайтесь на тренировки и "
+            "смотрите статистику — как обычный клиент клуба.", parse_mode="HTML")
+        await query.message.answer("👇 Меню участника:", reply_markup=_menu(False))
 
 
 @router.message(F.text == BTN_LIST)

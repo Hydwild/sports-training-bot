@@ -13,6 +13,7 @@ class TenantCreate(BaseModel):
     admin_tg_id: int | None = None
     admin_vk_id: int | None = None
     timezone: str = "Europe/Moscow"
+    is_demo: bool = False
 
 
 class TenantOut(BaseModel):
@@ -22,6 +23,7 @@ class TenantOut(BaseModel):
     admin_tg_id: int | None
     timezone: str
     is_active: bool
+    is_demo: bool = False
 
     class Config:
         from_attributes = True

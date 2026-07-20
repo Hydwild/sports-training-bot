@@ -10,7 +10,7 @@
     {% for t in tenants %}
     <tr>
       <td>{{ t.id }}</td>
-      <td>{{ t.name }}</td>
+      <td>{{ t.name }}{% if t.is_demo %} <span class="tag no">демо</span>{% endif %}</td>
       <td>
         {% if t.has_tg %}<span class="badge tg">TG</span>{% endif %}
         {% if t.has_vk %}<span class="badge vk">VK</span>{% endif %}

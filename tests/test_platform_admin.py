@@ -318,3 +318,68 @@ def test_rate_limit_on_login_attempts():
                 for _ in range(7)]
         assert codes.count(429) >= 1, codes
     api_routes._ip_hits.clear()
+
+
+# ---------- Тоггл "демо-клуб" в формах создания/редактирования ----------
+
+def test_create_demo_club_sets_is_demo():
+    with TestClient(app) as c:
+        tid = _login_and_create(c, club_name="Демо при создании", is_demo="1")
+        dash = c.get("/admin/platform").text
+        assert "демо" in dash
+
+    async def check():
+        from app.db.engine import SessionLocal, engine
+        from app.repositories.repo import GlobalRepository
+        await engine.dispose()
+        async with SessionLocal() as s:
+            t = await GlobalRepository(s).get_tenant(tid)
+            assert t.is_demo is True
+
+    import asyncio
+    asyncio.run(check())
+
+
+def test_create_regular_club_is_demo_false_by_default():
+    with TestClient(app) as c:
+        tid = _login_and_create(c, club_name="Обычный при создании")
+
+    async def check():
+        from app.db.engine import SessionLocal, engine
+        from app.repositories.repo import GlobalRepository
+        await engine.dispose()
+        async with SessionLocal() as s:
+            t = await GlobalRepository(s).get_tenant(tid)
+            assert t.is_demo is False
+
+    import asyncio
+    asyncio.run(check())
+
+
+def test_edit_toggles_is_demo_on_and_off():
+    with TestClient(app) as c:
+        tid = _login_and_create(c, club_name="Клуб тоггла демо")
+        csrf = _csrf(c.get(f"/admin/platform/{tid}/edit").text)
+        r = c.post(f"/admin/platform/{tid}/edit", data={
+            "csrf": csrf, "club_name": "Клуб тоггла демо",
+            "timezone": "Europe/Moscow", "is_demo": "1"})
+        assert r.status_code == 200
+        assert "checked" in r.text  # чекбокс отмечен после сохранения
+
+        # снимаем галочку — поле is_demo просто отсутствует в форме
+        csrf2 = _csrf(r.text)
+        r2 = c.post(f"/admin/platform/{tid}/edit", data={
+            "csrf": csrf2, "club_name": "Клуб тоггла демо",
+            "timezone": "Europe/Moscow"})
+        assert r2.status_code == 200
+
+    async def check():
+        from app.db.engine import SessionLocal, engine
+        from app.repositories.repo import GlobalRepository
+        await engine.dispose()
+        async with SessionLocal() as s:
+            t = await GlobalRepository(s).get_tenant(tid)
+            assert t.is_demo is False
+
+    import asyncio
+    asyncio.run(check())

@@ -116,6 +116,7 @@ async def scheduler_loop() -> None:
     _last_backup_day = [None]
     _last_offsite_backup_day = [None]
     _last_maint_day = [None]
+    _last_demo_reset_day = [None]
     while True:
         try:
             await _run_scheduler()
@@ -140,6 +141,10 @@ async def scheduler_loop() -> None:
             await _daily_maintenance(_last_maint_day)
         except Exception:
             logger.exception("Ошибка ежедневного обслуживания")
+        try:
+            await _demo_reset_daily(_last_demo_reset_day)
+        except Exception:
+            logger.exception("Ошибка сброса демо-клубов")
         await asyncio.sleep(60)
 
 
@@ -455,3 +460,52 @@ async def _daily_maintenance(last_day: list) -> None:
             await tg_sender(owner_tg_id, "\n".join(lines))
         except Exception:
             pass
+
+
+# демо-тренировки, создаваемые заново при каждом ночном сбросе (дни/время —
+# относительно момента сброса, чтобы демо всегда выглядело "живым")
+_DEMO_SEED = [
+    {"title": "Вечерняя игра", "days": 1, "hour": 19, "duration_min": 90,
+     "max_participants": 8, "location": "Зал №1"},
+    {"title": "Утренняя тренировка", "days": 2, "hour": 9, "duration_min": 60,
+     "max_participants": 6, "location": "Зал №2"},
+    {"title": "Турнир выходного дня", "days": 5, "hour": 12, "duration_min": 180,
+     "max_participants": 16, "location": "Главный корт"},
+]
+
+
+async def _demo_reset_daily(last_day: list) -> None:
+    """Раз в сутки полностью пересобирает демо-клубы (Tenant.is_demo=True):
+    любой посетитель демо-бота может создавать/удалять тренировки и
+    становиться "тренером" — без сброса демо быстро превращается в свалку.
+    Тренировки/записи/роли участников/очередь уведомлений удаляются,
+    создаётся свежий набор примерных тренировок. Реальные (не демо) клубы
+    не затрагиваются."""
+    today = dt.date.today().isoformat()
+    if last_day[0] == today:
+        return
+    from sqlalchemy import delete, select
+    from app.models.entities import Membership, Outbox, Schedule, Tenant, Training
+
+    async with SessionLocal() as session:
+        demo_tenants = list((await session.execute(
+            select(Tenant).where(Tenant.is_demo.is_(True)))).scalars())
+        for t in demo_tenants:
+            # Training удаляется каскадом вместе со своими Signup/Payment
+            # (ondelete=CASCADE в моделях) — отдельно чистим только то, что
+            # с Training FK не связано.
+            for model in (Training, Membership, Outbox, Schedule):
+                await session.execute(delete(model).where(model.tenant_id == t.id))
+            svc = BookingService(session, t.id, tz=t.timezone)
+            now = dt.datetime.now(dt.timezone.utc)
+            for item in _DEMO_SEED:
+                start_at = (now + dt.timedelta(days=item["days"])).replace(
+                    hour=item["hour"], minute=0, second=0, microsecond=0)
+                await svc.repo.add_training(
+                    title=item["title"], start_at=start_at, location=item["location"],
+                    max_participants=item["max_participants"],
+                    duration_min=item["duration_min"], state="published",
+                    publish_at=None, created_by_platform="system", created_by_id=0)
+            await session.commit()
+        logger.info("Демо-клубы пересобраны: %d", len(demo_tenants))
+    last_day[0] = today

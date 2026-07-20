@@ -76,6 +76,10 @@ class Tenant(Base):
     publish_notify_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # Окно отмены: за сколько минут до тренировки запретить отписку (0 — без ограничений)
     cancel_lock_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    # Демо-клуб: любой написавший боту может выбрать роль "тренер" (получает
+    # Membership с role=coach) или "участник" — см. app/bots/telegram.py
+    # (_resolve_tenant, cmd_start) и app/services/tasks.py (ночной сброс).
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )

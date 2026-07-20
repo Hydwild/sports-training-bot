@@ -38,6 +38,12 @@
       <input name="admin_vk_id" type="number" value="{{ t.admin_vk_id or '' }}"
              placeholder="987654321" style="width:100%;padding:8px"></label></p>
 
+    <h3>Демо</h3>
+    <p><label><input type="checkbox" name="is_demo" value="1"
+       {% if t.is_demo %}checked{% endif %}>
+       Это демо-клуб (любой написавший боту может выбрать роль «тренер» или
+       «участник»; данные сбрасываются каждую ночь)</label></p>
+
     <p><button class="btn" type="submit">Сохранить</button>
        <a href="/admin/platform" style="margin-left:10px">← к списку</a></p>
   </form>

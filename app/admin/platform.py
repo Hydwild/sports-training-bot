@@ -122,7 +122,7 @@ async def _dashboard_rows(request: Request, session: AsyncSession) -> list[dict]
         else:
             status = (f"до {paid_until}", "ok")
         rows.append({
-            "id": t.id, "name": t.brand_name or t.name,
+            "id": t.id, "name": t.brand_name or t.name, "is_demo": t.is_demo,
             "has_tg": bool(t.tg_token), "has_vk": bool(t.vk_token),
             "admin_tg_id": t.admin_tg_id,
             "status_text": status[0], "status_tag": status[1],
@@ -268,6 +268,7 @@ async def platform_new_submit(request: Request,
                               tg_token: str = Form(""),
                               vk_token: str = Form(""),
                               admin_tg_id: str = Form(""),
+                              is_demo: str = Form(""),
                               session: AsyncSession = Depends(get_session)):
     name = club_name.strip()[:200]
     if not name:
@@ -277,7 +278,7 @@ async def platform_new_submit(request: Request,
     admin_id = int(admin_tg_id) if admin_tg_id.strip().isdigit() else None
     tenant_out = await _create_tenant(
         TenantCreate(name=name, timezone=timezone.strip() or "Europe/Moscow",
-                    admin_tg_id=admin_id),
+                    admin_tg_id=admin_id, is_demo=bool(is_demo)),
         session)
 
     reload_note = "Токены ботов не заданы — клуб создан, привяжите их позже."
@@ -327,6 +328,7 @@ async def platform_edit_submit(tenant_id: int, request: Request,
                                vk_token: str = Form(""),
                                admin_tg_id: str = Form(""),
                                admin_vk_id: str = Form(""),
+                               is_demo: str = Form(""),
                                session: AsyncSession = Depends(get_session)):
     g = GlobalRepository(session)
     tenant = await g.get_tenant(tenant_id)
@@ -345,6 +347,7 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     tenant.timezone = timezone.strip() or "Europe/Moscow"
     tenant.admin_tg_id = int(admin_tg_id) if admin_tg_id.strip().isdigit() else None
     tenant.admin_vk_id = int(admin_vk_id) if admin_vk_id.strip().isdigit() else None
+    tenant.is_demo = bool(is_demo)
     await session.commit()
 
     try:
