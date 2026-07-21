@@ -46,18 +46,22 @@ def test_public_web_flow():
         r = c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": tr, "name": "Олег", "phone": "79123456789"})
         assert "Вы записаны" in r.text and "/cancel?" in r.text
+        # ссылку отмены человек получает сразу при записи — сохраняем её
+        cancel_link = re.search(
+            r'href="(/club/\d+/cancel\?[^"]+)"', r.text).group(1)
         # имена записанных видны на странице
         assert "Олег" in c.get(f"/club/{tid}").text
         # повтор
         r = c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": tr, "name": "Олег", "phone": "79123456789"})
         assert "уже записаны" in r.text
-        # мои записи по телефону
-        r = c.post(f"/club/{tid}/my", data={"phone": "+7 912 345-67-89"})
-        assert "Игра" in r.text and "/cancel?" in r.text
-        # отмена по персональной ссылке
-        m = re.search(r'href="(/club/\d+/cancel\?[^"]+)"', r.text)
-        link = m.group(1).replace("&amp;", "&")
+        # по номеру телефона записи больше не показываются: номер знают и
+        # другие люди, восстановление доступа по нему закрыто
+        r_my = c.post(f"/club/{tid}/my", data={"phone": "+7 912 345-67-89"})
+        assert r_my.status_code == 200
+        assert "Игра" not in r_my.text and "/cancel?" not in r_my.text
+        # отмена по персональной ссылке, полученной при записи
+        link = cancel_link.replace("&amp;", "&")
         # переход по ссылке ничего не отменяет — только спрашивает
         confirm = c.get(link)
         assert "Отменить запись?" in confirm.text

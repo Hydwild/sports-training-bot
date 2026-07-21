@@ -508,7 +508,13 @@ class TenantRepository:
     async def issue_manage_token(self, platform: str, user_id: int,
                                  token_hash: str, days: int = 90) -> ManageToken:
         """Регистрирует новую ссылку управления. Сам токен сюда не попадает
-        — только его SHA-256: из базы восстановить ссылку нельзя."""
+        — только его SHA-256: из базы восстановить ссылку нельзя.
+
+        Прежние ссылки того же человека отзываются: иначе у клиента копится
+        сколько угодно вечных ключей к своим данным, и потерянная год назад
+        ссылка открывает их до сих пор. Действующей остаётся последняя —
+        та, что человек только что получил."""
+        await self.revoke_manage_tokens(platform, user_id)
         t = ManageToken(
             tenant_id=self.tenant_id, platform=platform, user_id=user_id,
             token_hash=token_hash,
@@ -525,6 +531,18 @@ class TenantRepository:
             ManageToken.revoked.is_(False),
             ManageToken.expires_at > _utcnow())
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def purge_expired_manage_tokens(self) -> int:
+        """Удаляет истёкшие и отозванные ссылки: держать их вечно незачем,
+        а в резервных копиях они лишний след о клиентах."""
+        from sqlalchemy import delete, or_
+
+        res = await self.session.execute(
+            delete(ManageToken).where(
+                ManageToken.tenant_id == self.tenant_id,
+                or_(ManageToken.expires_at < _utcnow(),
+                    ManageToken.revoked.is_(True))))
+        return res.rowcount or 0
 
     async def revoke_manage_tokens(self, platform: str, user_id: int) -> None:
         await self.session.execute(

@@ -98,15 +98,28 @@ def test_signup_does_not_store_phone_as_identity():
         assert tr
 
 
-def test_same_phone_reuses_customer_and_finds_own_bookings():
+def test_same_phone_reuses_customer():
+    """Тот же номер в другом написании — тот же клиент, без дубля."""
+    import asyncio
+
     with TestClient(app) as c:
-        tid, _tr = _signup(c, phone="79147778899", name="Борис")
-        # тот же номер в другом написании — тот же человек
-        page = c.post(f"/club/{tid}/my", data={"phone": "+7 914 777-88-99"})
-        assert "Занятие" in page.text
-        # чужой номер записей не показывает
-        other = c.post(f"/club/{tid}/my", data={"phone": "79140000001"})
-        assert "не найдено" in other.text
+        tid, tr = _signup(c, phone="79147778899", name="Борис")
+        # повторная запись тем же номером, записанным иначе
+        c.post(f"/club/{tid}/signup", data={
+            "consent": "1", "training_id": tr, "name": "Борис",
+            "phone": "+7 914 777-88-99"})
+
+        async def customers():
+            from sqlalchemy import select
+
+            from app.db.engine import SessionLocal, engine
+            from app.models.entities import WebCustomer
+            await engine.dispose()
+            async with SessionLocal() as s:
+                return (await s.execute(select(WebCustomer).where(
+                    WebCustomer.tenant_id == tid))).scalars().all()
+
+        assert len(asyncio.run(customers())) == 1
 
 
 def test_trainer_still_sees_phone_in_admin_card():

@@ -898,12 +898,15 @@ async def public_club(tenant_id: int, rated: str = "",
             f'placeholder="Телефон (для мастера)" aria-label="Телефон">'
             f'{_CONSENT_SIGNUP}'
             f'<button>Записаться</button></form></div>')
+    # Формы «покажите мои записи по телефону» здесь больше нет: номер знают
+    # и другие люди, поэтому он не подтверждает личность. Доступ к своим
+    # записям — только по личной ссылке, выданной при записи.
     my_form = (f'<div class="card"><div class="t">Мои записи</div>'
-               f'<form method="post" action="/club/{tenant_id}/my">'
-               f'<input name="phone" type="tel" autocomplete="tel" required '
-               f'minlength="10" maxlength="16" '
-               f'placeholder="Телефон, указанный при записи" aria-label="Телефон">'
-               f'<button class="ghost">Показать мои записи</button></form></div>')
+               f'<p class="note">Открываются по личной ссылке, которую вы '
+               f'получили вместе с подтверждением записи. Не сохранилась — '
+               f'обратитесь к администратору клуба.</p>'
+               f'<div class="links"><a href="/club/{tenant_id}/my-help">'
+               f'Подробнее</a></div></div>')
     days_html = ""
     if len(day_order) > 1:
         chips = "".join(
@@ -1190,6 +1193,34 @@ def _new_manage_token() -> tuple[str, str]:
     return token, hashlib.sha256(token.encode()).hexdigest()
 
 
+# Сколько живёт сессия управления своими записями. Короткая: это доступ к
+# персональным данным, а не «запомнить меня».
+MANAGE_SESSION_MAX_AGE = 60 * 60 * 2      # 2 часа
+
+
+def _manage_cookie(tenant_id: int) -> str:
+    """Своя cookie на каждый клуб: сессия одного клуба не должна открывать
+    данные в другом, даже если человек ходит в оба."""
+    return f"manage_{tenant_id}"
+
+
+def _no_store(resp):
+    """Заголовки для страниц с персональными данными.
+
+    no-store — чтобы список записей и телефон не оставались в кеше браузера
+    и промежуточных прокси; no-referrer — чтобы адрес страницы (а с ним и
+    факт визита) не уезжал на сторонние сайты по ссылкам."""
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+def _html_no_store(html: str):
+    from fastapi.responses import HTMLResponse as _HR
+    return _no_store(_HR(html))
+
+
 def _manage_hash(token: str) -> str:
     import hashlib
     return hashlib.sha256(token.encode()).hexdigest()
@@ -1291,7 +1322,7 @@ async def _manage_owner(session, tenant_id: int, token: str):
     return tenant, svc, row.user_id
 
 
-def _manage_page(tenant, tenant_id: int, token: str, rows, svc,
+def _manage_page(tenant, tenant_id: int, rows, svc,
                  notice: str = "") -> str:
     import html as _h
     parts = []
@@ -1307,7 +1338,7 @@ def _manage_page(tenant, tenant_id: int, token: str, rows, svc,
             f'<div class="head"><div class="t">{_h.escape(t.title)}</div>'
             f'{chip}</div>'
             f'<div class="m">{_I_CAL} {svc.format_local(t.start_at)}</div>'
-            f'<form method="post" action="/club/{tenant_id}/m/{token}/cancel">'
+            f'<form method="post" action="/club/{tenant_id}/manage/cancel">'
             f'<input type="hidden" name="training_id" value="{t.id}">'
             f'<button class="danger-btn">Отменить запись</button></form>'
             f'</div>')
@@ -1316,9 +1347,9 @@ def _manage_page(tenant, tenant_id: int, token: str, rows, svc,
         f'<p class="note">Можно забрать копию всего, что о вас хранится, '
         f'или удалить это.</p>'
         f'<div class="links" style="margin-bottom:12px">'
-        f'<a href="/club/{tenant_id}/m/{token}/export">Скачать мои данные</a>'
+        f'<a href="/club/{tenant_id}/manage/export">Скачать мои данные</a>'
         f'</div>'
-        f'<form method="post" action="/club/{tenant_id}/m/{token}/forget">'
+        f'<form method="post" action="/club/{tenant_id}/manage/forget">'
         f'<button class="danger-btn">Удалить мои данные</button></form>'
         f'<p class="note" style="margin-top:8px">Удаление отменит записи и '
         f'уберёт имя, телефон и оценки. Эта ссылка перестанет работать.</p>'
@@ -1333,36 +1364,72 @@ def _manage_page(tenant, tenant_id: int, token: str, rows, svc,
 
 
 @public_router.get("/club/{tenant_id}/m/{token}", response_class=HTMLResponse)
-async def public_manage(tenant_id: int, token: str,
-                        session: AsyncSession = Depends(get_session)):
-    """Управление своими записями по персональной ссылке — без ввода
-    телефона, который для чужого списка работал бы как угаданный пароль."""
+async def public_manage_enter(tenant_id: int, token: str,
+                              session: AsyncSession = Depends(get_session)):
+    """Вход по персональной ссылке: обмениваем токен на сессию и уводим на
+    URL без токена.
+
+    Токен в адресе живёт дольше самого визита: он остаётся в истории
+    браузера, в заголовке Referer при переходе на внешний сайт и в
+    access-логах любого прокси. Поэтому дальше человек работает по чистому
+    адресу, а доступ подтверждает cookie — недоступная скриптам страницы."""
+    from fastapi.responses import RedirectResponse
+
     tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+    resp = RedirectResponse(f"/club/{tenant_id}/manage", status_code=303)
+    resp.set_cookie(
+        _manage_cookie(tenant_id), token,
+        httponly=True,                       # недоступна из JavaScript
+        secure=not settings.admin_dev_login,  # по HTTP только в отладке
+        samesite="lax",
+        max_age=MANAGE_SESSION_MAX_AGE,
+        path=f"/club/{tenant_id}",           # не уходит на другие клубы
+    )
+    _no_store(resp)
+    return resp
+
+
+async def _manage_session(request: Request, session, tenant_id: int):
+    """(tenant, svc, uid) по cookie-сессии или 404."""
+    token = request.cookies.get(_manage_cookie(tenant_id), "")
+    if not token:
+        raise HTTPException(status_code=404,
+                            detail="Откройте свою персональную ссылку заново")
+    return await _manage_owner(session, tenant_id, token)
+
+
+@public_router.get("/club/{tenant_id}/manage", response_class=HTMLResponse)
+async def public_manage(tenant_id: int, request: Request,
+                        session: AsyncSession = Depends(get_session)):
+    """Свои записи и данные. Доступ — по cookie, выданной персональной
+    ссылкой; телефон, который знают и другие люди, здесь ничего не даёт."""
+    tenant, svc, uid = await _manage_session(request, session, tenant_id)
     rows = await svc.my_trainings("web", uid)
-    return _manage_page(tenant, tenant_id, token, rows, svc)
+    return _html_no_store(_manage_page(tenant, tenant_id, rows, svc))
 
 
-@public_router.post("/club/{tenant_id}/m/{token}/cancel",
+@public_router.post("/club/{tenant_id}/manage/cancel",
                     response_class=HTMLResponse)
-async def public_manage_cancel(tenant_id: int, token: str,
+async def public_manage_cancel(tenant_id: int, request: Request,
                                training_id: int = Form(...),
                                session: AsyncSession = Depends(get_session)):
-    tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+    tenant, svc, uid = await _manage_session(request, session, tenant_id)
     res = await svc.cancel_signup(training_id, "web", uid)
     await session.commit()
     if res.get("cancelled"):
         await _notify_group_card_changed(tenant_id, training_id)
     rows = await svc.my_trainings("web", uid)
     notice = "Запись отменена." if res.get("cancelled") else "Запись не найдена."
-    return _manage_page(tenant, tenant_id, token, rows, svc, notice)
+    return _html_no_store(_manage_page(tenant, tenant_id, rows, svc, notice))
 
 
-@public_router.get("/club/{tenant_id}/m/{token}/export")
-async def public_manage_export(tenant_id: int, token: str,
+@public_router.get("/club/{tenant_id}/manage/export")
+async def public_manage_export(tenant_id: int, request: Request,
                                session: AsyncSession = Depends(get_session)):
     """Выгрузка своих данных — то, что о человеке хранится в этом клубе."""
     from fastapi.responses import JSONResponse
-    tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+
+    tenant, svc, uid = await _manage_session(request, session, tenant_id)
     rows = await svc.my_trainings("web", uid)
     subs = await svc.repo.aliases_map_all()
     data = {
@@ -1379,20 +1446,23 @@ async def public_manage_export(tenant_id: int, token: str,
             for t, status, position in rows
         ],
     }
-    return JSONResponse(
+    resp = JSONResponse(
         data,
         headers={"Content-Disposition":
                  f'attachment; filename="my-data-club-{tenant_id}.json"'},
         media_type="application/json; charset=utf-8")
+    _no_store(resp)
+    return resp
 
 
-@public_router.post("/club/{tenant_id}/m/{token}/forget",
+@public_router.post("/club/{tenant_id}/manage/forget",
                     response_class=HTMLResponse)
-async def public_manage_forget(tenant_id: int, token: str,
+async def public_manage_forget(tenant_id: int, request: Request,
                                session: AsyncSession = Depends(get_session)):
     """Удаление своих данных в этом клубе."""
     import html as _h
-    tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+
+    tenant, svc, uid = await _manage_session(request, session, tenant_id)
     rows = await svc.my_trainings("web", uid)
     affected = [t.id for t, _s, _p in rows]
     removed = await svc.repo.forget_user("web", uid)
@@ -1408,21 +1478,57 @@ async def public_manage_forget(tenant_id: int, token: str,
             f'<div class="links"><a href="/club/{tenant_id}">'
             f'← к списку занятий</a></div></div>')
     title = tenant.brand_name or tenant.name
-    return _PAGE.format(cover="", eyebrow=_eyebrow(tenant),
-                        title=_h.escape(title),
-                        color=_safe_color(tenant.brand_color), body=body)
+    resp = _html_no_store(_PAGE.format(
+        cover="", eyebrow=_eyebrow(tenant), title=_h.escape(title),
+        color=_safe_color(tenant.brand_color), body=body))
+    # сессию гасим: данных, к которым она вела, больше нет
+    resp.delete_cookie(_manage_cookie(tenant_id), path=f"/club/{tenant_id}")
+    return resp
+
+
+def _my_help_body(tenant_id: int) -> str:
+    """Единственный ответ на вопрос «где мои записи» — одинаковый для всех.
+
+    Текст НЕ зависит от введённого номера: ни от его корректности, ни от
+    того, есть ли такой клиент. Иначе по различию ответов можно было бы
+    перебором узнать, кто ходит в этот клуб."""
+    return (f'<div class="card"><div class="t">Доступ к своим записям</div>'
+            f'<p class="note">По номеру телефона записи не показываются: '
+            f'номер знают и другие люди, поэтому он не подтверждает, что вы '
+            f'— это вы.</p>'
+            f'<p class="note">Когда вы записывались через сайт, вместе с '
+            f'подтверждением выдавалась личная ссылка «Мои записи и данные». '
+            f'Откройте её — там список записей, отмена, выгрузка и удаление '
+            f'данных.</p>'
+            f'<p class="note">Ссылка не сохранилась — обратитесь к '
+            f'администратору клуба: он найдёт вашу запись, отменит или '
+            f'перенесёт её.</p>'
+            f'<div class="links"><a href="/club/{tenant_id}">'
+            f'← к списку занятий</a></div></div>')
 
 
 @public_router.post("/club/{tenant_id}/my", response_class=HTMLResponse)
 async def public_my(tenant_id: int,
                     request: Request,
-                    phone: str = Form(...),
+                    phone: str = Form(""),
                     session: AsyncSession = Depends(get_session)):
     """
-    Мои записи по телефону: список с персональными ссылками отмены.
-    Телефон здесь фактически работает как пароль (даёт доступ к чужим
-    записям и ссылкам их отмены) — лимитируем попытки по IP, как и для
-    самой записи, иначе телефон можно перебирать без ограничений.
+    Восстановление доступа по одному номеру телефона БОЛЬШЕ НЕ РАБОТАЕТ.
+
+    Раньше этот обработчик по введённому номеру показывал чужие записи,
+    ссылки их отмены и выдавал новую персональную ссылку управления —
+    то есть номер работал как пароль. Номер не секрет: его знают
+    администратор, коллеги, любой, кто видел запись, и он же угадывается
+    перебором.
+
+    Подтверждённого независимого канала (SMS или привязанный аккаунт
+    Telegram/ВК) у веб-записи сейчас нет, поэтому безопасное поведение по
+    умолчанию — не восстанавливать доступ вовсе. Ответ одинаков для
+    существующего и несуществующего номера: по нему нельзя проверить,
+    записан ли человек в этот клуб.
+
+    Маршрут сохранён (а не удалён), чтобы старые вкладки и закладки не
+    получали 404 и человек видел объяснение, что делать дальше.
     """
     import html as _h
     ip = client_ip(request)
@@ -1430,52 +1536,22 @@ async def public_my(tenant_id: int,
         raise HTTPException(status_code=429,
                             detail="Слишком много запросов, попробуйте через минуту")
     tenant = await _ensure_tenant(session, tenant_id)
-    from app.core.config import tenant_suspended
-    if tenant_suspended(tenant):
-        import html as _h2
-        return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h2.escape(tenant.brand_name or tenant.name),
-                            color="#888",
-                            body='<div class="card note">Работа клуба временно '
-                                 'приостановлена.</div>')
-    digits = "".join(c for c in phone if c.isdigit())
-    if not (10 <= len(digits) <= 15):
-        raise HTTPException(status_code=400, detail="Некорректный телефон")
-    svc = BookingService(session, tenant_id, tz=tenant.timezone)
-    uid = await svc.repo.find_web_customer_id(digits)
-    rows = await svc.my_trainings("web", uid) if uid is not None else []
-    if not rows:
-        body = ('<div class="card note">По этому телефону записей '
-                'не найдено.</div>'
-                f'<div class="links"><a href="/club/{tenant_id}">'
-                '← к списку тренировок</a></div>')
-    else:
-        items = []
-        for t, status, position in rows:
-            chip = ('<span class="chip">записаны</span>' if status == "active"
-                    else f'<span class="chip q">в очереди №{position}</span>')
-            token = _cancel_token(tenant_id, t.id, uid)
-            items.append(
-                f'<div class="card">'
-                f'<div class="head"><div class="t">{_h.escape(t.title)}</div>'
-                f'{chip}</div>'
-                f'<div class="m">{_I_CAL} {svc.format_local(t.start_at)}</div>'
-                f'<div class="links" style="text-align:left;margin-top:12px">'
-                f'<a href="/club/{tenant_id}/cancel?t={t.id}&u={uid}'
-                f'&s={token}" class="danger">Отменить запись</a></div></div>')
-        manage = await _issue_manage_link(svc, tenant_id, uid)
-        await session.commit()
-        items.append(
-            f'<div class="card"><div class="t">Личная ссылка</div>'
-            f'<p class="note">Сохраните её — по ней видны все ваши записи, '
-            f'выгрузка и удаление данных, без ввода телефона.</p>'
-            f'<div class="links"><a href="{manage}">Открыть мои записи</a>'
-            f'</div></div>')
-        items.append(f'<div class="links">'
-                     f'<a href="/club/{tenant_id}">← к списку</a></div>')
-        body = "".join(items)
     title = tenant.brand_name or tenant.name
     return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h.escape(title),
-                        color=_safe_color(tenant.brand_color), body=body)
+                        color=_safe_color(tenant.brand_color),
+                        body=_my_help_body(tenant_id))
+
+
+@public_router.get("/club/{tenant_id}/my-help", response_class=HTMLResponse)
+async def public_my_help(tenant_id: int,
+                         session: AsyncSession = Depends(get_session)):
+    """Как попасть в свои записи. Ничего не ищет и ничего не выдаёт."""
+    import html as _h
+    tenant = await _ensure_tenant(session, tenant_id)
+    title = tenant.brand_name or tenant.name
+    return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h.escape(title),
+                        color=_safe_color(tenant.brand_color),
+                        body=_my_help_body(tenant_id))
 
 
 @public_router.get("/promo", response_class=HTMLResponse)
