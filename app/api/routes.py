@@ -734,6 +734,8 @@ accent-color:var(--accent);cursor:pointer}}
 color:var(--muted);text-align:left}}
 .consent a{{color:var(--accent);font-weight:600}}
 .danger{{color:#b23a2e}}
+button.danger-btn{{background:#b23a2e;margin-top:8px}}
+button.danger-btn:hover{{filter:brightness(1.06)}}
 .note{{text-align:center;color:var(--muted);
 font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
 .foot{{text-align:center;color:var(--muted);margin-top:32px;
@@ -1162,9 +1164,46 @@ def _cancel_token(tenant_id: int, training_id: int, uid: int) -> str:
 
 
 @public_router.get("/club/{tenant_id}/cancel", response_class=HTMLResponse)
-async def public_cancel(tenant_id: int, t: int, u: int, s: str,
+async def public_cancel_confirm(tenant_id: int, t: int, u: int, s: str,
+                                session: AsyncSession = Depends(get_session)):
+    """Страница подтверждения отмены. Сама отмена — POST ниже.
+
+    Раньше отмена происходила прямо по переходу по ссылке. Ссылку видит не
+    только человек: мессенджеры открывают её ради превью, браузеры делают
+    предзагрузку, антивирусы и корпоративные фильтры проверяют содержимое —
+    и запись отменялась сама собой, без участия владельца."""
+    import hmac as _hmac
+    import html as _h
+    tenant = await _ensure_tenant(session, tenant_id)
+    if not _hmac.compare_digest(s, _cancel_token(tenant_id, t, u)):
+        raise HTTPException(status_code=403, detail="Неверная ссылка отмены")
+    svc = BookingService(session, tenant_id, tz=tenant.timezone)
+    training = await svc.repo.get_training(t)
+    what = (f'«{_h.escape(training.title)}» '
+            f'{_h.escape(svc.format_local(training.start_at))}'
+            if training else "эту запись")
+    body = (f'<div class="card"><div class="t">Отменить запись?</div>'
+            f'<p class="note">{what}</p>'
+            f'<form method="post" action="/club/{tenant_id}/cancel">'
+            f'<input type="hidden" name="t" value="{t}">'
+            f'<input type="hidden" name="u" value="{u}">'
+            f'<input type="hidden" name="s" value="{_h.escape(s)}">'
+            f'<button class="danger-btn">Да, отменить</button></form>'
+            f'<div class="links"><a href="/club/{tenant_id}">'
+            f'← вернуться к списку</a></div></div>')
+    title = tenant.brand_name or tenant.name
+    return _PAGE.format(cover="", eyebrow=_eyebrow(tenant),
+                        title=_h.escape(title),
+                        color=_safe_color(tenant.brand_color), body=body)
+
+
+@public_router.post("/club/{tenant_id}/cancel", response_class=HTMLResponse)
+async def public_cancel(tenant_id: int,
+                        t: int = Form(...),
+                        u: int = Form(...),
+                        s: str = Form(...),
                         session: AsyncSession = Depends(get_session)):
-    """Отмена записи по персональной ссылке из подтверждения."""
+    """Отмена записи — только осознанным действием (POST из формы)."""
     import hmac as _hmac
     import html as _h
     tenant = await _ensure_tenant(session, tenant_id)

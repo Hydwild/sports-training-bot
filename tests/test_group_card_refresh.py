@@ -318,7 +318,9 @@ def test_public_web_cancel_refreshes_tg_group_card(monkeypatch):
         link = re.search(r'href="(/club/\d+/cancel\?[^"]+)"',
                          signup_resp.text).group(1)
         link = link.replace("&amp;", "&")
-        r = c.get(link)
+        confirm = c.get(link)                      # только подтверждение
+        fields = dict(re.findall(r'name="(\w+)" value="([^"]+)"', confirm.text))
+        r = c.post(link.split("?")[0], data=fields)
         assert "отменена" in r.text
 
     assert refreshed == [(tid, train_id)]

@@ -58,10 +58,18 @@ def test_public_web_flow():
         # отмена по персональной ссылке
         m = re.search(r'href="(/club/\d+/cancel\?[^"]+)"', r.text)
         link = m.group(1).replace("&amp;", "&")
-        assert "отменена" in c.get(link).text
+        # переход по ссылке ничего не отменяет — только спрашивает
+        confirm = c.get(link)
+        assert "Отменить запись?" in confirm.text
+        assert "отменена" not in confirm.text
+        # отменяет только подтверждение формой
+        fields = dict(re.findall(r'name="(\w+)" value="([^"]+)"', confirm.text))
+        done = c.post(link.split("?")[0], data=fields)
+        assert "отменена" in done.text
         # подделанный токен отклоняется
-        bad = re.sub(r"s=\w+", "s=deadbeefdeadbeef", link)
-        assert c.get(bad).status_code == 403
+        assert c.get(re.sub(r"s=\w+", "s=deadbeef", link)).status_code == 403
+        assert c.post(link.split("?")[0],
+                      data={**fields, "s": "deadbeef"}).status_code == 403
         # валидация телефона
         r = c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": tr, "name": "X", "phone": "12"})
