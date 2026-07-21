@@ -596,11 +596,12 @@ class TenantRepository:
 
     async def has_visited_master(self, master_id: int, platform: str,
                                  user_id: int) -> bool:
-        """Был ли у человека состоявшийся визит к этому мастеру.
+        """Был ли у человека ПОДТВЕРЖДЁННЫЙ визит к этому мастеру.
 
-        Оценку имеет смысл принимать только от того, кто действительно
-        приходил: запись должна быть активной (не в очереди, не отменённой)
-        и на занятие, которое уже началось."""
+        Мало того, что занятие прошло: человек мог записаться и не прийти.
+        Раньше проверялось только время начала — значит, оценку мог
+        поставить тот, кого мастер в глаза не видел. Теперь нужна отметка
+        явки, которую ставит сам мастер или администратор."""
         now = dt.datetime.now(dt.timezone.utc)
         stmt = (select(func.count()).select_from(Signup)
                 .join(Training, Training.id == Signup.training_id)
@@ -608,6 +609,7 @@ class TenantRepository:
                        Signup.platform == platform,
                        Signup.user_id == user_id,
                        Signup.status == "active",
+                       Signup.attended.is_(True),
                        Training.master_id == master_id,
                        Training.start_at <= now))
         return bool((await self.session.execute(stmt)).scalar() or 0)

@@ -538,7 +538,7 @@ _I_USERS = ('<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/>'
 from app.api.public_style import consent_field as _consent_field
 
 _CONSENT_SIGNUP = _consent_field("имени и телефона для записи")
-_CONSENT_RATE = _consent_field("имени, телефона и отзыва для оценки мастера")
+_CONSENT_RATE = _consent_field("имени и текста отзыва для оценки мастера")
 
 # Страница записи клуба: тёплая палитра общего сайта (/promo, /faq, /reviews),
 # фирменный цвет клуба ({color}) — акцент кнопок/ссылок/прогресса.
@@ -992,14 +992,14 @@ async def public_club(tenant_id: int, rated: str = "",
                 f'<div class="rating-pick">{stars_input}</div>'
                 f'<input name="name" autocomplete="name" required minlength="2" '
                 f'maxlength="100" placeholder="Ваше имя" aria-label="Ваше имя">'
-                f'<input name="phone" type="tel" autocomplete="tel" required '
-                f'minlength="10" maxlength="16" '
-                f'placeholder="Телефон, по которому записывались" '
-                f'aria-label="Телефон">'
                 f'<input name="text" maxlength="300" '
                 f'placeholder="Короткий отзыв (необязательно)">'
                 f'{_CONSENT_RATE}'
-                f'<button>Отправить оценку</button></form></details>')
+                f'<button>Отправить оценку</button>'
+                f'<p class="note" style="margin-top:8px">Оценка принимается '
+                f'после визита и только по вашей личной ссылке — той, что '
+                f'пришла вместе с подтверждением записи.</p>'
+                f'</form></details>')
             bio_html = (f'<p class="mbio">{_h.escape(m.bio)}</p>'
                         if getattr(m, "bio", "") else "")
             mcards.append(
@@ -1025,14 +1025,20 @@ async def public_club(tenant_id: int, rated: str = "",
         if rated == "1":
             rated_note = ('<div class="card note rated-ok">Спасибо! '
                           'Оценка сохранена.</div>')
+        elif rated == "nosession":
+            rated_note = (
+                '<div class="card note">Оценку можно оставить только по '
+                'личной ссылке, которую вы получили вместе с подтверждением '
+                'записи: так мы знаем, что оценка от вас, а не от того, кто '
+                'узнал ваш номер.</div>')
         elif rated == "novisit":
             # честно объясняем, почему оценка не принята
             rated_note = (
                 '<div class="card note">Оценку можно оставить после визита: '
-                'мы не нашли записи на этот номер к выбранному '
-                f'{_h.escape(vc["master_word"])}у. Если записывались по '
-                'телефону или через бота — попросите администратора '
-                'добавить запись.</div>')
+                f'у вас нет отмеченного посещения у выбранного '
+                f'{_h.escape(vc["master_word"])}а. Отметку ставит '
+                f'{_h.escape(vc["master_word"])} или администратор после '
+                'занятия — если визит был, попросите её проставить.</div>')
         else:
             rated_note = ""
         body = (profile_html + rated_note + home_html + masters_scr
@@ -1133,13 +1139,23 @@ async def public_rate_master(tenant_id: int,
                              master_id: int = Form(...),
                              rating: int = Form(...),
                              name: str = Form(...),
-                             phone: str = Form(...),
                              text: str = Form(""),
                              consent: str = Form(""),
                              session: AsyncSession = Depends(get_session)):
-    """Оценка мастера с публичной страницы. Анти-накрутка: телефон
-    обязателен, одна оценка на номер (повторная заменяет прежнюю),
-    плюс общий IP-лимит."""
+    """Оценка мастера.
+
+    Личность подтверждает сессия управления (cookie, полученная по личной
+    ссылке), а не номер телефона: номер знают и другие люди, и раньше
+    достаточно было ввести чужой, чтобы поставить оценку за него.
+
+    Сам факт визита тоже проверяется: нужна активная запись к ЭТОМУ
+    мастеру на прошедшее занятие с отметкой явки. Записаться и не прийти
+    — не повод оценивать.
+
+    Одна актуальная оценка клиента о мастере: повторная заменяет прежнюю.
+    Это же правило закреплено в БД уникальным ключом
+    (tenant_id, master_id, user_id) — обработчик здесь не единственная
+    защита."""
     from fastapi.responses import RedirectResponse
     if not consent.strip():
         from app.api.public_style import CONSENT_ERROR
@@ -1152,18 +1168,25 @@ async def public_rate_master(tenant_id: int,
     if not tenant.is_active:
         raise HTTPException(status_code=404, detail="Клуб не найден")
     name = name.strip()[:100]
-    digits = "".join(c for c in phone if c.isdigit())
-    if (len(name) < 2 or not (10 <= len(digits) <= 15)
-            or not (1 <= rating <= 5)):
+    if len(name) < 2 or not (1 <= rating <= 5):
         raise HTTPException(status_code=400, detail="Некорректные данные")
+
+    token = request.cookies.get(_manage_cookie(tenant_id), "")
+    if not token:
+        # без подтверждённой сессии оценку не принимаем и не намекаем,
+        # существует ли такой клиент
+        return RedirectResponse(f"/club/{tenant_id}?rated=nosession",
+                                status_code=303)
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
+    row = await svc.repo.resolve_manage_token(_manage_hash(token))
+    if row is None:
+        return RedirectResponse(f"/club/{tenant_id}?rated=nosession",
+                                status_code=303)
+    uid = row.user_id
+
     if await svc.repo.get_master(master_id) is None:
         raise HTTPException(status_code=404, detail="Мастер не найден")
-    # оценку принимаем только от того, кто действительно приходил: иначе
-    # рейтинг — это опрос случайных людей, а не отзыв клиентов
-    uid = await svc.repo.find_web_customer_id(digits)
-    if uid is None or not await svc.repo.has_visited_master(
-            master_id, "web", uid):
+    if not await svc.repo.has_visited_master(master_id, "web", uid):
         return RedirectResponse(f"/club/{tenant_id}?rated=novisit",
                                 status_code=303)
     await svc.repo.upsert_master_review(
