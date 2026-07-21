@@ -129,6 +129,7 @@ jobs:
             -e JWT_SECRET=ci-secret-ci-secret-ci-secret \
             -e TG_TOKEN=123456:CITOKEN \
             -e TG_MODE=webhook \
+            -e TG_WEBHOOK_SECRET=ci-webhook-secret \
             -e RUN_VK_POLLING=false \
             booking-bot:ci
 

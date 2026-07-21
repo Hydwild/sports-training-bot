@@ -38,6 +38,18 @@ async def _seed_outbox_message(maker) -> int:
         return t.id
 
 
+async def _make_due(maker):
+    """Сдвигает время повтора в прошлое — как будто пауза уже прошла.
+    После неудачи сообщение ждёт (1, 2, 5, 15 минут), иначе заблокированный
+    бот перебирался бы на каждом проходе очереди."""
+    from sqlalchemy import update
+
+    from app.models.entities import Outbox
+    async with maker() as s:
+        await s.execute(update(Outbox).values(next_attempt_at=None))
+        await s.commit()
+
+
 async def test_outbox_retries_transient_failure_then_gives_up(monkeypatch, maker):
     """Регресс: раньше сообщение помечалось sent=True при ЛЮБОЙ ошибке
     отправки, теряя его навсегда после первого же сбоя (даже временного)."""
@@ -54,6 +66,7 @@ async def test_outbox_retries_transient_failure_then_gives_up(monkeypatch, maker
     try:
         # попытки до лимита — сообщение остаётся в очереди для повтора
         for _ in range(tasks.MAX_OUTBOX_ATTEMPTS - 1):
+            await _make_due(maker)
             await tasks._deliver_once()
         assert calls["n"] == tasks.MAX_OUTBOX_ATTEMPTS - 1
 
@@ -63,6 +76,7 @@ async def test_outbox_retries_transient_failure_then_gives_up(monkeypatch, maker
             assert pending[0].attempts == tasks.MAX_OUTBOX_ATTEMPTS - 1
 
         # последняя попытка — лимит исчерпан, сообщение снимается с очереди
+        await _make_due(maker)
         await tasks._deliver_once()
         assert calls["n"] == tasks.MAX_OUTBOX_ATTEMPTS
         async with maker() as s:
@@ -106,6 +120,7 @@ async def test_undelivered_message_becomes_dead_not_silently_sent(
     tasks.register_sender("tg", failing_sender)
     try:
         for _ in range(tasks.MAX_OUTBOX_ATTEMPTS):
+            await _make_due(maker)
             await tasks._deliver_once()
 
         async with maker() as s:
@@ -196,5 +211,40 @@ async def test_outbox_delivers_on_success_without_retry(monkeypatch, maker):
         assert delivered == [(42, "тест-сообщение")]
         async with maker() as s:
             assert await GlobalRepository(s).fetch_pending_outbox("tg") == []
+    finally:
+        tasks._senders.pop("tg", None)
+
+
+async def test_failed_message_waits_before_retry(monkeypatch, maker):
+    """Регресс: неудачная доставка повторялась на каждом проходе очереди —
+    пять попыток сгорали за минуту, и живое сообщение попадало в dead
+    из-за короткого сбоя сети."""
+    monkeypatch.setattr(tasks, "SessionLocal", maker)
+    await _seed_outbox_message(maker)
+
+    calls = {"n": 0}
+
+    async def failing_sender(user_id, text, tenant_id=None):
+        calls["n"] += 1
+        raise RuntimeError("сеть недоступна")
+
+    tasks.register_sender("tg", failing_sender)
+    try:
+        await tasks._deliver_once()
+        assert calls["n"] == 1
+        # сразу следующий проход сообщение не трогает — пауза не прошла
+        await tasks._deliver_once()
+        await tasks._deliver_once()
+        assert calls["n"] == 1, "повтор без паузы"
+
+        async with maker() as s:
+            pending = await GlobalRepository(s).fetch_pending_outbox("tg")
+            assert pending and pending[0].attempts == 1
+            assert pending[0].next_attempt_at is not None
+
+        # когда пауза прошла — повторяем
+        await _make_due(maker)
+        await tasks._deliver_once()
+        assert calls["n"] == 2
     finally:
         tasks._senders.pop("tg", None)

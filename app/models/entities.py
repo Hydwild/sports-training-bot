@@ -229,6 +229,10 @@ class Outbox(Base):
                                         index=True)
     claimed_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True))
+    # когда имеет смысл повторить: после неудачи пауза растёт (1, 2, 5, 15
+    # минут), иначе заблокированный бот перебирается на каждом проходе
+    next_attempt_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True))
     last_error: Mapped[str] = mapped_column(String(300), default="")
     # число неудачных попыток доставки; после лимита сообщение помечается
     # dead, чтобы не ретраить вечно (например, бот заблокирован юзером)

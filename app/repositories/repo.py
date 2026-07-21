@@ -32,6 +32,10 @@ def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+# пауза перед повтором доставки по номеру попытки, в минутах
+RETRY_DELAYS_MIN = (1, 2, 5, 15)
+
+
 class TenantRepository:
     """Все методы работают только в пределах одного тенанта."""
 
@@ -780,12 +784,22 @@ class GlobalRepository:
         sent или dead (см. mark_outbox_sent / mark_outbox_dead), либо
         вернуться в pending (record_outbox_failure). Зависшие в processing
         подбирает requeue_stale_outbox."""
+        now = _utcnow()
         subq = (
             select(Outbox.id)
-            .where(Outbox.platform == platform, Outbox.status == "pending")
+            .where(Outbox.platform == platform, Outbox.status == "pending",
+                   # ещё не пришло время повтора — пропускаем
+                   (Outbox.next_attempt_at.is_(None))
+                   | (Outbox.next_attempt_at <= now))
             .order_by(Outbox.id.asc())
             .limit(limit)
         )
+        # На PostgreSQL берём строки с пропуском заблокированных: два
+        # экземпляра приложения не будут ждать друг друга на одной пачке.
+        # SQLite (редакция Lite) блокировок строк не умеет — там достаточно
+        # самого UPDATE ... RETURNING, он и так атомарен.
+        if self.session.bind and self.session.bind.dialect.name != "sqlite":
+            subq = subq.with_for_update(skip_locked=True)
         stmt = (
             update(Outbox)
             .where(Outbox.id.in_(subq))
@@ -814,12 +828,16 @@ class GlobalRepository:
 
     async def record_outbox_failure(self, outbox_id: int, attempts: int,
                                     error: str = "") -> None:
-        """Фиксирует неудачную попытку и снимает захват (обратно в pending),
-        чтобы сообщение повторилось на следующем проходе очереди."""
+        """Фиксирует неудачную попытку и возвращает сообщение в очередь —
+        но не раньше, чем через паузу: без неё заблокированный бот
+        перебирался бы на каждом проходе и исчерпывал попытки за минуту."""
+        idx = max(min(attempts, len(RETRY_DELAYS_MIN)) - 1, 0)
         await self.session.execute(
             update(Outbox).where(Outbox.id == outbox_id)
             .values(attempts=attempts, sent=False, status="pending",
-                    claimed_at=None, last_error=error[:300])
+                    claimed_at=None, last_error=error[:300],
+                    next_attempt_at=_utcnow() + dt.timedelta(
+                        minutes=RETRY_DELAYS_MIN[idx]))
         )
 
     async def count_dead_outbox(self) -> int:
