@@ -115,6 +115,7 @@ _BTN_LIST_ALL = {v["btn_list"] for v in VERTICALS.values()}
 _BTN_NEW_ALL = {v["btn_new"] for v in VERTICALS.values()}
 _BTN_ATTEND_ALL = {v["btn_attend"] for v in VERTICALS.values()}
 _BTN_GUESTS_ALL = {v["btn_guest"] for v in VERTICALS.values()}
+_BTN_MASTERS_ALL = {v["btn_masters"] for v in VERTICALS.values()}
 
 
 async def _tenant_vertical(session, tid: int) -> str:
@@ -144,7 +145,7 @@ def _menu(is_admin: bool, more: bool = False,
         rows = [first,
                 [B(text=BTN_PROFILE), B(text=BTN_STATS)],
                 [B(text=BTN_NAMES), B(text=BTN_DRAFTS)],
-                [B(text=BTN_REMIND)],
+                [B(text=vc["btn_masters"]), B(text=BTN_REMIND)],
                 [B(text=BTN_BACK)]]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True,
                                input_field_placeholder="Выберите действие")
@@ -243,6 +244,13 @@ class Broadcast(StatesGroup):
 
 class GuestSignup(StatesGroup):
     name = State()
+
+
+class NewMaster(StatesGroup):
+    """Добавление тренера/мастера прямо в боте: имя вводится один раз и
+    сохраняется — дальше выбирается кнопкой при создании слота."""
+    name = State()
+    specialty = State()
 
 
 def _demo_role_kb() -> InlineKeyboardMarkup:
@@ -485,6 +493,125 @@ async def btn_broadcast(message: Message, state: FSMContext) -> None:
 
 class RenameParticipant(StatesGroup):
     value = State()
+
+
+async def _masters_screen(message: Message, tid: int) -> None:
+    """Список тренеров/мастеров клуба с кнопками скрыть/вернуть и добавить."""
+    async with SessionLocal() as session:
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        vc = vcfg(getattr(tenant, "vertical", None) if tenant else None)
+        svc = BookingService(session, tid)
+        items = await svc.repo.list_masters(active_only=False)
+        rows_data = [(m.id, m.name, m.specialty, m.active) for m in items]
+    rows = []
+    for mid, mname, spec, active in rows_data[:20]:
+        mark = "" if active else " (скрыт)"
+        label = f"{mname}{f' · {spec}' if spec else ''}{mark}"[:56]
+        rows.append([InlineKeyboardButton(
+            text=("🙈 Скрыть" if active else "↩️ Вернуть") + f" · {label}",
+            callback_data=f"mtog:{mid}")])
+    rows.append([InlineKeyboardButton(
+        text=f"➕ Добавить ({vc['master_word']})", callback_data="madd")])
+    text = (f"👥 <b>{vc['masters_title']}</b>\n\n"
+            + ("Имя вводится один раз и сохраняется — при создании слота "
+               f"{vc['master_word']} выбирается кнопкой."
+               if rows_data else
+               "Пока никого нет. Добавьте первого — имя сохранится и "
+               "дальше будет выбираться кнопкой."))
+    await message.answer(text, parse_mode="HTML",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.message(F.text.in_(_BTN_MASTERS_ALL))
+async def btn_masters(message: Message) -> None:
+    tid = await _admin_guard(message)
+    if tid is None:
+        return
+    await _masters_screen(message, tid)
+
+
+@router.callback_query(F.data == "madd")
+async def cb_master_add(query: CallbackQuery, state: FSMContext) -> None:
+    async with SessionLocal() as session:
+        tid, is_admin = await _resolve_tenant(session, query.message.chat.id,
+                                              query.from_user.id)
+        if tid is None or not is_admin:
+            await query.answer("Только для администратора.", show_alert=True)
+            return
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        vc = vcfg(getattr(tenant, "vertical", None) if tenant else None)
+    await state.set_state(NewMaster.name)
+    await state.update_data(tenant_id=tid, word=vc["master_word"])
+    await query.answer()
+    await query.message.answer(f"Имя ({vc['master_word']})?")
+
+
+@router.message(NewMaster.name)
+async def new_master_name(message: Message, state: FSMContext) -> None:
+    name = (message.text or "").strip()[:120]
+    if len(name) < 2:
+        await message.answer("Имя слишком короткое, введите ещё раз.")
+        return
+    await state.update_data(name=name)
+    await state.set_state(NewMaster.specialty)
+    await message.answer("Специализация? (или «-», чтобы пропустить)")
+
+
+@router.message(NewMaster.specialty)
+async def new_master_specialty(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    spec = (message.text or "").strip()[:160]
+    if spec in ("-", "—", "нет"):
+        spec = ""
+    tid = data["tenant_id"]
+    attach_to = data.get("attach_to")
+    async with SessionLocal() as session:
+        svc = BookingService(session, tid)
+        m = await svc.repo.add_master(name=data["name"], specialty=spec)
+        # если добавляли из шага создания слота — сразу привязываем
+        if attach_to:
+            training = await svc.repo.get_training(attach_to)
+            if training:
+                training.master_id = m.id
+        await session.commit()
+    await state.clear()
+    if attach_to:
+        await message.answer(
+            f"✅ {data['name']} сохранён(а) и назначен(а) на этот слот. "
+            f"В следующий раз просто выберите кнопкой — имя вводить не нужно.")
+        return
+    await message.answer(
+        f"✅ {data['name']} сохранён(а). Теперь можно выбирать при создании "
+        f"слота — вводить имя больше не нужно.")
+    await _masters_screen(message, tid)
+
+
+@router.callback_query(F.data.startswith("mtog:"))
+async def cb_master_toggle(query: CallbackQuery) -> None:
+    mid = int(query.data.split(":")[1])
+    async with SessionLocal() as session:
+        tid, is_admin = await _resolve_tenant(session, query.message.chat.id,
+                                              query.from_user.id)
+        if tid is None or not is_admin:
+            await query.answer("Только для администратора.", show_alert=True)
+            return
+        svc = BookingService(session, tid)
+        m = await svc.repo.get_master(mid)
+        if not m:
+            await query.answer("Не найден.", show_alert=True)
+            return
+        new_active = not m.active
+        await svc.repo.set_master_active(mid, new_active)
+        await session.commit()
+        name = m.name
+    await query.answer("Скрыт" if not new_active else "Возвращён")
+    try:
+        await query.message.edit_text(
+            f"{'🙈' if not new_active else '↩️'} {name} — "
+            f"{'скрыт(а)' if not new_active else 'снова доступен(на)'}.")
+    except Exception:
+        pass
+    await _masters_screen(query.message, tid)
 
 
 @router.message(F.text == BTN_NAMES)
@@ -1266,21 +1393,46 @@ async def _finalize(state: FSMContext, st: str, publish_at):
 
 
 async def _offer_master_pick(message, tenant_id: int, training_id: int) -> None:
-    """После создания слота: если у клуба есть активные мастера — предлагает
-    привязать ведущего (салоны: барбер/мастер; спорт: тренер). Слот уже
-    создан, шаг необязательный."""
+    """После создания слота предлагает выбрать ведущего (спорт: тренер,
+    салон: мастер) из СОХРАНЁННЫХ — имя вводится один раз, дальше только
+    кнопка. Здесь же «➕ Новый», чтобы не ходить в меню. Шаг необязательный:
+    слот уже создан."""
     async with SessionLocal() as session:
+        tenant = await GlobalRepository(session).get_tenant(tenant_id)
+        vc = vcfg(getattr(tenant, "vertical", None) if tenant else None)
         svc = BookingService(session, tenant_id)
-        masters = await svc.repo.list_masters()
-    if not masters:
-        return
-    rows = [[InlineKeyboardButton(text=m.name[:40],
-                                  callback_data=f"setm:{training_id}:{m.id}")]
-            for m in masters[:10]]
-    rows.append([InlineKeyboardButton(text="Без мастера",
-                                      callback_data=f"setm:{training_id}:0")])
-    await message.answer("👤 Кто ведёт этот слот?",
+        masters = [(m.id, m.name) for m in await svc.repo.list_masters()]
+    rows = [[InlineKeyboardButton(text=mname[:40],
+                                  callback_data=f"setm:{training_id}:{mid}")]
+            for mid, mname in masters[:10]]
+    rows.append([
+        InlineKeyboardButton(text=f"➕ Новый ({vc['master_word']})",
+                             callback_data=f"mnew:{training_id}"),
+        InlineKeyboardButton(text="Без " + vc["master_word"],
+                             callback_data=f"setm:{training_id}:0"),
+    ])
+    await message.answer(f"👤 Кто ведёт? ({vc['master_word']})",
                          reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data.startswith("mnew:"))
+async def cb_master_new_for_slot(query: CallbackQuery, state: FSMContext) -> None:
+    """«➕ Новый» при создании слота: имя вводится один раз, сохраняется
+    и сразу привязывается к этому слоту."""
+    training_id = int(query.data.split(":")[1])
+    async with SessionLocal() as session:
+        tid, is_admin = await _resolve_tenant(session, query.message.chat.id,
+                                              query.from_user.id)
+        if tid is None or not is_admin:
+            await query.answer("Только для администратора.", show_alert=True)
+            return
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        vc = vcfg(getattr(tenant, "vertical", None) if tenant else None)
+    await state.set_state(NewMaster.name)
+    await state.update_data(tenant_id=tid, word=vc["master_word"],
+                            attach_to=training_id)
+    await query.answer()
+    await query.message.answer(f"Имя ({vc['master_word']})?")
 
 
 @router.callback_query(F.data.startswith("setm:"))

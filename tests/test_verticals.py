@@ -371,28 +371,94 @@ async def test_tg_set_master_on_slot():
         assert training.master_id is None
 
 
-async def test_tg_offer_master_pick_only_with_masters():
+async def test_tg_offer_master_pick_saved_and_new():
+    """Сохранённые тренеры выбираются кнопкой; даже когда их ещё нет,
+    предлагается «➕ Новый» — имя вводится один раз."""
     import app.bots.telegram as tg
     from app.db.engine import engine
     with TestClient(app) as c:
-        tid_no = c.post("/api/tenants", json={"name": "Без мастеров"},
+        tid_no = c.post("/api/tenants", json={"name": "Без тренеров"},
                         headers=H).json()["id"]
-        tid_yes = c.post("/api/tenants", json={"name": "С мастерами"},
+        tid_yes = c.post("/api/tenants", json={"name": "С тренерами"},
                          headers=H).json()["id"]
         c.post(f"/api/tenants/{tid_yes}/masters", headers=H,
                json={"name": "Тренер Иван"})
     await engine.dispose()
 
+    # пустой клуб: только «Новый» и «Без тренера», слово из вертикали sport
     msg = _FakeCbMsg(chat_id=1)
     await tg._offer_master_pick(msg, tid_no, 1)
-    assert not msg.sent                      # мастеров нет — вопрос не задаём
+    assert msg.sent and "Кто ведёт" in msg.sent[0][0]
+    btns = [b.text for row in msg.sent[0][1]["reply_markup"].inline_keyboard
+            for b in row]
+    assert any("Новый" in b and "тренер" in b for b in btns)
+    assert "Без тренер" in " ".join(btns)
 
+    # клуб с сохранённым тренером: он выбирается кнопкой
     msg2 = _FakeCbMsg(chat_id=1)
     await tg._offer_master_pick(msg2, tid_yes, 1)
-    assert msg2.sent and "Кто ведёт" in msg2.sent[0][0]
-    kb = msg2.sent[0][1]["reply_markup"]
-    btns = [b.text for row in kb.inline_keyboard for b in row]
-    assert "Тренер Иван" in btns and "Без мастера" in btns
+    btns2 = [b.text for row in msg2.sent[0][1]["reply_markup"].inline_keyboard
+             for b in row]
+    assert "Тренер Иван" in btns2
+
+
+async def test_tg_master_saved_once_then_reused():
+    """Ключевой сценарий: имя вводится один раз в боте и дальше
+    предлагается кнопкой (не нужно вводить заново)."""
+    import app.bots.telegram as tg
+    from app.db.engine import SessionLocal, engine
+    from app.repositories.repo import TenantRepository
+
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={
+            "name": "Клуб Тренеров", "admin_tg_id": 8801,
+            "tg_chat_id": 88010}, headers=H).json()["id"]
+        tr = _mk_training(c, tid, title="Тренировка", maxp=8)
+    await engine.dispose()
+
+    state = _FakeState({"tenant_id": tid, "attach_to": tr})
+    msg = _FakeMessage(user_id=8801, chat_id=88010)
+    msg.text = "Наталья"
+    await tg.new_master_name(msg, state)
+    msg2 = _FakeMessage(user_id=8801, chat_id=88010)
+    msg2.text = "ОФП, стаж 5 лет"
+    await tg.new_master_specialty(msg2, state)
+
+    # сохранён и сразу назначен на слот
+    async with SessionLocal() as s:
+        repo = TenantRepository(s, tid)
+        saved = await repo.list_masters()
+        assert [m.name for m in saved] == ["Наталья"]
+        assert saved[0].specialty == "ОФП, стаж 5 лет"
+        training = await repo.get_training(tr)
+        assert training.master_id == saved[0].id
+
+    # при следующем создании слота имя уже предлагается кнопкой
+    msg3 = _FakeCbMsg(chat_id=88010)
+    await tg._offer_master_pick(msg3, tid, tr)
+    btns = [b.text for row in msg3.sent[0][1]["reply_markup"].inline_keyboard
+            for b in row]
+    assert "Наталья" in btns
+
+
+class _FakeState:
+    def __init__(self, data):
+        self._data = dict(data)
+        self.cleared = False
+        self.state = None
+
+    async def get_data(self):
+        return self._data
+
+    async def update_data(self, **kw):
+        self._data.update(kw)
+        return self._data
+
+    async def set_state(self, st):
+        self.state = st
+
+    async def clear(self):
+        self.cleared = True
 
 
 def test_builder_bundle_carries_vertical():
@@ -426,3 +492,39 @@ def test_builder_bundle_carries_vertical():
             assert row == ("beauty",)
         finally:
             os.remove(tmp)
+
+
+async def test_master_shown_in_bot_card_with_vertical_word(session):
+    """Тренер/мастер виден прямо в карточке тренировки в боте, слово —
+    по вертикали клуба."""
+    from app.bots import views
+    from app.repositories.repo import GlobalRepository
+    from app.services.booking import BookingService
+
+    g = GlobalRepository(session)
+    sport = await g.create_tenant(name="Клуб Спорт К")
+    salon = await g.create_tenant(name="Салон К", vertical="beauty")
+    await session.commit()
+
+    for tenant, expect_word in ((sport, "Тренер"), (salon, "Мастер")):
+        svc = BookingService(session, tenant.id)
+        m = await svc.repo.add_master(name="Наталья", specialty="ОФП")
+        tr = await svc.create_training(
+            title="Занятие",
+            start_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1),
+            location="Зал", max_participants=5, platform="tg", user_id=0)
+        tr.master_id = m.id
+        await session.commit()
+
+        card = await views.training_card(svc, tr)
+        assert f"{expect_word}: Наталья" in card and "ОФП" in card
+        plain = await views.training_card_plain(svc, tr)
+        assert f"{expect_word}: Наталья" in plain
+
+        # без тренера строки нет
+        tr2 = await svc.create_training(
+            title="Без ведущего",
+            start_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=2),
+            location="", max_participants=5, platform="tg", user_id=0)
+        await session.commit()
+        assert "Наталья" not in await views.training_card(svc, tr2)

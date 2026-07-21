@@ -23,6 +23,10 @@ VERTICALS: dict[str, dict] = {
         "btn_new": "➕ Создать тренировку",
         "btn_attend": "✅ Явки",
         "btn_guest": "👤 Записать гостя",
+        "btn_masters": "🧑‍🏫 Тренеры",
+        "master_word": "тренер",          # «Кто ведёт», подписи в карточках
+        "master_word_cap": "Тренер",
+        "masters_title": "Тренеры клуба",
         "show_rating": True,
         "welcome": (
             "<b>Добро пожаловать!</b>\n\n"
@@ -40,6 +44,10 @@ VERTICALS: dict[str, dict] = {
         "btn_new": "➕ Добавить время",
         "btn_attend": "✅ Визиты",
         "btn_guest": "👤 Записать клиента",
+        "btn_masters": "💇 Мастера",
+        "master_word": "мастер",
+        "master_word_cap": "Мастер",
+        "masters_title": "Мастера салона",
         "show_rating": False,
         "welcome": (
             "<b>Добро пожаловать!</b>\n\n"

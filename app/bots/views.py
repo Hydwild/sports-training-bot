@@ -32,6 +32,9 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
     lines = [f"🏸 <b>{_html.escape(t.title)}</b>", f"📅 {svc.format_local(t.start_at)}"]
     if t.location:
         lines.append(f"📍 {_html.escape(t.location)}")
+    master_line = await _master_line(svc, t)
+    if master_line:
+        lines.append(_html.escape(master_line))
     h = t.duration_min / 60
     lines.append(f"⏱ {('%.1f' % h).rstrip('0').rstrip('.')} ч")
     if getattr(t, "price_minor", 0):
@@ -75,6 +78,9 @@ async def training_card_plain(svc: BookingService, t,
     lines = [f"🏸 {t.title}", f"📅 {svc.format_local(t.start_at)}"]
     if t.location:
         lines.append(f"📍 {t.location}")
+    master_line = await _master_line(svc, t)
+    if master_line:
+        lines.append(master_line)
     h = t.duration_min / 60
     lines.append(f"⏱ {('%.1f' % h).rstrip('0').rstrip('.')} ч")
     if getattr(t, "price_minor", 0):
@@ -106,6 +112,24 @@ async def announce_card_plain(svc: BookingService, t) -> str:
     if getattr(t, "price_minor", 0):
         lines.append(f"💰 {t.price_minor // 100}₽")
     return "\n".join(lines)
+
+
+async def _master_line(svc: BookingService, t) -> str:
+    """Строка «👤 Тренер: Имя» / «👤 Мастер: Имя» для карточки — слово
+    берётся из вертикали клуба (app/core/verticals.py). Пустая строка,
+    если у слота мастер/тренер не задан."""
+    mid = getattr(t, "master_id", None)
+    if not mid:
+        return ""
+    m = await svc.repo.get_master(mid)
+    if not m:
+        return ""
+    from app.core.verticals import vcfg
+    from app.models.entities import Tenant
+    tenant = await svc.session.get(Tenant, svc.tenant_id)
+    vc = vcfg(getattr(tenant, "vertical", None) if tenant else None)
+    spec = f", {m.specialty}" if m.specialty else ""
+    return f"👤 {vc['master_word_cap']}: {m.name}{spec}"
 
 
 def _progress_bar(filled: int, total: int, width: int = 10) -> str:
