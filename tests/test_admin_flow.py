@@ -1,6 +1,5 @@
 """Интеграция через TestClient: роли, admin-доступ, white-label, dev-логин."""
 
-import pytest
 from fastapi.testclient import TestClient
 from app.main import app
 

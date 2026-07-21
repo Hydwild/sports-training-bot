@@ -1,6 +1,5 @@
 """Подсказки при создании: недавние места и времена по дню недели."""
 import datetime as dt
-import pytest
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
 

@@ -1,6 +1,5 @@
 """Изоляция тенантов: клуб не видит данные другого клуба."""
 import datetime as dt
-import pytest
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
 

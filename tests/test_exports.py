@@ -1,6 +1,5 @@
 """Экспорт Excel и PDF: валидные непустые файлы нужного формата."""
 import datetime as dt
-import pytest
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
 from app.services import exporters

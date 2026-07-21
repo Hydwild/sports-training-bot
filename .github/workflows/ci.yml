@@ -1,0 +1,88 @@
+name: CI
+
+# Прогон на каждый push и pull request. В настройках сервиса на Railway
+# включён «Wait for CI» — красная сборка до прода не доезжает.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # новый push в ту же ветку отменяет предыдущий прогон
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Тесты и линтер
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Линтер (реальные ошибки: неизвестные имена, битые импорты)
+        run: ruff check --select F .
+
+      - name: Тесты
+        run: pytest -q
+
+  migrations:
+    name: Миграции на PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ci
+      ADMIN_API_TOKEN: ci-token
+      JWT_SECRET: ci-secret
+      TG_TOKEN: '123456:CITOKEN'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Прод разворачивается именно так. Пока эти шаги зелёные, развёртывание
+      # с нуля на чистую базу заведомо поднимется.
+      - name: Накат миграций на чистую базу
+        run: alembic upgrade head
+
+      - name: Схема совпадает с моделями
+        run: alembic check
+
+      - name: Откат до нуля и обратно
+        run: |
+          alembic downgrade base
+          alembic upgrade head

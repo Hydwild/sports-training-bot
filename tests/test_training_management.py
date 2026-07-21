@@ -1,6 +1,5 @@
 """Управление тренировкой: редактирование, повтор, следующая тренировка."""
 import datetime as dt
-import pytest
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
 

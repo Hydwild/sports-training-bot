@@ -1,6 +1,5 @@
 """Настройки клуба: окно отмены, авто-истечение гостей, флаг уведомления публикации."""
 import datetime as dt
-import pytest
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
 

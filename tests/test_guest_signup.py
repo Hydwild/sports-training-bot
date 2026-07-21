@@ -1,6 +1,5 @@
 """Запись гостя за другого: занятие места, подтверждение, отклонение с подъёмом."""
 import datetime as dt
-import pytest
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
 

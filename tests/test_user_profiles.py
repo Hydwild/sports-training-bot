@@ -1,6 +1,5 @@
 """username и photo_url сохраняются и видны в карточке тренировки."""
 import datetime as dt
-import pytest
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
 from app.bots.views import _label

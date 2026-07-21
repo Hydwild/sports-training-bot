@@ -1,5 +1,7 @@
 #  Бот записи на тренировки
 
+[![CI](https://github.com/Hydwild/sports-training-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Hydwild/sports-training-bot/actions/workflows/ci.yml)
+
 Бот для Telegram и ВКонтакте, который ведёт запись на тренировки: участники
 записываются сами, при заполнении мест встают в очередь, получают напоминания.
 Есть две версии — **Lite** (для одного тренера) и **Pro** (для клуба).
