@@ -7,7 +7,8 @@ _EXTRA_CSS = """
 .faq-nav{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:0 0 32px}
 .faq-nav a{background:var(--surface);border:1px solid var(--border);color:var(--ink);
   padding:12px 18px;border-radius:999px;text-decoration:none;font:600 13px/1
-  -apple-system,system-ui,sans-serif}
+  -apple-system,system-ui,sans-serif;display:inline-flex;align-items:center;
+  min-height:44px}
 .faq-nav a:hover{border-color:var(--gold)}
 h2.group{font:400 22px/1.3 Georgia,serif;margin:48px 0 16px;text-align:left}
 details{background:var(--surface);border:1px solid var(--border);border-radius:16px;
@@ -25,16 +26,13 @@ summary::after{content:"";width:9px;height:9px;flex-shrink:0;position:relative;
   transition:transform .3s var(--ease)}
 details[open]:not(.js-acc) summary::after,
 details.expanded summary::after{transform:rotate(225deg);top:2px}
-/* JS-режим: плавное раскрытие через grid-rows 0fr->1fr. Состоянием управляет
-   класс .expanded (не события анимации — нечему «залипнуть»); visibility
-   убирает свёрнутые ответы из фокуса и дерева доступности. */
-details.js-acc .faq-body{display:grid;grid-template-rows:0fr;opacity:0;
-  visibility:hidden;
-  transition:grid-template-rows .32s var(--ease),opacity .25s var(--ease),
-    visibility .32s}
-details.js-acc.expanded .faq-body{grid-template-rows:1fr;opacity:1;
-  visibility:visible}
-details.js-acc .faq-inner{overflow:hidden;min-height:0}
+/* JS-режим: плавное раскрытие по max-height. Состоянием управляет класс
+   .expanded (не события анимации — нечему «залипнуть»). max-height задаётся
+   скриптом по реальной высоте контента, поэтому длинные ответы не обрезаются;
+   после раскрытия ставится none (контент может менять высоту). */
+details.js-acc .faq-body{overflow:hidden;max-height:0;opacity:0;
+  transition:max-height .32s var(--ease),opacity .25s var(--ease)}
+details.js-acc.expanded .faq-body{opacity:1}
 details p, details ol, details ul{margin:0 0 16px;color:var(--ink);
   font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}
 details ol, details ul{padding-left:20px}
@@ -66,6 +64,21 @@ _FAQ_JS = """<script>
       e.preventDefault();
       var expanded = d.classList.toggle('expanded');
       s.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      if (expanded) {
+        body.style.maxHeight = inner.scrollHeight + 'px';
+        // после анимации снимаем ограничение: контент может стать выше
+        // (перенос строк при повороте экрана и т.п.)
+        setTimeout(function(){
+          if (d.classList.contains('expanded')) body.style.maxHeight = 'none';
+        }, 340);
+      } else {
+        // из 'none' анимация не стартует — фиксируем текущую высоту,
+        // затем читаем offsetHeight (принудительный reflow, надёжнее
+        // requestAnimationFrame) и только потом схлопываем в 0
+        body.style.maxHeight = inner.scrollHeight + 'px';
+        void body.offsetHeight;
+        body.style.maxHeight = '0px';
+      }
     });
   });
 })();

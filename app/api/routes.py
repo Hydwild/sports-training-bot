@@ -643,19 +643,21 @@ border-right:2px solid var(--muted);border-top:2px solid var(--muted);
 transform:rotate(45deg);margin-left:auto}}
 .backrow{{max-width:560px;margin:0 auto 16px;display:flex;align-items:center;
 gap:12px}}
-.backbtn{{width:40px;height:40px;flex-shrink:0;border-radius:50%;
+.backbtn{{width:44px;height:44px;flex-shrink:0;border-radius:50%;
 border:1px solid var(--border);background:var(--surface);cursor:pointer;
 font-size:17px;color:var(--ink);padding:0}}
 .backbtn:hover{{border-color:var(--accent)}}
 .scr-title{{font:600 17px/1.3 -apple-system,system-ui,sans-serif}}
 .mcard .chips{{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}}
-.tchip{{padding:12px 14px;border-radius:10px;border:1px solid var(--border);
+.tchip{{padding:14px;min-height:44px;border-radius:10px;
+border:1px solid var(--border);
 background:var(--surface-2);font:600 13px/1 -apple-system,system-ui,sans-serif;
 color:var(--ink);cursor:pointer;font-family:inherit;
 transition:border-color .15s var(--ease)}}
 .tchip:hover{{border-color:var(--accent)}}
 .tchip.more{{color:var(--accent);background:transparent}}
-#mfilter{{display:none;align-items:center;margin-left:auto;padding:11px 14px;
+#mfilter{{display:none;align-items:center;min-height:44px;margin-left:auto;
+padding:12px 14px;
 border-radius:999px;border:1px solid var(--accent);color:var(--accent);
 background:none;font:600 12.5px/1 -apple-system,system-ui,sans-serif;
 cursor:pointer;font-family:inherit}}
@@ -668,6 +670,7 @@ details.mrev{{margin-top:12px;border-top:1px solid var(--border);
 padding-top:12px}}
 details.mrev summary{{cursor:pointer;list-style:none;font:600 13px/1.4
 -apple-system,system-ui,sans-serif;color:var(--accent);
+display:flex;align-items:center;min-height:44px;
 -webkit-tap-highlight-color:transparent}}
 details.mrev summary::-webkit-details-marker{{display:none}}
 .rev{{margin-top:12px}}
@@ -693,7 +696,7 @@ color:var(--muted)}}
 font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
 .foot{{text-align:center;color:var(--muted);margin-top:32px;
 font:400 12.5px/1.6 -apple-system,system-ui,sans-serif}}
-.foot a{{color:var(--muted)}}
+.foot a{{color:var(--muted);display:inline-block;padding:12px 4px}}
 </style></head><body>
 {cover}<span class="eyebrow">{eyebrow}</span>
 <h1>{title}</h1>{body}

@@ -100,13 +100,15 @@ a,button,summary{transition:color .15s var(--ease),border-color .15s var(--ease)
   max-width:880px;margin:0 auto;padding:12px 20px;
 }
 .site-nav .brand{font:400 17px/1 Georgia,serif;letter-spacing:.01em;
-  text-decoration:none;color:var(--ink)}
+  text-decoration:none;color:var(--ink);display:inline-flex;align-items:center;
+  min-height:44px}
 .site-nav .brand b{color:var(--gold);font-weight:400}
 .site-nav .links{display:flex;gap:4px;background:var(--surface-2);
   border:1px solid var(--border);border-radius:999px;padding:4px}
 .site-nav .links a{
   font:600 13px/1 -apple-system,system-ui,sans-serif;text-decoration:none;
   color:var(--muted);padding:10px 16px;border-radius:999px;white-space:nowrap;
+  display:inline-flex;align-items:center;min-height:44px;
 }
 .site-nav .links a:hover{color:var(--ink)}
 .site-nav .links a.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
@@ -164,7 +166,9 @@ footer.site{text-align:center;color:var(--muted);padding:48px 0 8px;
   font:400 13px/1.4 -apple-system,system-ui,sans-serif;border-top:1px solid var(--border);
   margin-top:24px}
 footer.site .links{margin-bottom:12px}
-footer.site a{color:var(--gold);text-decoration:none;font-weight:600;margin:0 8px}
+footer.site a{color:var(--gold);text-decoration:none;font-weight:600;
+  margin:0 4px;display:inline-flex;align-items:center;min-height:44px;
+  padding:0 4px}
 footer.site a:hover{text-decoration:underline}
 """.replace("GRAIN_URI", _GRAIN)
 
