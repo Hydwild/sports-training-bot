@@ -383,6 +383,38 @@ class MasterReview(Base):
         DateTime(timezone=True), default=_utcnow)
 
 
+class ConsentEvent(Base):
+    """Факт согласия на обработку данных — append-only журнал.
+
+    Галочку на форме мы проверяли, но нигде не фиксировали: доказать, что
+    человек её ставил, было нечем. Здесь лежит сам факт: кто, на что, по
+    какой редакции текста и когда.
+
+    Записывается в ОДНОЙ транзакции с бизнес-действием: если согласие не
+    сохранилось, запись/оценка тоже не считаются принятыми.
+
+    Чего здесь намеренно нет: телефона (он лежит зашифрованным в
+    web_customers, а тут только ссылка на id), IP и User-Agent — для них
+    не сформулированы ни необходимость, ни срок хранения."""
+    __tablename__ = "consent_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # null — общеплатформенная форма (отзыв о сервисе), она вне клубов
+    tenant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    platform: Mapped[str] = mapped_column(String(8), default="web")
+    # для web — id из web_customers; для tg/vk — идентификатор в мессенджере
+    user_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    # booking | master_review | platform_review
+    purpose: Mapped[str] = mapped_column(String(32), index=True)
+    policy_version: Mapped[str] = mapped_column(String(20))
+    # текст галочки, который человек видел — доказательство «на что именно»
+    consent_text: Mapped[str] = mapped_column(String(500), default="")
+    source: Mapped[str] = mapped_column(String(32), default="web-form")
+    accepted_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)
+
+
 class WebCustomer(Base):
     """Клиент, записавшийся через сайт.
 

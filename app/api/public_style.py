@@ -182,6 +182,12 @@ footer.site a:hover{text-decoration:underline}
 """.replace("GRAIN_URI", _GRAIN)
 
 
+def consent_text(what: str) -> str:
+    """Ровно та формулировка, которую человек видит рядом с галочкой.
+    Сохраняется в журнал согласий как доказательство «на что именно»."""
+    return f"Согласен на обработку {what}"
+
+
 def consent_field(what: str) -> str:
     """Галочка согласия для любой формы, где посетитель вводит имя, телефон
     или текст отзыва. `what` — что именно обрабатывается, человеческими
@@ -192,7 +198,7 @@ def consent_field(what: str) -> str:
     return (
         '<label class="consent">'
         '<input type="checkbox" name="consent" value="1" required>'
-        f'<span>Согласен на обработку {what} — '
+        f'<span>{consent_text(what)} — '
         '<a href="/privacy" target="_blank" rel="noopener">как мы их '
         'обрабатываем</a></span></label>')
 

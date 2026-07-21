@@ -446,6 +446,22 @@ class TenantRepository:
         stmt = select(Master).where(Master.tenant_id == self.tenant_id)
         return {m.id: m for m in (await self.session.execute(stmt)).scalars()}
 
+    # ---------- Согласия ----------
+
+    async def record_consent(self, *, platform: str, user_id: int | None,
+                             purpose: str, consent_text: str) -> None:
+        """Фиксирует факт согласия. Вызывается в ТОЙ ЖЕ транзакции, что и
+        бизнес-действие: если запись не сохранилась, согласие тоже не
+        считается данным — и наоборот."""
+        from app.api.privacy_page import POLICY_VERSION
+        from app.models.entities import ConsentEvent
+
+        self.session.add(ConsentEvent(
+            tenant_id=self.tenant_id, platform=platform, user_id=user_id,
+            purpose=purpose, policy_version=POLICY_VERSION,
+            consent_text=consent_text[:500]))
+        await self.session.flush()
+
     # ---------- Веб-клиенты (телефон отдельно от идентификатора) ----------
 
     async def web_customer_id(self, phone: str, name: str = "") -> int:
@@ -921,6 +937,20 @@ class GlobalRepository:
         self.session.add(r)
         await self.session.flush()
         return r
+
+    async def record_platform_consent(self, *, purpose: str,
+                                      consent_text: str) -> None:
+        """Согласие на общеплатформенной форме: клуба у неё нет, поэтому
+        tenant_id пустой. Субъект не сохраняем — на этой форме нет ни
+        телефона, ни аккаунта, только имя, которое человек указал сам."""
+        from app.api.privacy_page import POLICY_VERSION
+        from app.models.entities import ConsentEvent
+
+        self.session.add(ConsentEvent(
+            tenant_id=None, platform="web", user_id=None, purpose=purpose,
+            policy_version=POLICY_VERSION, consent_text=consent_text[:500],
+            source="platform-form"))
+        await self.session.flush()
 
     async def demo_tenant_id(self) -> int | None:
         """Клуб-витрина (Tenant.is_demo), на который можно спокойно послать

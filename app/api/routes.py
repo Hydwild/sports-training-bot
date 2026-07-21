@@ -539,6 +539,7 @@ _I_USERS = ('<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/>'
 # «Мои записи» галочки нет намеренно: там человек ищет свою же запись по
 # телефону, новых данных не появляется.
 from app.api.public_style import consent_field as _consent_field
+from app.api.public_style import consent_text as _consent_text
 
 _CONSENT_SIGNUP = _consent_field("имени и телефона для записи")
 _CONSENT_RATE = _consent_field("имени и текста отзыва для оценки мастера")
@@ -1093,6 +1094,12 @@ async def public_signup(tenant_id: int,
     # web_customers, а в записи попадает только суррогатный id
     uid = await svc.repo.web_customer_id(digits, name)
     await svc.repo.upsert_subscriber("web", uid, name)
+    # Согласие пишем ДО sign_up: он коммитит транзакцию сам, и запись
+    # согласия после него ушла бы отдельной. Сейчас обе строки попадают в
+    # один коммит — не сохранилось согласие, не появится и запись.
+    await svc.repo.record_consent(
+        platform="web", user_id=uid, purpose="booking",
+        consent_text=_consent_text("имени и телефона для записи"))
     res = await svc.sign_up(training_id, "web", uid, name)
     await session.commit()
     msg = {"active": f"Вы записаны, {_h.escape(name)}!",
@@ -1195,6 +1202,10 @@ async def public_rate_master(tenant_id: int,
     await svc.repo.upsert_master_review(
         master_id=master_id, user_id=uid,
         author_name=name, rating=rating, text=text.strip()[:500])
+    await svc.repo.record_consent(
+        platform="web", user_id=uid, purpose="master_review",
+        consent_text=_consent_text(
+            "имени и текста отзыва для оценки мастера"))
     await session.commit()
     return RedirectResponse(f"/club/{tenant_id}?rated=1", status_code=303)
 
@@ -1660,6 +1671,10 @@ async def reviews_submit(request: Request,
 
     await g.add_review(name=name[:120], club_name=club_name.strip()[:160],
                        rating=rating, text=text[:1000])
+    await g.record_platform_consent(
+        purpose="platform_review",
+        consent_text=_consent_text(
+            "имени и текста отзыва для публикации на этой странице"))
     await session.commit()
 
     if settings.platform_owner_tg_id:
