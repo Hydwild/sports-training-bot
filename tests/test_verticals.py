@@ -312,6 +312,89 @@ def test_platform_masters_add_rejects_bad_photo_and_csrf():
             "name": "Без токена"}).status_code == 403
 
 
+class _FakeCbMsg:
+    def __init__(self, chat_id):
+        self.chat = type("C", (), {"id": chat_id, "type": "private"})()
+        self.edits = []
+        self.sent = []
+
+    async def edit_text(self, text, **kw):
+        self.edits.append(text)
+
+    async def answer(self, text, **kw):
+        self.sent.append((text, kw))
+
+
+class _FakeCb:
+    def __init__(self, data, user_id, chat_id):
+        self.data = data
+        self.from_user = _FakeUser(user_id)
+        self.message = _FakeCbMsg(chat_id)
+        self.answers = []
+
+    async def answer(self, text="", show_alert=False):
+        self.answers.append((text, show_alert))
+
+
+async def test_tg_set_master_on_slot():
+    import app.bots.telegram as tg
+    from app.db.engine import SessionLocal, engine
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={
+            "name": "Салон Setm", "vertical": "beauty",
+            "admin_tg_id": 7601, "tg_chat_id": 87601}, headers=H).json()["id"]
+        m = c.post(f"/api/tenants/{tid}/masters", headers=H,
+                   json={"name": "Мастер Ольга"}).json()
+        tr = _mk_training(c, tid, title="Слот", maxp=1)
+    await engine.dispose()
+
+    # не-админ получает отказ
+    q_bad = _FakeCb(f"setm:{tr}:{m['id']}", user_id=111, chat_id=87601)
+    await tg.cb_set_master(q_bad)
+    assert q_bad.answers and "администратора" in q_bad.answers[0][0]
+
+    # админ привязывает мастера
+    q = _FakeCb(f"setm:{tr}:{m['id']}", user_id=7601, chat_id=87601)
+    await tg.cb_set_master(q)
+    assert any("Мастер Ольга" in t for t in q.message.edits)
+    async with SessionLocal() as s:
+        from app.repositories.repo import TenantRepository
+        training = await TenantRepository(s, tid).get_training(tr)
+        assert training.master_id == m["id"]
+
+    # снятие мастера
+    q2 = _FakeCb(f"setm:{tr}:0", user_id=7601, chat_id=87601)
+    await tg.cb_set_master(q2)
+    async with SessionLocal() as s:
+        from app.repositories.repo import TenantRepository
+        training = await TenantRepository(s, tid).get_training(tr)
+        assert training.master_id is None
+
+
+async def test_tg_offer_master_pick_only_with_masters():
+    import app.bots.telegram as tg
+    from app.db.engine import engine
+    with TestClient(app) as c:
+        tid_no = c.post("/api/tenants", json={"name": "Без мастеров"},
+                        headers=H).json()["id"]
+        tid_yes = c.post("/api/tenants", json={"name": "С мастерами"},
+                         headers=H).json()["id"]
+        c.post(f"/api/tenants/{tid_yes}/masters", headers=H,
+               json={"name": "Тренер Иван"})
+    await engine.dispose()
+
+    msg = _FakeCbMsg(chat_id=1)
+    await tg._offer_master_pick(msg, tid_no, 1)
+    assert not msg.sent                      # мастеров нет — вопрос не задаём
+
+    msg2 = _FakeCbMsg(chat_id=1)
+    await tg._offer_master_pick(msg2, tid_yes, 1)
+    assert msg2.sent and "Кто ведёт" in msg2.sent[0][0]
+    kb = msg2.sent[0][1]["reply_markup"]
+    btns = [b.text for row in kb.inline_keyboard for b in row]
+    assert "Тренер Иван" in btns and "Без мастера" in btns
+
+
 def test_builder_bundle_carries_vertical():
     with TestClient(app) as c:
         login = c.post("/admin/platform/login", data={"token": "tok"},

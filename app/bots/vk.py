@@ -983,6 +983,7 @@ async def _finalize_create(user_id: int, state: dict) -> None:
         card = await views.training_card_plain(svc, training)
         tid = training.id
         full = await _is_full(svc, training)
+        masters = [(m.id, m.name) for m in await svc.repo.list_masters()]
         subs = await svc.repo.get_subscribers()
         when = svc.format_local(training.start_at)
         note = (f"🏸 Открыта запись на «{training.title}»\n📅 {when}"
@@ -994,6 +995,18 @@ async def _finalize_create(user_id: int, state: dict) -> None:
         await session.commit()
     await _send(user_id, "✅ Тренировка создана!", keyboard=_menu_kb(True))
     await _send(user_id, card, keyboard=_kb(tid, full, True))
+    if masters:
+        from vkbottle import Keyboard, Callback
+        kb = Keyboard(inline=True)
+        for i, (mid, mname) in enumerate(masters[:6]):
+            if i:
+                kb.row()
+            kb.add(Callback(mname[:40],
+                            payload={"a": "setm", "tid": tid, "mid": mid}))
+        kb.row()
+        kb.add(Callback("Без мастера",
+                        payload={"a": "setm", "tid": tid, "mid": 0}))
+        await _send(user_id, "👤 Кто ведёт этот слот?", keyboard=kb.get_json())
     try:
         from app.bots import telegram
         await telegram._publish_to_group(tenant.id, tid)
@@ -1961,6 +1974,30 @@ async def setup() -> None:
         elif action == "cx":
             snackbar = await _do_cancel(user_id, tid, gid)
             await _edit_card(peer_id, cmid, tid, gid, user_id)
+        elif action == "setm":                       # привязать мастера к слоту
+            async with SessionLocal() as session:
+                if not await _is_admin_vk(session, user_id, gid):
+                    snackbar = "⛔ Только тренер"
+                else:
+                    tenant = await _resolve_tenant(session, gid)
+                    svc = BookingService(session, tenant.id, tz=tenant.timezone)
+                    tr = await svc.repo.get_training(tid)
+                    mid = payload.get("mid") or 0
+                    if not tr:
+                        snackbar = "Слот не найден"
+                    elif mid:
+                        m = await svc.repo.get_master(int(mid))
+                        if m:
+                            tr.master_id = m.id
+                            await session.commit()
+                            snackbar = f"👤 Мастер: {m.name}"
+                        else:
+                            snackbar = "Мастер не найден"
+                    else:
+                        tr.master_id = None
+                        await session.commit()
+                        snackbar = "Слот без мастера"
+            await _strip_buttons(peer_id, cmid, snackbar)
         elif action == "mv":                         # перенос: выбор слота
             await _move_pick(user_id, tid, gid)
             snackbar = "🔁 Выберите новое время"
