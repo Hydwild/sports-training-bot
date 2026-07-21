@@ -1489,10 +1489,11 @@ async def promo_page(session: AsyncSession = Depends(get_session)):
 
 
 @public_router.get("/faq", response_class=HTMLResponse)
-async def faq_page():
-    """FAQ для клиентов: как записаться, создать тренировку и т.д. — в faq_page.py."""
-    from app.api.faq_page import FAQ_HTML
-    return FAQ_HTML
+async def faq_page(v: str = ""):
+    """FAQ для клиентов. ?v=sport|beauty отдаёт вопросы одного направления —
+    так переключатель на странице работает и без JavaScript."""
+    from app.api.faq_page import render_faq_page
+    return render_faq_page(v or "all")
 
 
 @public_router.get("/privacy", response_class=HTMLResponse)

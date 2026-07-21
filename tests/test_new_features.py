@@ -197,7 +197,7 @@ def test_faq_page():
         r = c.get("/faq")
         assert r.status_code == 200
         assert "Вопросы и ответы" in r.text
-        assert "Как записаться на тренировку" in r.text
+        assert "Как записаться?" in r.text
 
 
 def test_promo_and_demo_seed():
