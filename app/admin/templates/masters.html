@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>{{ vc.masters_title }}</h2>
+  <p class="muted">{{ vc.master_word_cap }} привязывается к записи при её
+    создании и показывается клиенту на публичной странице: имя,
+    специализация, описание и фото. Скрытый не предлагается для новых
+    записей, но остаётся у уже созданных — история не теряется.</p>
+  {% if error %}<p class="tag no">{{ error }}</p>{% endif %}
+
+  {% if masters %}
+  <table>
+    <tr><th></th><th>Имя</th><th>Специализация</th><th>Рейтинг</th>
+        <th>Статус</th><th></th></tr>
+    {% for m in masters %}
+    <tr>
+      <td>
+        {% if m.photo_url %}
+        <img src="{{ m.photo_url }}" alt="" width="36" height="36"
+             style="border-radius:50%;object-fit:cover">
+        {% else %}
+        <span style="display:inline-flex;width:36px;height:36px;border-radius:50%;
+              align-items:center;justify-content:center;background:#eee;
+              font-weight:600">{{ m.name[:1]|upper }}</span>
+        {% endif %}
+      </td>
+      <td>{{ m.name }}</td>
+      <td>{{ m.specialty or "—" }}</td>
+      <td>{% set st = stats.get(m.id) %}
+          {% if st %}★ {{ "%.1f"|format(st[0]) }} ({{ st[1] }})
+          {% else %}—{% endif %}</td>
+      <td>{% if m.active %}<span class="tag ok">активен</span>
+          {% else %}<span class="tag no">скрыт</span>{% endif %}</td>
+      <td>
+        <form method="post" action="/admin/masters/{{ m.id }}/toggle">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn sm" type="submit">
+            {% if m.active %}Скрыть{% else %}Вернуть{% endif %}</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted" style="text-align:center;padding:24px 0">Пока никого нет —
+    добавьте первого ниже.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Добавить</h2>
+  <form method="post" action="/admin/masters/add">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <p><label>Имя<br>
+      <input name="name" required minlength="2" maxlength="120"
+             placeholder="Анна Соколова" style="width:100%;padding:8px"></label></p>
+    <p><label>Специализация (необязательно)<br>
+      <input name="specialty" maxlength="160" placeholder="Парикмахер"
+             style="width:100%;padding:8px"></label></p>
+    <p><label>Описание — показывается клиенту под фото<br>
+      <textarea name="bio" rows="2" maxlength="500"
+        placeholder="Опыт 3 года, колорист"
+        style="width:100%;padding:8px"></textarea></label></p>
+    <p><label>Ссылка на фото (необязательно, http(s)-адрес картинки)<br>
+      <input name="photo_url" maxlength="500"
+             placeholder="https://example.com/photo.jpg"
+             style="width:100%;padding:8px"></label></p>
+    <p><button class="btn" type="submit">➕ Добавить</button>
+       <a href="/admin" style="margin-left:10px">← на главную</a></p>
+  </form>
+</div>
+{% endblock %}

@@ -460,3 +460,89 @@ async def download_backup(claims: dict = Depends(require_role("owner"))):
     return FileResponse(tmp, media_type="application/octet-stream",
                         filename=f"backup_{stamp}.db",
                         background=BackgroundTask(os.remove, tmp))
+
+
+# ---------- Мастера/тренеры клуба ----------
+#
+# Раньше это было доступно только оператору платформы (/admin/platform):
+# владелец клуба не мог сам завести мастера через веб — приходилось просить.
+# Здесь та же работа, но в собственной админке клуба и в его же правах.
+
+async def _masters_ctx(request: Request, session: AsyncSession,
+                       tenant_id: int, role: str, **extra) -> dict:
+    from app.core.verticals import vcfg
+    from app.repositories.repo import TenantRepository
+
+    repo = TenantRepository(session, tenant_id)
+    tenant = await GlobalRepository(session).get_tenant(tenant_id)
+    ctx = {
+        "request": request, "role": role,
+        "masters": await repo.list_masters(active_only=False),
+        "stats": await repo.master_rating_stats(),
+        "vc": vcfg(getattr(tenant, "vertical", None)),
+        "csrf": csrf_for_request(request),
+        "error": None,
+    }
+    ctx.update(extra)
+    ctx.update(await _brand(session, tenant_id))
+    return ctx
+
+
+@router.get("/masters", response_class=HTMLResponse)
+async def masters_page(request: Request,
+                       claims: dict = Depends(require_role("coach")),
+                       session: AsyncSession = Depends(get_session)):
+    ctx = await _masters_ctx(request, session, claims["tenant_id"],
+                             claims["role"])
+    return templates.TemplateResponse(request, "masters.html", ctx)
+
+
+@router.post("/masters/add", response_class=HTMLResponse)
+async def masters_add(request: Request,
+                      claims: dict = Depends(require_role("coach")),
+                      _csrf: None = Depends(require_csrf()),
+                      name: str = Form(...),
+                      specialty: str = Form(""),
+                      bio: str = Form(""),
+                      photo_url: str = Form(""),
+                      session: AsyncSession = Depends(get_session)):
+    from pydantic import ValidationError
+
+    from app.api.schemas import MasterCreate
+    from app.repositories.repo import TenantRepository
+
+    tenant_id = claims["tenant_id"]
+    try:
+        # та же валидация, что в API: photo_url попадает в <img src>
+        # публичной страницы, поэтому только http(s)
+        body = MasterCreate(name=name, specialty=specialty, bio=bio,
+                            photo_url=photo_url or None)
+    except ValidationError:
+        ctx = await _masters_ctx(
+            request, session, tenant_id, claims["role"],
+            error="Проверьте поля: имя от 2 символов, фото — "
+                  "http(s)-ссылка на картинку")
+        return templates.TemplateResponse(request, "masters.html", ctx,
+                                          status_code=400)
+    repo = TenantRepository(session, tenant_id)
+    await repo.add_master(name=body.name.strip(),
+                          specialty=body.specialty.strip(),
+                          bio=body.bio.strip(), photo_url=body.photo_url)
+    await session.commit()
+    return RedirectResponse("/admin/masters", status_code=303)
+
+
+@router.post("/masters/{master_id}/toggle", response_class=HTMLResponse)
+async def masters_toggle(master_id: int,
+                         claims: dict = Depends(require_role("coach")),
+                         _csrf: None = Depends(require_csrf()),
+                         session: AsyncSession = Depends(get_session)):
+    from app.repositories.repo import TenantRepository
+
+    repo = TenantRepository(session, claims["tenant_id"])
+    m = await repo.get_master(master_id)
+    if m is None:
+        raise HTTPException(status_code=404, detail="Мастер не найден")
+    await repo.set_master_active(master_id, not m.active)
+    await session.commit()
+    return RedirectResponse("/admin/masters", status_code=303)
