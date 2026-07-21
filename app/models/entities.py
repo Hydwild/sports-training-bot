@@ -332,6 +332,29 @@ class Master(Base):
         DateTime(timezone=True), default=_utcnow)
 
 
+class MasterReview(Base):
+    """Оценка мастера клиентом с публичной страницы записи. Анти-накрутка:
+    одна оценка на телефон (user_id — числовой id из телефона, как в
+    веб-записи), повторная оценка ЗАМЕНЯЕТ прежнюю, а не добавляется."""
+    __tablename__ = "master_reviews"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "master_id", "user_id",
+                         name="uq_master_review_author"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    master_id: Mapped[int] = mapped_column(
+        ForeignKey("masters.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)   # телефон как id
+    author_name: Mapped[str] = mapped_column(String(120))
+    rating: Mapped[int] = mapped_column(Integer)       # 1..5
+    text: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)
+
+
 class Review(Base):
     """Отзыв о сервисе (не о конкретном клубе) — публикуется на /reviews
     только после ручного одобрения оператором площадки (защита от спама и

@@ -261,9 +261,10 @@ async def _masters_ctx(request: Request, session: AsyncSession,
     tenant = await g.get_tenant(tenant_id)
     if not tenant:
         raise HTTPException(status_code=404, detail="Клуб не найден")
-    masters = await TenantRepository(session, tenant_id).list_masters(
-        active_only=False)
-    return _ctx(request, t=tenant, masters=masters,
+    repo = TenantRepository(session, tenant_id)
+    masters = await repo.list_masters(active_only=False)
+    stats = await repo.master_rating_stats()
+    return _ctx(request, t=tenant, masters=masters, stats=stats,
                 error=None, saved=False, **extra)
 
 

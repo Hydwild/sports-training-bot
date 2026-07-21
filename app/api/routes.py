@@ -168,6 +168,19 @@ async def delete_master(tenant_id: int, master_id: int,
     return {"ok": True}
 
 
+@router.delete("/tenants/{tenant_id}/master-reviews/{review_id}",
+               dependencies=[Depends(require_admin)])
+async def delete_master_review(tenant_id: int, review_id: int,
+                               session: AsyncSession = Depends(get_session)):
+    """Удаляет некорректную оценку мастера (зачистка спама оператором)."""
+    await _ensure_tenant(session, tenant_id)
+    svc = BookingService(session, tenant_id)
+    if not await svc.repo.delete_master_review(review_id):
+        raise HTTPException(status_code=404, detail="Оценка не найдена")
+    await session.commit()
+    return {"ok": True}
+
+
 @router.get("/tenants/{tenant_id}/trainings/{training_id}/signups",
             response_model=list[SignupOut], dependencies=[Depends(require_admin)])
 async def training_signups(tenant_id: int, training_id: int,
@@ -341,6 +354,14 @@ _ip_hits: dict[str, list[float]] = {}
 
 def _eyebrow(tenant) -> str:
     return _vcfg(getattr(tenant, "vertical", None))["web_eyebrow"]
+
+
+def _plural_ratings(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "оценка"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "оценки"
+    return "оценок"
 
 
 def _phone_uid(digits: str) -> int:
@@ -639,6 +660,31 @@ background:none;font:600 12.5px/1 -apple-system,system-ui,sans-serif;
 cursor:pointer;font-family:inherit}}
 .mnone{{margin-top:12px;font:400 13px/1.5 -apple-system,system-ui,sans-serif;
 color:var(--muted)}}
+.mrate{{display:block;margin-top:3px;font:600 12.5px/1.3 -apple-system,
+system-ui,sans-serif;color:var(--accent);font-variant-numeric:tabular-nums}}
+.rstars{{color:var(--accent);letter-spacing:1px;font-size:12px}}
+details.mrev{{margin-top:12px;border-top:1px solid var(--border);
+padding-top:12px}}
+details.mrev summary{{cursor:pointer;list-style:none;font:600 13px/1.4
+-apple-system,system-ui,sans-serif;color:var(--accent);
+-webkit-tap-highlight-color:transparent}}
+details.mrev summary::-webkit-details-marker{{display:none}}
+.rev{{margin-top:12px}}
+.rev b{{font:600 13px/1.3 -apple-system,system-ui,sans-serif}}
+.rev p{{margin:4px 0 0;font:400 13px/1.55 -apple-system,system-ui,sans-serif;
+color:var(--muted)}}
+.rate-form{{margin-top:12px}}
+.rating-pick{{display:flex;flex-direction:row-reverse;gap:6px;
+justify-content:center;margin:4px 0 8px}}
+.rating-pick input{{position:absolute;opacity:0;pointer-events:none}}
+.rating-pick label{{cursor:pointer;font-size:26px;line-height:40px;
+min-width:40px;text-align:center;color:var(--border);
+transition:color .15s var(--ease)}}
+.rating-pick input:checked ~ label,.rating-pick label:hover,
+.rating-pick label:hover ~ label{{color:var(--accent)}}
+.rating-pick input:focus-visible + label{{outline:2px solid var(--accent);
+outline-offset:2px;border-radius:6px}}
+.rated-ok{{border-color:var(--accent);color:var(--ink)}}
 .danger{{color:#b23a2e}}
 .note{{text-align:center;color:var(--muted);
 font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
@@ -654,7 +700,7 @@ font:400 12.5px/1.6 -apple-system,system-ui,sans-serif}}
 
 
 @public_router.get("/club/{tenant_id}", response_class=HTMLResponse)
-async def public_club(tenant_id: int,
+async def public_club(tenant_id: int, rated: str = "",
                       session: AsyncSession = Depends(get_session)):
     """Публичная страница клуба: список тренировок + запись по имени."""
     import html as _h
@@ -711,6 +757,18 @@ async def public_club(tenant_id: int,
         ms_strip_html = '<div class="ms-strip">' + "".join(ms) + '</div>'
     profile_html = "".join(profile_parts)
 
+    rating_stats = (await svc.repo.master_rating_stats()
+                    if strip_masters else {})
+
+    def _rate_badge(mid: int, short: bool = False) -> str:
+        st = rating_stats.get(mid)
+        if not st:
+            return ""
+        if short:
+            return f'<span class="mrate">★ {st[0]:.1f} ({st[1]})</span>'
+        return (f'<span class="mrate">★ {st[0]:.1f} · {st[1]} '
+                f'{_plural_ratings(st[1])}</span>')
+
     trainings = await svc.repo.list_upcoming()
     masters = await svc.repo.masters_map() if trainings else {}
     cards = []
@@ -760,7 +818,8 @@ async def public_club(tenant_id: int,
             spec = (f'<span>{_h.escape(m.specialty)}</span>'
                     if m.specialty else "")
             master_html = (f'<div class="master">{avatar}'
-                           f'<div><b>{_h.escape(m.name)}</b>{spec}</div></div>')
+                           f'<div><b>{_h.escape(m.name)}</b>{spec}'
+                           f'{_rate_badge(m.id, short=True)}</div></div>')
         slot_meta.append((t.id, day_key, local, t.master_id or 0, filled >= mx))
         cards.append(
             f'<div class="card" data-day="{day_key}" '
@@ -845,10 +904,40 @@ async def public_club(tenant_id: int,
                 chips_html = f'<div class="chips">{chips}</div>'
             else:
                 chips_html = '<div class="mnone">Свободных окон пока нет</div>'
+            # отзывы с текстом (последние 3) + форма оценки
+            revs = await svc.repo.list_master_reviews(m.id, limit=3)
+            rev_items = "".join(
+                f'<div class="rev"><b>{_h.escape(r.author_name)}</b> '
+                f'<span class="rstars">{"★" * r.rating}{"☆" * (5 - r.rating)}'
+                f'</span><p>{_h.escape(r.text)}</p></div>'
+                for r in revs)
+            rev_html = (f'<details class="mrev"><summary>Отзывы</summary>'
+                        f'{rev_items}</details>') if rev_items else ""
+            stars_input = "".join(
+                f'<input type="radio" name="rating" value="{v}" '
+                f'id="mr{m.id}v{v}"{" checked" if v == 5 else ""}>'
+                f'<label for="mr{m.id}v{v}">★</label>'
+                for v in (5, 4, 3, 2, 1))
+            rate_form = (
+                f'<details class="mrev"><summary>Оценить мастера</summary>'
+                f'<form method="post" action="/club/{tenant_id}/rate" '
+                f'class="rate-form">'
+                f'<input type="hidden" name="master_id" value="{m.id}">'
+                f'<div class="rating-pick">{stars_input}</div>'
+                f'<input name="name" autocomplete="name" required minlength="2" '
+                f'maxlength="100" placeholder="Ваше имя" aria-label="Ваше имя">'
+                f'<input name="phone" type="tel" autocomplete="tel" required '
+                f'minlength="10" maxlength="16" '
+                f'placeholder="Телефон (одна оценка на номер)" '
+                f'aria-label="Телефон">'
+                f'<input name="text" maxlength="300" '
+                f'placeholder="Короткий отзыв (необязательно)">'
+                f'<button>Отправить оценку</button></form></details>')
             mcards.append(
                 f'<div class="card mcard"><div class="master">{av}'
-                f'<div><b>{_h.escape(m.name)}</b>{spec}</div></div>'
-                f'{chips_html}</div>')
+                f'<div><b>{_h.escape(m.name)}</b>{spec}'
+                f'{_rate_badge(m.id)}</div></div>'
+                f'{chips_html}{rev_html}{rate_form}</div>')
         masters_scr = (
             '<div id="scr-masters" class="scr">'
             '<div class="backrow"><button type="button" class="backbtn" '
@@ -864,8 +953,10 @@ async def public_club(tenant_id: int,
             '<button type="button" id="mfilter"></button></div>'
             + slots_inner + my_form + '</div>')
 
-        body = (profile_html + home_html + masters_scr + slots_scr
-                + _CLUB_JS)
+        rated_note = ('<div class="card note rated-ok">Спасибо! '
+                      'Оценка сохранена.</div>' if rated == "1" else "")
+        body = (profile_html + rated_note + home_html + masters_scr
+                + slots_scr + _CLUB_JS)
     else:
         # клубы без мастеров — прежний простой вид (список слотов сразу)
         body = (profile_html + ms_strip_html
@@ -944,6 +1035,41 @@ async def _notify_group_card_changed(tenant_id: int, training_id: int) -> None:
         await tg._refresh_group_card(tenant_id, training_id)
     except Exception:
         pass  # TG может быть не настроен/недоступен — не критично для веб-записи
+
+
+@public_router.post("/club/{tenant_id}/rate", response_class=HTMLResponse)
+async def public_rate_master(tenant_id: int,
+                             request: Request,
+                             master_id: int = Form(...),
+                             rating: int = Form(...),
+                             name: str = Form(...),
+                             phone: str = Form(...),
+                             text: str = Form(""),
+                             session: AsyncSession = Depends(get_session)):
+    """Оценка мастера с публичной страницы. Анти-накрутка: телефон
+    обязателен, одна оценка на номер (повторная заменяет прежнюю),
+    плюс общий IP-лимит."""
+    from fastapi.responses import RedirectResponse
+    ip = (request.client.host if request.client else "?")
+    if not _rate_ok(ip):
+        raise HTTPException(status_code=429,
+                            detail="Слишком много запросов, попробуйте через минуту")
+    tenant = await _ensure_tenant(session, tenant_id)
+    if not tenant.is_active:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+    name = name.strip()[:100]
+    digits = "".join(c for c in phone if c.isdigit())
+    if (len(name) < 2 or not (10 <= len(digits) <= 15)
+            or not (1 <= rating <= 5)):
+        raise HTTPException(status_code=400, detail="Некорректные данные")
+    svc = BookingService(session, tenant_id, tz=tenant.timezone)
+    if await svc.repo.get_master(master_id) is None:
+        raise HTTPException(status_code=404, detail="Мастер не найден")
+    await svc.repo.upsert_master_review(
+        master_id=master_id, user_id=_phone_uid(digits),
+        author_name=name, rating=rating, text=text.strip()[:500])
+    await session.commit()
+    return RedirectResponse(f"/club/{tenant_id}?rated=1", status_code=303)
 
 
 def _cancel_token(tenant_id: int, training_id: int, uid: int) -> str:

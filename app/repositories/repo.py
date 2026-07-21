@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import (
     Master,
+    MasterReview,
     Membership,
     Review,
     Schedule,
@@ -439,6 +440,59 @@ class TenantRepository:
         отображения у существующих слотов)."""
         stmt = select(Master).where(Master.tenant_id == self.tenant_id)
         return {m.id: m for m in (await self.session.execute(stmt)).scalars()}
+
+    # ---------- Рейтинг мастеров ----------
+
+    async def upsert_master_review(self, *, master_id: int, user_id: int,
+                                   author_name: str, rating: int,
+                                   text: str = "") -> MasterReview:
+        """Одна оценка на телефон: повторная — заменяет прежнюю."""
+        stmt = select(MasterReview).where(
+            MasterReview.tenant_id == self.tenant_id,
+            MasterReview.master_id == master_id,
+            MasterReview.user_id == user_id)
+        existing = (await self.session.execute(stmt)).scalar_one_or_none()
+        if existing:
+            existing.rating = rating
+            existing.text = text
+            existing.author_name = author_name
+            await self.session.flush()
+            return existing
+        r = MasterReview(tenant_id=self.tenant_id, master_id=master_id,
+                         user_id=user_id, author_name=author_name,
+                         rating=rating, text=text)
+        self.session.add(r)
+        await self.session.flush()
+        return r
+
+    async def master_rating_stats(self) -> dict[int, tuple[float, int]]:
+        """{master_id: (средний балл, количество оценок)} по клубу."""
+        stmt = (select(MasterReview.master_id,
+                       func.avg(MasterReview.rating), func.count())
+                .where(MasterReview.tenant_id == self.tenant_id)
+                .group_by(MasterReview.master_id))
+        rows = (await self.session.execute(stmt)).all()
+        return {mid: (float(avg), cnt) for mid, avg, cnt in rows}
+
+    async def list_master_reviews(self, master_id: int,
+                                  limit: int = 5) -> list[MasterReview]:
+        """Последние отзывы с текстом (пустые тексты не показываем)."""
+        stmt = (select(MasterReview).where(
+            MasterReview.tenant_id == self.tenant_id,
+            MasterReview.master_id == master_id,
+            MasterReview.text != "")
+            .order_by(MasterReview.created_at.desc()).limit(limit))
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def delete_master_review(self, review_id: int) -> bool:
+        stmt = select(MasterReview).where(
+            MasterReview.id == review_id,
+            MasterReview.tenant_id == self.tenant_id)
+        r = (await self.session.execute(stmt)).scalar_one_or_none()
+        if r is None:
+            return False
+        await self.session.delete(r)
+        return True
 
     # ---------- Роли (memberships) ----------
 

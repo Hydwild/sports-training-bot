@@ -10,7 +10,8 @@
 
   {% if masters %}
   <table>
-    <tr><th></th><th>Имя</th><th>Специализация</th><th>Статус</th><th></th></tr>
+    <tr><th></th><th>Имя</th><th>Специализация</th><th>Рейтинг</th>
+        <th>Статус</th><th></th></tr>
     {% for m in masters %}
     <tr>
       <td>
@@ -25,6 +26,9 @@
       </td>
       <td>{{ m.name }}</td>
       <td>{{ m.specialty or "—" }}</td>
+      <td>{% set st = stats.get(m.id) %}
+          {% if st %}★ {{ "%.1f"|format(st[0]) }} ({{ st[1] }})
+          {% else %}—{% endif %}</td>
       <td>{% if m.active %}<span class="tag ok">активен</span>
           {% else %}<span class="tag no">скрыт</span>{% endif %}</td>
       <td>
