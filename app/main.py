@@ -151,6 +151,43 @@ async def _not_authenticated_handler(request: Request, exc: NotAuthenticated):
     return RedirectResponse(exc.redirect_to, status_code=302)
 
 
+# Content-Security-Policy.
+#
+# Честная оговорка: страницы приложения используют ВСТРОЕННЫЕ <style> и
+# небольшие <script> (шаблоны /club, /promo, /faq, админка). Поэтому в
+# политике оставлены 'unsafe-inline' для style-src и script-src — без них
+# страницы просто не отрисуются, а переход на nonce для каждой инлайновой
+# вставки — отдельная крупная работа. Но остальные векторы закрыты:
+#   object-src 'none'      — нет Flash/апплетов;
+#   base-uri 'self'        — нельзя переписать базовый URL и увести ссылки;
+#   frame-ancestors 'none' — страницу нельзя встроить в чужой iframe
+#                            (кликджекинг), дублирует X-Frame-Options;
+#   form-action            — формы уходят только к нам и в вход Telegram;
+#   img-src ... https:     — внешние фото мастеров и аватар Telegram
+#                            (см. блок про изображения);
+# script/frame telegram.org — виджет входа в админку (login.html).
+_CSP = (
+    "default-src 'self'; "
+    "base-uri 'self'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self' https://oauth.telegram.org; "
+    "img-src 'self' data: https:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self' 'unsafe-inline' https://telegram.org; "
+    "frame-src https://oauth.telegram.org; "
+    "connect-src 'self'"
+)
+
+# Permissions-Policy: приложению не нужны камера, микрофон, геолокация,
+# оплата через браузерный API и т.п. — явно выключаем, чтобы встроенный
+# сторонний контент (виджет Telegram) не смог их запросить.
+_PERMISSIONS_POLICY = (
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+    "magnetometer=(), microphone=(), payment=(), usb=()"
+)
+
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -161,6 +198,11 @@ async def _security_headers(request: Request, call_next):
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    response.headers.setdefault("Permissions-Policy", _PERMISSIONS_POLICY)
+    # умолчание для referrer на весь сайт; страницы с личными данными
+    # ужесточают его до no-referrer сами (блок manage-ссылок)
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     return response
 
 
