@@ -151,7 +151,10 @@ def test_faq_rating_claim_is_honest():
     from app.api.faq_page import render_faq_page
     FAQ_HTML = render_faq_page()
     assert "Защита от накрутки" not in FAQ_HTML
-    assert "не подтверждается" in FAQ_HTML         # честно про телефон
+    # честно про телефон: он больше не подтверждает личность вообще
+    assert "оценку больше не подтверждает" in FAQ_HTML
+    # и про то, чего требуем взамен
+    assert "отметка явки" in FAQ_HTML
 
 
 def test_reviews_average_hidden_until_enough():
