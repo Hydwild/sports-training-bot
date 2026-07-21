@@ -100,7 +100,7 @@ def test_export_returns_own_data():
         assert "attachment" in r.headers["content-disposition"]
         data = r.json()
         assert data["записи"][0]["занятие"] == "Тренировка"
-        assert "79130003434" in data["подпись_у_администратора"]
+        assert data["телефон"] == "79130003434"   # свой номер видеть можно
 
 
 def test_forget_removes_personal_data():

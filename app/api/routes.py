@@ -366,9 +366,12 @@ def _plural_ratings(n: int) -> str:
 
 
 def _phone_uid(digits: str) -> int:
-    """Стабильный числовой id по телефону (только цифры). Берём телефон целиком
-    — он помещается в BigInteger, поэтому у разных телефонов разные id (в отличие
-    от прежнего `% 2e9`, где номера сталкивались)."""
+    """УСТАРЕЛО: id, равный самому номеру телефона.
+
+    Оставлено только для чтения исторических данных, которые ещё не прошли
+    миграцию a17f6b9c4d20. Новый код обязан брать id через
+    repo.web_customer_id / find_web_customer_id — номер там хранится
+    зашифрованным и в записях не фигурирует."""
     return int(digits)
 
 
@@ -1073,10 +1076,11 @@ async def public_signup(tenant_id: int,
     digits = "".join(c for c in phone if c.isdigit())
     if len(name) < 2 or not (10 <= len(digits) <= 15):
         raise HTTPException(status_code=400, detail="Некорректные имя или телефон")
-    uid = _phone_uid(digits)                   # стабильный id по телефону
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
+    # телефон больше не идентификатор: он хранится зашифрованным в
+    # web_customers, а в записи попадает только суррогатный id
+    uid = await svc.repo.web_customer_id(digits, name)
     await svc.repo.upsert_subscriber("web", uid, name)
-    await svc.repo.set_alias("web", uid, f"{name} 📱+{digits}")
     res = await svc.sign_up(training_id, "web", uid, name)
     await session.commit()
     msg = {"active": f"Вы записаны, {_h.escape(name)}!",
@@ -1154,12 +1158,13 @@ async def public_rate_master(tenant_id: int,
         raise HTTPException(status_code=404, detail="Мастер не найден")
     # оценку принимаем только от того, кто действительно приходил: иначе
     # рейтинг — это опрос случайных людей, а не отзыв клиентов
-    if not await svc.repo.has_visited_master(master_id, "web",
-                                             _phone_uid(digits)):
+    uid = await svc.repo.find_web_customer_id(digits)
+    if uid is None or not await svc.repo.has_visited_master(
+            master_id, "web", uid):
         return RedirectResponse(f"/club/{tenant_id}?rated=novisit",
                                 status_code=303)
     await svc.repo.upsert_master_review(
-        master_id=master_id, user_id=_phone_uid(digits),
+        master_id=master_id, user_id=uid,
         author_name=name, rating=rating, text=text.strip()[:500])
     await session.commit()
     return RedirectResponse(f"/club/{tenant_id}?rated=1", status_code=303)
@@ -1363,6 +1368,8 @@ async def public_manage_export(tenant_id: int, token: str,
     data = {
         "клуб": tenant.brand_name or tenant.name,
         "выгружено": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        # свой номер человек вправе увидеть: расшифровываем для него самого
+        "телефон": await svc.repo.web_phone(uid),
         "подпись_у_администратора": subs.get(("web", uid), ""),
         "записи": [
             {"занятие": t.title,
@@ -1433,9 +1440,9 @@ async def public_my(tenant_id: int,
     digits = "".join(c for c in phone if c.isdigit())
     if not (10 <= len(digits) <= 15):
         raise HTTPException(status_code=400, detail="Некорректный телефон")
-    uid = _phone_uid(digits)
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
-    rows = await svc.my_trainings("web", uid)
+    uid = await svc.repo.find_web_customer_id(digits)
+    rows = await svc.my_trainings("web", uid) if uid is not None else []
     if not rows:
         body = ('<div class="card note">По этому телефону записей '
                 'не найдено.</div>'

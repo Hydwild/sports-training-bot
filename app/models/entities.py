@@ -370,6 +370,30 @@ class MasterReview(Base):
         DateTime(timezone=True), default=_utcnow)
 
 
+class WebCustomer(Base):
+    """Клиент, записавшийся через сайт.
+
+    Раньше идентификатором записи служил сам телефон (`user_id = int(цифры)`)
+    — номер лежал в signups, subscribers и оценках открытым текстом и уезжал
+    в каждую резервную копию. Теперь запись ссылается на суррогатный id, а
+    номер хранится здесь: зашифрованным (phone_enc) и с детерминированным
+    индексом для поиска (phone_index). См. app/core/phones.py."""
+    __tablename__ = "web_customers"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "phone_index", name="uq_web_customer"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    phone_index: Mapped[str] = mapped_column(String(64), index=True)
+    phone_enc: Mapped[str] = mapped_column(Text, default="")
+    key_ver: Mapped[str] = mapped_column(String(8), default="jwt")
+    name: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)
+
+
 class ManageToken(Base):
     """Персональная ссылка управления своими записями (веб-запись).
 

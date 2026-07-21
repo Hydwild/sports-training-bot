@@ -23,6 +23,10 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
     # Подписи берём по всем платформам: на тренировку записываются и из
     # tg, и из vk, и с веб-страницы (у web-подписи — телефон участника).
     aliases = await svc.repo.aliases_map_all() if for_admin else {}
+    # телефон веб-клиента тренеру нужен, чтобы позвонить, но в базе он лежит
+    # зашифрованным (см. app/core/phones.py) — расшифровываем только здесь,
+    # в приватной карточке администратора
+    phones = await svc.repo.web_phones_map() if for_admin else {}
 
     # прогресс-бар заполнения мест
     filled = len(active)
@@ -49,11 +53,11 @@ async def training_card(svc: BookingService, t, for_admin: bool = False) -> str:
 
     if active:
         lines.append("\n<b>Записаны:</b>")
-        lines += [f"  {i}. {_html.escape(_label(s, aliases))}"
+        lines += [f"  {i}. {_html.escape(_label(s, aliases, phones))}"
                   for i, s in enumerate(active, 1)]
     if queue:
         lines.append("\n<b>⏳ Очередь:</b>")
-        lines += [f"  {i}. {_html.escape(_label(s, aliases))}"
+        lines += [f"  {i}. {_html.escape(_label(s, aliases, phones))}"
                   for i, s in enumerate(queue, 1)]
     if not active and not queue:
         lines.append("\n<i>Пока никто не записан — будь первым!</i>")
@@ -74,6 +78,8 @@ async def training_card_plain(svc: BookingService, t,
     filled = len(active)
     total = t.max_participants
     bar = _progress_bar(filled, total)
+    # aliases приходят только для карточки тренера — там же уместен и телефон
+    phones = await svc.repo.web_phones_map() if aliases else {}
 
     lines = [f"🏸 {t.title}", f"📅 {svc.format_local(t.start_at)}"]
     if t.location:
@@ -89,10 +95,10 @@ async def training_card_plain(svc: BookingService, t,
 
     if active:
         lines.append("\nЗаписаны:")
-        lines += [f"  {i}. {_label(s, aliases)}" for i, s in enumerate(active, 1)]
+        lines += [f"  {i}. {_label(s, aliases, phones)}" for i, s in enumerate(active, 1)]
     if queue:
         lines.append("\n⏳ Очередь:")
-        lines += [f"  {i}. {_label(s, aliases)}" for i, s in enumerate(queue, 1)]
+        lines += [f"  {i}. {_label(s, aliases, phones)}" for i, s in enumerate(queue, 1)]
     if not active and not queue:
         lines.append("\nПока никто не записан — будь первым!")
     return "\n".join(lines)
@@ -141,10 +147,15 @@ def _progress_bar(filled: int, total: int, width: int = 10) -> str:
     return "▰" * full + "▱" * (width - full)
 
 
-def _label(s, aliases: dict[tuple[str, int], str] | None = None) -> str:
+def _label(s, aliases: dict[tuple[str, int], str] | None = None,
+           phones: dict[int, str] | None = None) -> str:
     """Имя участника с @username (если есть) и пометкой гостя.
     Если передан словарь подписей {(platform, user_id): alias} и для
     участника есть подпись — она заменяет имя.
+
+    phones — расшифрованные телефоны веб-клиентов {user_id: номер}. Номер
+    дописывается к имени и только в приватной карточке администратора: в
+    базе он лежит зашифрованным, а в общий список не попадает вовсе.
     """
     if getattr(s, "is_guest", False):
         mark = "✅" if s.confirmed else "⏳ требует подтверждения"
@@ -157,6 +168,10 @@ def _label(s, aliases: dict[tuple[str, int], str] | None = None) -> str:
             name = alias
     uname = getattr(s, "username", None)
     suffix = f" @{uname}" if uname else ""
+    if phones and getattr(s, "platform", None) == "web":
+        phone = phones.get(getattr(s, "user_id", None))
+        if phone:
+            suffix += f" 📱+{phone}"
     return f"{name}{suffix}"
 
 

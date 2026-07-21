@@ -442,6 +442,63 @@ class TenantRepository:
         stmt = select(Master).where(Master.tenant_id == self.tenant_id)
         return {m.id: m for m in (await self.session.execute(stmt)).scalars()}
 
+    # ---------- Веб-клиенты (телефон отдельно от идентификатора) ----------
+
+    async def web_customer_id(self, phone: str, name: str = "") -> int:
+        """id клиента по телефону — заводит запись при первом обращении.
+
+        Наружу отдаётся суррогатный id: именно он попадает в signups и
+        оценки. Сам номер лежит зашифрованным в web_customers."""
+        from app.core import phones
+        from app.models.entities import WebCustomer
+
+        idx = phones.phone_index(phone)
+        stmt = select(WebCustomer).where(WebCustomer.tenant_id == self.tenant_id,
+                                         WebCustomer.phone_index == idx)
+        row = (await self.session.execute(stmt)).scalar_one_or_none()
+        if row is not None:
+            if name and row.name != name:
+                row.name = name[:200]
+            return row.id
+        enc, key_ver = phones.encrypt(phone)
+        row = WebCustomer(tenant_id=self.tenant_id, phone_index=idx,
+                          phone_enc=enc, key_ver=key_ver, name=name[:200])
+        self.session.add(row)
+        await self.session.flush()
+        return row.id
+
+    async def find_web_customer_id(self, phone: str) -> int | None:
+        """id по телефону без создания — для «моих записей»."""
+        from app.core import phones
+        from app.models.entities import WebCustomer
+
+        stmt = select(WebCustomer.id).where(
+            WebCustomer.tenant_id == self.tenant_id,
+            WebCustomer.phone_index == phones.phone_index(phone))
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def web_phones_map(self) -> dict[int, str]:
+        """{user_id: расшифрованный телефон} по клубу — для карточки тренера,
+        которому номер нужен, чтобы позвонить."""
+        from app.core import phones
+        from app.models.entities import WebCustomer
+
+        stmt = select(WebCustomer.id, WebCustomer.phone_enc,
+                      WebCustomer.key_ver).where(
+            WebCustomer.tenant_id == self.tenant_id)
+        return {cid: phones.decrypt(enc, ver)
+                for cid, enc, ver in (await self.session.execute(stmt))}
+
+    async def web_phone(self, user_id: int) -> str:
+        from app.core import phones
+        from app.models.entities import WebCustomer
+
+        stmt = select(WebCustomer.phone_enc, WebCustomer.key_ver).where(
+            WebCustomer.tenant_id == self.tenant_id,
+            WebCustomer.id == user_id)
+        row = (await self.session.execute(stmt)).first()
+        return phones.decrypt(row[0], row[1]) if row else ""
+
     # ---------- Персональные ссылки управления ----------
 
     async def issue_manage_token(self, platform: str, user_id: int,
@@ -482,7 +539,13 @@ class TenantRepository:
         «готово» вслепую."""
         from sqlalchemy import delete
 
+        from app.models.entities import WebCustomer
+
         removed = {}
+        res = await self.session.execute(
+            delete(WebCustomer).where(WebCustomer.tenant_id == self.tenant_id,
+                                      WebCustomer.id == user_id))
+        removed["web_customers"] = res.rowcount or 0
         for model in (Signup, MasterReview, Subscriber):
             res = await self.session.execute(
                 delete(model).where(model.tenant_id == self.tenant_id,

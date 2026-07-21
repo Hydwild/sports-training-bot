@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     admin_api_token: str = ""
     # Секрет для подписи JWT (обязательно сменить в проде!)
     jwt_secret: str = INSECURE_JWT_SECRET
+    # Ключ шифрования телефонов веб-клиентов (см. app/core/phones.py).
+    # Пусто — ключ выводится из jwt_secret; отдельный ключ можно добавить
+    # позже, старые записи продолжат читаться (рядом хранится версия ключа).
+    phone_enc_key: str = ""
 
     # --- Telegram / VK (глобальные креды площадки; тенанты различаются внутри) ---
     tg_token: str = ""
