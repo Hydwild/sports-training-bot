@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>📮 Недоставленные уведомления</h2>
+  <p class="muted">Сообщения, которые не удалось доставить после всех
+    попыток. Обычная причина — человек заблокировал бота или удалил чат.
+    Текст сообщения здесь не показывается: для разбора хватает клуба,
+    канала и причины, а в тексте — имя и время занятия конкретного
+    человека.</p>
+
+  <p class="muted">Всего недоставленных: <b>{{ health.dead }}</b>.
+    Самое старое сообщение в очереди ждёт
+    <b>{{ health.pending_age_min }}</b> мин.</p>
+
+  <form method="get" action="/admin/platform/outbox">
+    <label>Клуб (id):
+      <input name="tenant_id" value="{{ f_tenant or '' }}" size="6"
+             style="padding:6px"></label>
+    <label style="margin-left:12px">Канал:
+      <select name="platform" style="padding:6px">
+        <option value="">любой</option>
+        <option value="tg" {% if f_platform == 'tg' %}selected{% endif %}>Telegram</option>
+        <option value="vk" {% if f_platform == 'vk' %}selected{% endif %}>ВКонтакте</option>
+      </select></label>
+    <button class="btn sm" type="submit" style="margin-left:12px">Показать</button>
+  </form>
+</div>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr><th>id</th><th>Клуб</th><th>Канал</th><th>Попыток</th>
+        <th>Создано</th><th>Причина</th><th></th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td>{{ r.tenant_id }}</td>
+      <td>{{ r.platform }}</td>
+      <td>{{ r.attempts }}</td>
+      <td>{{ r.created_at.strftime('%d.%m %H:%M') }}</td>
+      <td class="muted">{{ r.last_error or '—' }}</td>
+      <td>
+        <form method="post" action="/admin/platform/outbox/{{ r.id }}/retry"
+              style="display:inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn sm" type="submit">Повторить</button>
+        </form>
+        <form method="post" action="/admin/platform/outbox/{{ r.id }}/discard"
+              style="display:inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn sm" type="submit">Отбросить</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted" style="text-align:center;padding:24px 0">
+    Недоставленных сообщений нет.</p>
+  {% endif %}
+  <p><a href="/admin/platform">← к списку клиентов</a></p>
+</div>
+{% endblock %}

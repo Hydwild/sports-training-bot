@@ -30,11 +30,15 @@ from app.api.routes import (
     set_tenant_tokens as _set_tenant_tokens,
 )
 from app.api.schemas import TenantCreate
+import logging
+
 from app.core import bot_tokens
 from app.core.config import settings, tenant_suspended
 from app.core.security import NotAuthenticated, csrf_for_request, require_csrf
 from app.db.engine import get_session
 from app.repositories.repo import GlobalRepository
+
+logger = logging.getLogger("app")
 
 router = APIRouter(prefix="/admin/platform", tags=["platform-admin"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -511,3 +515,49 @@ async def platform_tokens_clear(tenant_id: int, request: Request,
     await session.commit()
     return RedirectResponse(f"/admin/platform/{tenant_id}/edit",
                             status_code=303)
+
+
+# ---------- Недоставленные уведомления (dead-letter) ----------
+#
+# Раньше провал доставки был виден только в логах: сообщение помечалось
+# недоставленным, и дальше о нём никто не вспоминал. Здесь оператор видит
+# их списком и решает — повторить или отбросить.
+
+@router.get("/outbox", response_class=HTMLResponse)
+async def platform_outbox(request: Request,
+                          tenant_id: str = "",
+                          platform: str = "",
+                          _auth: None = Depends(require_platform_admin),
+                          session: AsyncSession = Depends(get_session)):
+    g = GlobalRepository(session)
+    tid = int(tenant_id) if tenant_id.strip().isdigit() else None
+    rows = await g.list_dead_outbox(
+        tenant_id=tid, platform=platform if platform in ("tg", "vk") else "")
+    return templates.TemplateResponse(request, "platform_outbox.html", _ctx(
+        request, rows=rows, health=await g.outbox_health(),
+        f_tenant=tid, f_platform=platform))
+
+
+@router.post("/outbox/{outbox_id}/retry", response_class=HTMLResponse)
+async def platform_outbox_retry(outbox_id: int,
+                                _auth: None = Depends(require_platform_admin),
+                                _csrf: None = Depends(require_csrf(COOKIE)),
+                                session: AsyncSession = Depends(get_session)):
+    ok = await GlobalRepository(session).retry_dead_outbox(outbox_id)
+    await session.commit()
+    # журнал действия: кто именно нажал, видно по входу в панель оператора
+    logger.warning("Оператор вернул в очередь недоставленное сообщение "
+                   "id=%s (успешно: %s)", outbox_id, ok)
+    return RedirectResponse("/admin/platform/outbox", status_code=303)
+
+
+@router.post("/outbox/{outbox_id}/discard", response_class=HTMLResponse)
+async def platform_outbox_discard(outbox_id: int,
+                                  _auth: None = Depends(require_platform_admin),
+                                  _csrf: None = Depends(require_csrf(COOKIE)),
+                                  session: AsyncSession = Depends(get_session)):
+    ok = await GlobalRepository(session).discard_dead_outbox(outbox_id)
+    await session.commit()
+    logger.warning("Оператор отбросил недоставленное сообщение id=%s "
+                   "(успешно: %s)", outbox_id, ok)
+    return RedirectResponse("/admin/platform/outbox", status_code=303)

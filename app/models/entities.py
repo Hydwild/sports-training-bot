@@ -231,6 +231,7 @@ class Outbox(Base):
     #   processing — захвачено рабочим циклом, отправляется прямо сейчас
     #   sent       — доставлено
     #   dead       — не доставлено после MAX_OUTBOX_ATTEMPTS попыток
+    #   discarded  — оператор посмотрел и отбросил вручную
     # Отдельное «processing» нужно, чтобы перезапуск процесса посреди
     # отправки не терял сообщение молча: зависшие захваты возвращаются в
     # pending по времени (claimed_at), а не пропадают навсегда.
@@ -243,6 +244,10 @@ class Outbox(Base):
     next_attempt_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True))
     last_error: Mapped[str] = mapped_column(String(300), default="")
+    # когда сообщение пришло в конечное состояние (sent/discarded) —
+    # по нему работает суточная чистка
+    handled_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True))
     # число неудачных попыток доставки; после лимита сообщение помечается
     # dead, чтобы не ретраить вечно (например, бот заблокирован юзером)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

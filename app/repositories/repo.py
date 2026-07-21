@@ -862,7 +862,8 @@ class GlobalRepository:
     async def mark_outbox_sent(self, outbox_id: int) -> None:
         await self.session.execute(
             update(Outbox).where(Outbox.id == outbox_id)
-            .values(sent=True, status="sent", claimed_at=None)
+            .values(sent=True, status="sent", claimed_at=None,
+                    handled_at=_utcnow())
         )
 
     async def mark_outbox_dead(self, outbox_id: int, error: str = "") -> None:
@@ -888,6 +889,53 @@ class GlobalRepository:
                     next_attempt_at=_utcnow() + dt.timedelta(
                         minutes=RETRY_DELAYS_MIN[idx]))
         )
+
+    async def list_dead_outbox(self, *, tenant_id: int | None = None,
+                               platform: str = "", limit: int = 100):
+        """Недоставленные сообщения для разбора оператором.
+
+        Текст сообщения не отдаём: в нём имя и время занятия конкретного
+        человека, а для разбора хватает клуба, платформы, числа попыток и
+        причины."""
+        stmt = select(Outbox).where(Outbox.status == "dead")
+        if tenant_id:
+            stmt = stmt.where(Outbox.tenant_id == tenant_id)
+        if platform:
+            stmt = stmt.where(Outbox.platform == platform)
+        stmt = stmt.order_by(Outbox.id.desc()).limit(limit)
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def retry_dead_outbox(self, outbox_id: int) -> bool:
+        """Вернуть недоставленное в очередь: счётчик попыток обнуляем,
+        иначе оно тут же снова упадёт в dead."""
+        res = await self.session.execute(
+            update(Outbox)
+            .where(Outbox.id == outbox_id, Outbox.status == "dead")
+            .values(status="pending", sent=False, attempts=0,
+                    claimed_at=None, next_attempt_at=None, handled_at=None))
+        return bool(res.rowcount)
+
+    async def discard_dead_outbox(self, outbox_id: int) -> bool:
+        """Отбросить: сообщение больше не нужно (клуб ушёл, чат удалён)."""
+        res = await self.session.execute(
+            update(Outbox)
+            .where(Outbox.id == outbox_id, Outbox.status == "dead")
+            .values(status="discarded", sent=True, handled_at=_utcnow()))
+        return bool(res.rowcount)
+
+    async def outbox_health(self) -> dict[str, int]:
+        """Сводка для алерта: сколько недоставленных и как давно ждёт
+        самое старое сообщение в очереди (в минутах)."""
+        dead = await self.count_dead_outbox()
+        oldest = (await self.session.execute(
+            select(func.min(Outbox.created_at)).where(
+                Outbox.status == "pending"))).scalar()
+        age_min = 0
+        if oldest is not None:
+            if oldest.tzinfo is None:
+                oldest = oldest.replace(tzinfo=dt.timezone.utc)
+            age_min = int((_utcnow() - oldest).total_seconds() // 60)
+        return {"dead": dead, "pending_age_min": max(age_min, 0)}
 
     async def count_dead_outbox(self) -> int:
         """Сколько сообщений так и не доставлено — для отчёта владельцу."""

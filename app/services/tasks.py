@@ -80,6 +80,22 @@ MAX_OUTBOX_ATTEMPTS = 5
 # отправки) и сообщение возвращается в очередь
 STALE_CLAIM_MINUTES = 10
 
+# пороги для суточной сводки владельцу: сколько недоставленных уже похоже
+# на общий сбой, и сколько минут ожидания означает вставшую очередь
+DEAD_LETTER_ALERT = 20
+PENDING_AGE_ALERT_MIN = 30
+
+
+# Гарантия доставки — «хотя бы один раз», не «ровно один раз».
+#
+# Сообщение помечается доставленным ПОСЛЕ ответа Telegram/VK. Если процесс
+# умрёт между ответом API и записью в базу, сообщение вернётся в очередь
+# (см. requeue_stale_outbox) и уйдёт повторно — человек получит дубль.
+# Обещать exactly-once здесь нельзя: ни Telegram, ни VK не дают ключа
+# идемпотентности для sendMessage, поэтому отличить «уже отправлено» от
+# «не отправлено» на их стороне нечем. Выбор осознанный: лучше редкий
+# дубль напоминания, чем молча потерянное уведомление.
+
 
 async def _deliver_once() -> None:
     async with SessionLocal() as session:
@@ -430,7 +446,13 @@ async def _daily_maintenance(last_day: list) -> None:
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
         await session.execute(delete(Outbox).where(
             (Outbox.platform == "web")
-            | ((Outbox.status == "sent") & (Outbox.created_at < cutoff))))
+            | (Outbox.status.in_(("sent", "discarded"))
+               & (Outbox.handled_at.is_not(None))
+               & (Outbox.handled_at < cutoff))
+            # у доставленных до появления handled_at её нет — падаем на дату
+            # создания, иначе они останутся навсегда
+            | ((Outbox.status == "sent") & (Outbox.handled_at.is_(None))
+               & (Outbox.created_at < cutoff))))
         await session.commit()
 
         # отработавшие окна лимита и истёкшие ссылки управления
@@ -439,7 +461,9 @@ async def _daily_maintenance(last_day: list) -> None:
         await session.commit()
 
         from app.repositories.repo import GlobalRepository
-        dead_count = await GlobalRepository(session).count_dead_outbox()
+        health = await GlobalRepository(session).outbox_health()
+        dead_count = health["dead"]
+        pending_age = health["pending_age_min"]
 
         # SaaS: клубы с истекающей (≤3 дня) или уже истёкшей оплатой
         tenants = list((await session.execute(select(Tenant))).scalars())
@@ -494,8 +518,19 @@ async def _daily_maintenance(last_day: list) -> None:
     if dead_count:
         if lines:
             lines.append("")
-        lines.append(f"📮 Недоставленных уведомлений в очереди: {dead_count}. "
-                     "Обычно это заблокированный бот или удалённый чат.")
+        lines.append(f"📮 Недоставленных уведомлений: {dead_count}. "
+                     "Обычно это заблокированный бот или удалённый чат. "
+                     "Разобрать: /admin/platform/outbox")
+        if dead_count >= DEAD_LETTER_ALERT:
+            lines.append(f"⚠️ Это больше порога ({DEAD_LETTER_ALERT}) — "
+                         "похоже на общий сбой доставки, а не на "
+                         "единичные блокировки.")
+    if pending_age >= PENDING_AGE_ALERT_MIN:
+        # очередь не разгребается: доставка встала, а не «иногда не доходит»
+        if lines:
+            lines.append("")
+        lines.append(f"⏳ Самое старое сообщение ждёт отправки "
+                     f"{pending_age} мин — очередь не разгребается.")
     if not lines:
         return
     try:
