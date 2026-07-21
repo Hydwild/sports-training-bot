@@ -96,6 +96,33 @@ async def _make_dump() -> tuple[bytes, str] | None:
     return await _dump_postgres()
 
 
+def checksum(data: bytes) -> str:
+    """SHA-256 архива. Уходит в подпись сообщения, чтобы при восстановлении
+    можно было убедиться, что скачан именно тот файл и он не побился."""
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def verify_dump(data: bytes) -> str:
+    """Проверка, что архив действительно содержит базу, а не пустышку.
+    Возвращает описание проблемы или пустую строку.
+
+    Без неё «успешный» бэкап мог оказаться архивом из нуля таблиц: файл
+    приходит, оператор спокоен, а восстанавливать нечего."""
+    try:
+        raw = gzip.decompress(data)
+    except OSError as e:
+        return f"архив не распаковывается ({e})"
+    if len(raw) < 1024:
+        return f"дамп подозрительно мал ({len(raw)} байт)"
+    if settings.is_sqlite:
+        if not raw.startswith(b"SQLite format 3"):
+            return "это не файл базы SQLite"
+    elif b"CREATE TABLE" not in raw:
+        return "в дампе нет ни одной таблицы"
+    return ""
+
+
 @dataclass
 class BackupResult:
     """Структурированный итог бэкапа. Раньше возвращалась только строка —
@@ -126,6 +153,7 @@ async def send_backup_to_owner() -> BackupResult:
             "Не удалось создать дамп базы (подробности в логах сервиса).")
     data, filename = result
 
+    digest = checksum(data)
     size_mb = len(data) / (1024 * 1024)
     if size_mb > MAX_TELEGRAM_FILE_MB:
         # повторять бессмысленно — размер сам не уменьшится; но и успехом
@@ -136,10 +164,20 @@ async def send_backup_to_owner() -> BackupResult:
             "Бэкап не отправлен: нужно внешнее хранилище (S3/Backblaze) "
             "вместо/вместе с отправкой в Telegram.")
 
+    # содержимое проверяем последним: сначала отсекаем то, что вообще
+    # нельзя отправить по размеру — там причина понятнее
+    problem = verify_dump(data)
+    if problem:
+        return BackupResult(False,
+            f"Дамп создан, но не прошёл проверку: {problem}. "
+            "Отправлять такую копию нельзя — восстанавливать из неё нечего.")
+
     from app.bots import telegram as tg
-    caption = f"💾 Бэкап базы за {dt.date.today().isoformat()} ({size_mb:.1f} МБ)"
+    caption = (f"💾 Бэкап базы за {dt.date.today().isoformat()} "
+               f"({size_mb:.1f} МБ)\nSHA-256: {digest}")
     ok = await tg.send_document_to_owner(owner_id, filename, data, caption=caption)
     if not ok:
         return BackupResult(False,
             "Дамп создан, но отправить в Telegram не удалось (бот недоступен?).")
-    return BackupResult(True, f"Бэкап отправлен: {filename} ({size_mb:.1f} МБ).")
+    return BackupResult(True, f"Бэкап отправлен: {filename} ({size_mb:.1f} МБ), "
+                              f"SHA-256 {digest[:16]}…")

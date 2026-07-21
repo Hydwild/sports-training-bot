@@ -27,6 +27,18 @@ async def test_dump_failure_returns_clear_message(monkeypatch):
     assert not result.ok and "Не удалось создать дамп" in result.message
 
 
+def _valid_dump() -> bytes:
+    """Правдоподобный архив: копия проверяется на содержимое перед
+    отправкой (см. backup.verify_dump), пустышка до Telegram не доедет."""
+    import gzip
+    if settings.is_sqlite:                     # в тестах база — SQLite
+        body = b"SQLite format 3\x00" + b"\x00" * 4000
+    else:
+        body = (b"-- PostgreSQL database dump\n"
+                b"CREATE TABLE public.tenants (id integer);\n" + b"-" * 4000)
+    return gzip.compress(body)
+
+
 async def test_oversized_dump_not_sent(monkeypatch):
     monkeypatch.setattr(settings, "platform_owner_tg_id", 12345)
 
@@ -56,7 +68,7 @@ async def test_successful_backup_sends_document(monkeypatch):
     monkeypatch.setattr(settings, "platform_owner_tg_id", 12345)
 
     async def fake_make_dump():
-        return b"fake dump content", "backup_2026-01-01.sql.gz"
+        return _valid_dump(), "backup_2026-01-01.sql.gz"
 
     monkeypatch.setattr(backup, "_make_dump", fake_make_dump)
 
@@ -74,14 +86,15 @@ async def test_successful_backup_sends_document(monkeypatch):
     assert len(calls) == 1
     assert calls[0][0] == 12345
     assert calls[0][1] == "backup_2026-01-01.sql.gz"
-    assert calls[0][2] == b"fake dump content"
+    assert calls[0][2] == _valid_dump()
+    assert backup.checksum(_valid_dump()) in calls[0][3]   # сумма в подписи
 
 
 async def test_send_failure_reported(monkeypatch):
     monkeypatch.setattr(settings, "platform_owner_tg_id", 12345)
 
     async def fake_make_dump():
-        return b"data", "backup.sql.gz"
+        return _valid_dump(), "backup.sql.gz"
 
     monkeypatch.setattr(backup, "_make_dump", fake_make_dump)
 
