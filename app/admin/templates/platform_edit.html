@@ -28,13 +28,25 @@
       </select></label></p>
 
     <h3>Токены ботов</h3>
-    <p class="muted">Оставьте поле пустым, чтобы отвязать бота от клуба.</p>
-    <p><label>Токен Telegram-бота<br>
-      <input name="tg_token" value="{{ t.tg_token or '' }}"
-             placeholder="123456:ABC..." style="width:100%;padding:8px"></label></p>
-    <p><label>Токен сообщества ВКонтакте<br>
-      <input name="vk_token" value="{{ t.vk_token or '' }}"
-             placeholder="vk1.a...." style="width:100%;padding:8px"></label></p>
+    <p class="muted">Сами токены не показываются: они хранятся
+       зашифрованными, и вывод их в форму означал бы копию в истории
+       браузера и в логах. Пустое поле — <b>оставить прежний</b>.
+       Чтобы отвязать бота, есть отдельная кнопка ниже.</p>
+    <p><label>Токен Telegram-бота — сейчас: <b>{{ tg_state }}</b><br>
+      <input name="tg_token" value="" autocomplete="off"
+             placeholder="новый токен, чтобы заменить"
+             style="width:100%;padding:8px"></label></p>
+    <p><label>Токен сообщества ВКонтакте — сейчас: <b>{{ vk_state }}</b><br>
+      <input name="vk_token" value="" autocomplete="off"
+             placeholder="новый токен, чтобы заменить"
+             style="width:100%;padding:8px"></label></p>
+
+    <p class="muted">Отвязать бота (токен будет удалён):
+      <button class="btn sm" type="submit" formaction="/admin/platform/{{ t.id }}/tokens/clear"
+              formmethod="post" name="kind" value="tg">Отвязать Telegram</button>
+      <button class="btn sm" type="submit" formaction="/admin/platform/{{ t.id }}/tokens/clear"
+              formmethod="post" name="kind" value="vk">Отвязать ВКонтакте</button>
+    </p>
 
     <h3>Тренер клиента</h3>
     <p><label>Telegram ID тренера<br>

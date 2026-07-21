@@ -2019,14 +2019,18 @@ _polling_active = False
 
 async def _load_client_bots() -> None:
     """(Пере)читывает клиентских ботов из базы в реестры."""
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
+    from app.core import bot_tokens
     from app.models.entities import Tenant
     async with SessionLocal() as _s:
-        tenants = list((await _s.execute(
-            select(Tenant).where(Tenant.tg_token.is_not(None)))).scalars())
+        # токен может лежать зашифрованным (новый формат) или ещё открытым
+        # (переходный) — берём клубы с любым из них
+        tenants = list((await _s.execute(select(Tenant).where(or_(
+            Tenant.tg_token.is_not(None),
+            Tenant.tg_token_enc != "")))).scalars())
     fresh: dict[int, str] = {}
     for t in tenants:
-        tok = (t.tg_token or "").strip()
+        tok = bot_tokens.token_of(t, "tg")
         if tok and tok != settings.tg_token:
             fresh[t.id] = tok
     # закрываем убранных/сменивших токен

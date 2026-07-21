@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     # дублей клиентов. После migrate_phone_keys --apply --verify связку
     # можно убрать.
     phone_keyring: str = ""
+    # Ключ шифрования токенов Telegram/VK клубов (см. app/core/bot_tokens.py).
+    # Отдельный от JWT и от ключа телефонов: разные сроки жизни и разные
+    # последствия компрометации. Обязателен для Pro после миграции токенов.
+    bot_token_enc_key: str = ""
+    # Связка прежних ключей токенов на время замены: `ver:secret,...`
+    bot_token_keyring: str = ""
 
     # --- Telegram / VK (глобальные креды площадки; тенанты различаются внутри) ---
     tg_token: str = ""

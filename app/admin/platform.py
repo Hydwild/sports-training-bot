@@ -30,6 +30,7 @@ from app.api.routes import (
     set_tenant_tokens as _set_tenant_tokens,
 )
 from app.api.schemas import TenantCreate
+from app.core import bot_tokens
 from app.core.config import settings, tenant_suspended
 from app.core.security import NotAuthenticated, csrf_for_request, require_csrf
 from app.db.engine import get_session
@@ -124,7 +125,8 @@ async def _dashboard_rows(request: Request, session: AsyncSession) -> list[dict]
             status = (f"до {paid_until}", "ok")
         rows.append({
             "id": t.id, "name": t.brand_name or t.name, "is_demo": t.is_demo,
-            "has_tg": bool(t.tg_token), "has_vk": bool(t.vk_token),
+            "has_tg": bot_tokens.has_token(t, "tg"),
+            "has_vk": bot_tokens.has_token(t, "vk"),
             "admin_tg_id": t.admin_tg_id,
             "status_text": status[0], "status_tag": status[1],
             "public_url": f"{base}/club/{t.id}",
@@ -395,7 +397,9 @@ async def platform_edit_form(tenant_id: int, request: Request,
     if not tenant:
         raise HTTPException(status_code=404, detail="Клуб не найден")
     return templates.TemplateResponse(request, "platform_edit.html",
-        _ctx(request, t=tenant, error=None, saved=False))
+        _ctx(request, t=tenant, error=None, saved=False,
+             tg_state=bot_tokens.mask(tenant, "tg"),
+             vk_state=bot_tokens.mask(tenant, "vk")))
 
 
 @router.post("/{tenant_id}/edit", response_class=HTMLResponse)
@@ -441,6 +445,8 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     if cover_url and not cover_url.startswith(("http://", "https://")):
         return templates.TemplateResponse(request, "platform_edit.html",
             _ctx(request, t=tenant, saved=False,
+                 tg_state=bot_tokens.mask(tenant, "tg"),
+                 vk_state=bot_tokens.mask(tenant, "vk"),
                  error="Фото-обложка должна быть http(s)-ссылкой на картинку"),
             status_code=400)
     tenant.cover_url = cover_url[:500] or None
@@ -450,19 +456,26 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     await session.commit()
 
     try:
-        # переиспользуем существующую валидацию формата + hot-reload ботов
-        await _set_tenant_tokens(
-            tenant_id,
-            TokensPatch(tg_token=tg_token.strip(), vk_token=vk_token.strip()),
-            session)
+        # пустое поле означает «оставить прежний токен», а не «стереть»:
+        # иначе любое сохранение формы молча отвязывало бы ботов клуба.
+        # Для отвязки есть отдельная кнопка (см. ниже /tokens/clear).
+        patch = TokensPatch(tg_token=tg_token.strip() or None,
+                            vk_token=vk_token.strip() or None)
+        if patch.tg_token or patch.vk_token:
+            # переиспользуем валидацию формата + hot-reload ботов
+            await _set_tenant_tokens(tenant_id, patch, session)
     except HTTPException as e:
         # имя/тренер/таймзона уже сохранены — сообщаем только про токен
         return templates.TemplateResponse(request, "platform_edit.html",
-            _ctx(request, t=tenant, error=f"Токен не принят: {e.detail}", saved=False),
+            _ctx(request, t=tenant, error=f"Токен не принят: {e.detail}",
+                 saved=False, tg_state=bot_tokens.mask(tenant, "tg"),
+                 vk_state=bot_tokens.mask(tenant, "vk")),
             status_code=400)
 
     return templates.TemplateResponse(request, "platform_edit.html",
-        _ctx(request, t=tenant, error=None, saved=True))
+        _ctx(request, t=tenant, error=None, saved=True,
+             tg_state=bot_tokens.mask(tenant, "tg"),
+             vk_state=bot_tokens.mask(tenant, "vk")))
 
 
 # ---------- Быстрое продление оплаты ----------
@@ -476,3 +489,25 @@ async def platform_billing_submit(tenant_id: int, request: Request,
     await _set_tenant_billing(tenant_id, BillingPatch(paid_until=paid_until.strip()),
                               session)
     return RedirectResponse("/admin/platform", status_code=302)
+
+
+@router.post("/{tenant_id}/tokens/clear", response_class=HTMLResponse)
+async def platform_tokens_clear(tenant_id: int, request: Request,
+                                kind: str = Form(...),
+                                _auth: None = Depends(require_platform_admin),
+                                _csrf: None = Depends(require_csrf(COOKIE)),
+                                session: AsyncSession = Depends(get_session)):
+    """Отвязать бота от клуба — отдельным осознанным действием.
+
+    Раньше отвязка происходила от пустого поля в форме: любое сохранение
+    настроек молча выключало ботов клуба."""
+    if kind not in ("tg", "vk"):
+        raise HTTPException(status_code=400, detail="Неизвестный тип токена")
+    g = GlobalRepository(session)
+    tenant = await g.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+    bot_tokens.set_token(tenant, kind, "")
+    await session.commit()
+    return RedirectResponse(f"/admin/platform/{tenant_id}/edit",
+                            status_code=303)

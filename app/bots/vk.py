@@ -2225,14 +2225,15 @@ async def _load_client_bots(attach) -> None:
     """(Пере)читывает клиентских VK-ботов из базы; поднимает новых,
     гасит убранных. Задачи поллинга создаются, если поллинг уже запущен."""
     from vkbottle.bot import Bot
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
+    from app.core import bot_tokens
     from app.models.entities import Tenant
     async with SessionLocal() as _s:
         tenants = list((await _s.execute(
-            select(Tenant).where(Tenant.vk_token.is_not(None)))).scalars())
+            select(Tenant).where(or_(Tenant.vk_token.is_not(None), Tenant.vk_token_enc != "")))).scalars())
     fresh: dict[int, str] = {}
     for t in tenants:
-        tok = (t.vk_token or "").strip()
+        tok = bot_tokens.token_of(t, "vk")
         if tok and tok != settings.vk_token:
             fresh[t.id] = tok
     # гасим убранных и сменивших токен (сменившие поднимутся заново ниже)

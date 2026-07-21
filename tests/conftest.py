@@ -9,6 +9,9 @@ os.environ.setdefault("ADMIN_DEV_LOGIN", "true")
 import os as _os
 if _os.path.exists("/tmp/v2_testclient.db"): _os.remove("/tmp/v2_testclient.db")
 os.environ.setdefault("JWT_SECRET", "test-secret")
+# Pro требует отдельный ключ для токенов ботов: без него
+# токен клуба сохранить нельзя (app/core/bot_tokens.py)
+os.environ.setdefault("BOT_TOKEN_ENC_KEY", "test-bot-token-key")
 os.environ.setdefault("LOG_DIR", "/tmp/test_logs_v2")
 os.environ.setdefault("TG_TOKEN", "123456:TESTTOKEN")
 

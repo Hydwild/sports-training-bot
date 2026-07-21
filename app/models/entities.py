@@ -61,8 +61,17 @@ class Tenant(Base):
     # (новое значение paid_until не совпадёт со старым маркером).
     last_billing_notice: Mapped[str] = mapped_column(String(32), default="")
     # мультиклиент: собственные боты клуба (пусто — используется бот из env)
+    # Токены ботов клуба. Открытые колонки остались ТОЛЬКО как переходные:
+    # после scripts/migrate_bot_tokens.py --apply они очищаются, а удаляются
+    # отдельной миграцией позже (см. app/core/bot_tokens.py).
     tg_token: Mapped[str | None] = mapped_column(String(200))
     vk_token: Mapped[str | None] = mapped_column(String(200))
+    # Text, а не String(200): шифротекст Fernet заметно длиннее исходного
+    # токена и в старый размер не помещается.
+    tg_token_enc: Mapped[str] = mapped_column(Text, default="")
+    tg_token_ver: Mapped[str] = mapped_column(String(8), default="")
+    vk_token_enc: Mapped[str] = mapped_column(Text, default="")
+    vk_token_ver: Mapped[str] = mapped_column(String(8), default="")
     # --- Настройки уведомлений и поведения ---
     # Напоминание о тренировке: вкл и за сколько минут до начала
     reminder_enabled: Mapped[bool] = mapped_column(Boolean, default=True)

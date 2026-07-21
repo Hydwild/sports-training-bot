@@ -18,6 +18,7 @@ from app.api.schemas import (
     TrainingCreate,
     TrainingOut,
 )
+from app.core import bot_tokens as _bot_tokens
 from app.core.config import settings, safe_color as _safe_color
 from app.core.verticals import vcfg as _vcfg
 from app.db.engine import get_session
@@ -296,9 +297,11 @@ async def set_tenant_tokens(tenant_id: int, body: TokensPatch,
         if val and not re.fullmatch(r"\d+:[A-Za-z0-9_-]+", val):
             raise HTTPException(status_code=400,
                                 detail="Неверный формат Telegram-токена")
-        tenant.tg_token = val or None
+        # пишем зашифрованным: открытым текстом токен попадал в каждый
+        # дамп базы, а дамп уходит в Telegram
+        _bot_tokens.set_token(tenant, "tg", val)
     if body.vk_token is not None:
-        tenant.vk_token = body.vk_token.strip() or None
+        _bot_tokens.set_token(tenant, "vk", body.vk_token.strip())
     await session.commit()
     # hot-reload: пробуем поднять/перечитать ботов без рестарта сервиса
     reloaded = False

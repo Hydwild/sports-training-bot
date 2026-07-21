@@ -38,16 +38,19 @@ def test_tg_client_bots_and_context():
         await engine.dispose()
         from app.bots import telegram as tg
         # эмулируем поднятие клиентских ботов (кусок setup)
-        from sqlalchemy import select
+        from sqlalchemy import or_, select
+        from app.core import bot_tokens
         from app.models.entities import Tenant
         from app.db.engine import SessionLocal
         from aiogram import Bot
         tg._tenant_bots.clear(); tg._token_tenants.clear()
         async with SessionLocal() as s:
-            tenants = list((await s.execute(
-                select(Tenant).where(Tenant.tg_token.is_not(None)))).scalars())
+            # токен хранится зашифрованным; открытая колонка — переходная
+            tenants = list((await s.execute(select(Tenant).where(or_(
+                Tenant.tg_token.is_not(None),
+                Tenant.tg_token_enc != "")))).scalars())
         for t in tenants:
-            tok = (t.tg_token or "").strip()
+            tok = bot_tokens.token_of(t, "tg")
             if tok:
                 tg._tenant_bots[t.id] = Bot(token=tok)
                 tg._token_tenants[tok] = t.id
@@ -192,9 +195,10 @@ def test_hot_reload_registries():
         # очистка токена убирает бота
         from app.db.engine import SessionLocal
         from app.models.entities import Tenant
+        from app.core import bot_tokens
         async with SessionLocal() as s:
             t = await s.get(Tenant, tid)
-            t.tg_token = None
+            bot_tokens.set_token(t, "tg", "")
             await s.commit()
         await tg.reload_client_bots()
         assert tid not in tg._tenant_bots

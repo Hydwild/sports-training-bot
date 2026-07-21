@@ -147,8 +147,11 @@ def test_edit_form_prefilled_with_current_values():
         form = c.get(f"/admin/platform/{tid}/edit")
         assert form.status_code == 200
         assert 'value="Клуб Заполнен"' in form.text
-        assert 'value="123456:ABCDEF"' in form.text
         assert 'value="777"' in form.text
+        # сам токен в форму не выводится: это копия в истории браузера и
+        # в логах. Показывается только состояние
+        assert "123456:ABCDEF" not in form.text
+        assert "настроен" in form.text
 
 
 def test_edit_updates_name_and_reflects_on_dashboard():
@@ -165,6 +168,23 @@ def test_edit_updates_name_and_reflects_on_dashboard():
         assert "Старое имя" not in dash
 
 
+def test_empty_field_keeps_existing_token():
+    """Пустое поле — «оставить прежний». Раньше любое сохранение формы
+    молча отвязывало ботов клуба."""
+    with TestClient(app) as c:
+        tid = _login_and_create(c, club_name="Клуб Сохранения",
+                                tg_token="123456:ABCDEF")
+        csrf = _csrf(c.get(f"/admin/platform/{tid}/edit").text)
+        r = c.post(f"/admin/platform/{tid}/edit", data={
+            "csrf": csrf, "club_name": "Клуб Сохранения",
+            "timezone": "Europe/Moscow", "tg_token": "", "vk_token": "",
+        })
+        assert r.status_code == 200
+        row = re.search(r"Клуб Сохранения.*?</tr>",
+                        c.get("/admin/platform").text, re.S).group(0)
+        assert "badge tg" in row, "бот отвязался от пустого поля"
+
+
 def test_edit_can_clear_token():
     with TestClient(app) as c:
         tid = _login_and_create(c, club_name="Клуб Отвязка",
@@ -172,12 +192,11 @@ def test_edit_can_clear_token():
         assert 'class="badge tg"' in c.get("/admin/platform").text
 
         csrf = _csrf(c.get(f"/admin/platform/{tid}/edit").text)
-        r = c.post(f"/admin/platform/{tid}/edit", data={
-            "csrf": csrf, "club_name": "Клуб Отвязка", "timezone": "Europe/Moscow",
-            "tg_token": "", "vk_token": "",
-        })
+        # отвязка — отдельное осознанное действие
+        r = c.post(f"/admin/platform/{tid}/tokens/clear",
+                   data={"csrf": csrf, "kind": "tg"})
         assert r.status_code == 200
-        assert re.search(r'name="tg_token" value=""', r.text)  # поле опустело
+        assert "не задан" in c.get(f"/admin/platform/{tid}/edit").text
 
         dash = c.get("/admin/platform").text
         # у этого конкретного клуба бейджа TG больше нет (глобально другие
