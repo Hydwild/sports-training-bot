@@ -374,28 +374,83 @@ _RU_DOW = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 _RU_MON = ["янв", "фев", "мар", "апр", "мая", "июн",
            "июл", "авг", "сен", "окт", "ноя", "дек"]
 
-# Лента дней: фильтрация карточек по выбранному дню. Прогрессивное
-# улучшение — без JS видны все дни сразу (класс js не ставится).
-_DAYS_JS = """<script>
+# Экраны страницы записи (воронка в стиле YClients): главное меню →
+# «мастера» (чипы ближайших свободных окон) / «дата и время» (лента дней),
+# фильтр слотов по дню и мастеру. Прогрессивное улучшение: без JS все
+# секции видны подряд, форма записи работает как обычно.
+_CLUB_JS = """<script>
 (function(){
+  var home = document.getElementById('scr-home');
+  var mastersScr = document.getElementById('scr-masters');
+  var slotsScr = document.getElementById('scr-slots');
   var list = document.getElementById('list');
-  var days = document.querySelectorAll('.day');
-  if (!list || !days.length) return;
-  list.classList.add('js');
-  function show(d){
+  var days = Array.prototype.slice.call(document.querySelectorAll('.day'));
+  var fchip = document.getElementById('mfilter');
+  var curDay = days.length ? days[0].dataset.day : null;
+  var mFilter = null, mName = '';
+
+  function apply(){
     days.forEach(function(b){
-      var on = b.dataset.day === d;
+      var on = b.dataset.day === curDay;
       b.classList.toggle('on', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    list.querySelectorAll('.card[data-day]').forEach(function(c){
-      c.classList.toggle('show', c.dataset.day === d);
+    if (list) list.querySelectorAll('.card[data-day]').forEach(function(c){
+      var okDay = !days.length || c.dataset.day === curDay;
+      var okM = !mFilter || c.dataset.master === mFilter;
+      c.classList.toggle('show', okDay && okM);
     });
+    if (fchip){
+      fchip.style.display = mFilter ? 'inline-flex' : 'none';
+      if (mFilter) fchip.textContent = 'Мастер: ' + mName + ' ✕';
+    }
   }
+  function show(scr){
+    [home, mastersScr, slotsScr].forEach(function(s){
+      if (s) s.classList.toggle('on', s === scr);
+    });
+    window.scrollTo(0, 0);
+  }
+  if (list) list.classList.add('js');
   days.forEach(function(b){
-    b.addEventListener('click', function(){ show(b.dataset.day); });
+    b.addEventListener('click', function(){ curDay = b.dataset.day; apply(); });
   });
-  show(days[0].dataset.day);
+  if (home){
+    document.body.classList.add('scr-mode');
+    document.querySelectorAll('[data-nav]').forEach(function(b){
+      b.addEventListener('click', function(){
+        show(b.dataset.nav === 'masters' ? mastersScr : slotsScr);
+      });
+    });
+    document.querySelectorAll('[data-back]').forEach(function(b){
+      b.addEventListener('click', function(){
+        mFilter = null; apply(); show(home);
+      });
+    });
+    document.querySelectorAll('.tchip[data-slot]').forEach(function(b){
+      b.addEventListener('click', function(){
+        mFilter = b.dataset.m; mName = b.dataset.mname;
+        if (b.dataset.day) curDay = b.dataset.day;
+        apply(); show(slotsScr);
+        var el = document.getElementById('slot-' + b.dataset.slot);
+        if (el) setTimeout(function(){
+          el.scrollIntoView({behavior: 'smooth', block: 'start'});
+        }, 60);
+      });
+    });
+    document.querySelectorAll('.tchip[data-all-of]').forEach(function(b){
+      b.addEventListener('click', function(){
+        mFilter = b.dataset.allOf; mName = b.dataset.mname;
+        if (b.dataset.firstDay) curDay = b.dataset.firstDay;
+        apply(); show(slotsScr);
+      });
+    });
+    if (fchip) fchip.addEventListener('click', function(){
+      mFilter = null; apply();
+    });
+    show(home);
+  }
+  apply();
 })();
 </script>"""
 
@@ -412,6 +467,10 @@ _I_INFO = ('<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/>'
            '<path d="M12 11v5M12 8v.01"/></svg>')
 _I_PHONE = ('<svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 '
             '005 5L15 13l5 2v4a2 2 0 01-2 2A16 16 0 013 6a2 2 0 012-2z"/></svg>')
+_I_USERS = ('<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/>'
+            '<path d="M3.5 19.5c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/>'
+            '<circle cx="16.5" cy="9" r="2.4"/>'
+            '<path d="M16 14.7c2.6.3 4.5 2 4.5 4.5"/></svg>')
 
 # Страница записи клуба: тёплая палитра общего сайта (/promo, /faq, /reviews),
 # фирменный цвет клуба ({color}) — акцент кнопок/ссылок/прогресса.
@@ -540,6 +599,46 @@ font:600 19px/1 -apple-system,system-ui,sans-serif;color:var(--accent)}}
 text-align:center}}
 .ms-item span{{font:400 10.5px/1.3 -apple-system,system-ui,sans-serif;
 color:var(--muted);text-align:center}}
+body.scr-mode .scr{{display:none}}
+body.scr-mode .scr.on{{display:block}}
+.menu{{max-width:560px;margin:0 auto 16px;background:var(--surface);
+border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);
+overflow:hidden}}
+.menu-row{{display:flex;align-items:center;gap:14px;width:100%;padding:16px;
+background:none;border:0;border-bottom:1px solid var(--border);cursor:pointer;
+font:600 15px/1.3 -apple-system,system-ui,sans-serif;color:var(--ink);
+text-align:left;font-family:inherit;
+transition:background-color .15s var(--ease)}}
+.menu-row:hover{{background:var(--surface-2)}}
+.menu-row:last-child{{border-bottom:0}}
+.menu-row .ic{{width:40px;height:40px;border-radius:50%;
+background:var(--surface-2);display:flex;align-items:center;
+justify-content:center;flex-shrink:0}}
+.menu-row .ic svg{{width:18px;height:18px;stroke:var(--accent);fill:none;
+stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}}
+.menu-row::after{{content:"";width:8px;height:8px;flex-shrink:0;
+border-right:2px solid var(--muted);border-top:2px solid var(--muted);
+transform:rotate(45deg);margin-left:auto}}
+.backrow{{max-width:560px;margin:0 auto 16px;display:flex;align-items:center;
+gap:12px}}
+.backbtn{{width:40px;height:40px;flex-shrink:0;border-radius:50%;
+border:1px solid var(--border);background:var(--surface);cursor:pointer;
+font-size:17px;color:var(--ink);padding:0}}
+.backbtn:hover{{border-color:var(--accent)}}
+.scr-title{{font:600 17px/1.3 -apple-system,system-ui,sans-serif}}
+.mcard .chips{{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}}
+.tchip{{padding:12px 14px;border-radius:10px;border:1px solid var(--border);
+background:var(--surface-2);font:600 13px/1 -apple-system,system-ui,sans-serif;
+color:var(--ink);cursor:pointer;font-family:inherit;
+transition:border-color .15s var(--ease)}}
+.tchip:hover{{border-color:var(--accent)}}
+.tchip.more{{color:var(--accent);background:transparent}}
+#mfilter{{display:none;align-items:center;margin-left:auto;padding:11px 14px;
+border-radius:999px;border:1px solid var(--accent);color:var(--accent);
+background:none;font:600 12.5px/1 -apple-system,system-ui,sans-serif;
+cursor:pointer;font-family:inherit}}
+.mnone{{margin-top:12px;font:400 13px/1.5 -apple-system,system-ui,sans-serif;
+color:var(--muted)}}
 .danger{{color:#b23a2e}}
 .note{{text-align:center;color:var(--muted);
 font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
@@ -596,6 +695,7 @@ async def public_club(tenant_id: int,
         profile_parts.append(
             '<div class="biz-info">' + "".join(info_items) + '</div>')
     strip_masters = await svc.repo.list_masters()   # только активные
+    ms_strip_html = ""
     if strip_masters:
         ms = []
         for m in strip_masters[:12]:
@@ -608,7 +708,7 @@ async def public_club(tenant_id: int,
                     if m.specialty else "")
             ms.append(f'<div class="ms-item">{av}'
                       f'<b>{_h.escape(m.name)}</b>{spec}</div>')
-        profile_parts.append('<div class="ms-strip">' + "".join(ms) + '</div>')
+        ms_strip_html = '<div class="ms-strip">' + "".join(ms) + '</div>'
     profile_html = "".join(profile_parts)
 
     trainings = await svc.repo.list_upcoming()
@@ -616,6 +716,7 @@ async def public_club(tenant_id: int,
     cards = []
     day_order: list[str] = []       # ISO-даты в порядке следования
     day_labels: dict[str, tuple] = {}
+    slot_meta: list[tuple] = []     # (id, day_key, local, master_id, is_full)
     for t in trainings:
         start = (t.start_at if t.start_at.tzinfo
                  else t.start_at.replace(tzinfo=_dt.timezone.utc))
@@ -660,8 +761,10 @@ async def public_club(tenant_id: int,
                     if m.specialty else "")
             master_html = (f'<div class="master">{avatar}'
                            f'<div><b>{_h.escape(m.name)}</b>{spec}</div></div>')
+        slot_meta.append((t.id, day_key, local, t.master_id or 0, filled >= mx))
         cards.append(
-            f'<div class="card" data-day="{day_key}">'
+            f'<div class="card" data-day="{day_key}" '
+            f'data-master="{t.master_id or 0}" id="slot-{t.id}">'
             f'<div class="head"><div class="t">{_h.escape(t.title)}</div>{price}</div>'
             f'<div class="m">{_I_CAL} {svc.format_local(t.start_at)}</div>{loc}'
             f'{master_html}{cap}{who}'
@@ -688,12 +791,86 @@ async def public_club(tenant_id: int,
             f'<span class="mon">{day_labels[d][2]}</span></button>'
             for d in day_order)
         days_html = f'<div class="days" role="tablist">{chips}</div>'
-    body = profile_html + (
-        days_html
-        + '<div class="list" id="list">' + "".join(cards) + '</div>'
-        + my_form + _DAYS_JS
-        if cards else
-        f'<div class="card note">{vc["web_empty"]}</div>' + my_form)
+    slots_inner = ((days_html + '<div class="list" id="list">'
+                    + "".join(cards) + '</div>') if cards else
+                   f'<div class="card note">{vc["web_empty"]}</div>')
+
+    if strip_masters:
+        # ─── воронка в стиле YClients: меню → мастера/дата → запись ───
+        now_local = _dt.datetime.now(svc.tz)
+
+        def _chip_label(local) -> str:
+            dd = (local.date() - now_local.date()).days
+            hm = local.strftime("%H:%M")
+            if dd == 0:
+                return f"сегодня {hm}"
+            if dd == 1:
+                return f"завтра {hm}"
+            return f"{_RU_DOW[local.weekday()]} {local.day:02d}.{local.month:02d} {hm}"
+
+        free_by_master: dict[int, list[tuple]] = {}
+        for sid, dkey, local, mid, is_full_ in slot_meta:
+            if mid and not is_full_:
+                free_by_master.setdefault(mid, []).append((sid, dkey, local))
+
+        home_html = (
+            '<div id="scr-home" class="scr">' + ms_strip_html +
+            '<div class="menu">'
+            f'<button type="button" class="menu-row" data-nav="masters">'
+            f'<span class="ic">{_I_USERS}</span>Выбрать мастера</button>'
+            f'<button type="button" class="menu-row" data-nav="slots">'
+            f'<span class="ic">{_I_CAL}</span>Выбрать дату и время</button>'
+            '</div></div>')
+
+        mcards = []
+        for m in strip_masters:
+            if m.photo_url:
+                av = (f'<img src="{_h.escape(m.photo_url, quote=True)}" '
+                      f'alt="" loading="lazy">')
+            else:
+                av = f'<span class="mi">{_h.escape(m.name[:1].upper())}</span>'
+            spec = (f'<span>{_h.escape(m.specialty)}</span>'
+                    if m.specialty else "")
+            mname_attr = _h.escape(m.name, quote=True)
+            frees = free_by_master.get(m.id, [])[:5]
+            if frees:
+                chips = "".join(
+                    f'<button type="button" class="tchip" data-slot="{sid}" '
+                    f'data-m="{m.id}" data-mname="{mname_attr}" '
+                    f'data-day="{dkey}">{_chip_label(local)}</button>'
+                    for sid, dkey, local in frees)
+                chips += (f'<button type="button" class="tchip more" '
+                          f'data-all-of="{m.id}" data-mname="{mname_attr}" '
+                          f'data-first-day="{frees[0][1]}">Все времена</button>')
+                chips_html = f'<div class="chips">{chips}</div>'
+            else:
+                chips_html = '<div class="mnone">Свободных окон пока нет</div>'
+            mcards.append(
+                f'<div class="card mcard"><div class="master">{av}'
+                f'<div><b>{_h.escape(m.name)}</b>{spec}</div></div>'
+                f'{chips_html}</div>')
+        masters_scr = (
+            '<div id="scr-masters" class="scr">'
+            '<div class="backrow"><button type="button" class="backbtn" '
+            'data-back aria-label="Назад">←</button>'
+            '<span class="scr-title">Выбрать мастера</span></div>'
+            + "".join(mcards) + '</div>')
+
+        slots_scr = (
+            '<div id="scr-slots" class="scr">'
+            '<div class="backrow"><button type="button" class="backbtn" '
+            'data-back aria-label="Назад">←</button>'
+            '<span class="scr-title">Выбрать дату и время</span>'
+            '<button type="button" id="mfilter"></button></div>'
+            + slots_inner + my_form + '</div>')
+
+        body = (profile_html + home_html + masters_scr + slots_scr
+                + _CLUB_JS)
+    else:
+        # клубы без мастеров — прежний простой вид (список слотов сразу)
+        body = (profile_html + ms_strip_html
+                + (slots_inner + my_form + _CLUB_JS if cards
+                   else slots_inner + my_form))
     title = tenant.brand_name or tenant.name
     return _PAGE.format(cover=cover_html, eyebrow=_eyebrow(tenant),
                         title=_h.escape(title),

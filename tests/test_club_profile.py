@@ -78,6 +78,65 @@ def test_cover_url_must_be_http():
         assert "javascript:alert" not in c.get(f"/club/{tid}").text
 
 
+def _mk_training(c, tid, title="Слот", days=2, maxp=1, **extra):
+    import datetime as dt
+    start = (dt.datetime.now(dt.timezone.utc)
+             + dt.timedelta(days=days)).isoformat()
+    r = c.post(f"/api/tenants/{tid}/trainings", headers=H, json={
+        "title": title, "start_at": start, "max_participants": maxp, **extra})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_funnel_screens_present_with_masters():
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={
+            "name": "Салон Воронки", "vertical": "beauty"},
+            headers=H).json()["id"]
+        m = c.post(f"/api/tenants/{tid}/masters", headers=H,
+                   json={"name": "Мастер Ника"}).json()
+        tr = _mk_training(c, tid, title="Стрижка", master_id=m["id"])
+        page = c.get(f"/club/{tid}").text
+        # три экрана воронки
+        assert 'id="scr-home"' in page
+        assert 'id="scr-masters"' in page
+        assert 'id="scr-slots"' in page
+        # меню в стиле YClients
+        assert "Выбрать мастера" in page
+        assert "Выбрать дату и время" in page
+        # чип ближайшего свободного окна ведёт на слот
+        assert f'data-slot="{tr}"' in page
+        assert f'data-m="{m["id"]}"' in page
+        # карточка слота с атрибутом мастера и якорем
+        assert f'data-master="{m["id"]}" id="slot-{tr}"' in page
+        assert 'id="mfilter"' in page
+
+
+def test_funnel_absent_without_masters():
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={"name": "Клуб Без Воронки"},
+                     headers=H).json()["id"]
+        _mk_training(c, tid, title="Игра", maxp=5)
+        page = c.get(f"/club/{tid}").text
+        assert 'id="scr-home"' not in page      # прежний простой вид
+        assert "Игра" in page
+
+
+def test_funnel_full_slot_has_no_chip():
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={
+            "name": "Салон Занято", "vertical": "beauty"},
+            headers=H).json()["id"]
+        m = c.post(f"/api/tenants/{tid}/masters", headers=H,
+                   json={"name": "Мастер Зоя"}).json()
+        tr = _mk_training(c, tid, title="Занятый", master_id=m["id"])
+        c.post(f"/club/{tid}/signup", data={
+            "training_id": tr, "name": "Клиент", "phone": "79995556677"})
+        page = c.get(f"/club/{tid}").text
+        assert f'data-slot="{tr}"' not in page   # занятое окно не предлагаем
+        assert "Свободных окон пока нет" in page
+
+
 def test_masters_strip_shows_active_only():
     with TestClient(app) as c:
         tid = c.post("/api/tenants", json={
