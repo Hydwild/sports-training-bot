@@ -96,6 +96,48 @@ async def _make_dump() -> tuple[bytes, str] | None:
     return await _dump_postgres()
 
 
+# Метка в начале зашифрованного архива: по ней инструмент восстановления
+# сразу отличает шифрованную копию от обычного .gz и не пытается её
+# распаковать «как есть».
+ENC_MAGIC = b"NEOBK1\n"
+
+
+def encryption_enabled() -> bool:
+    return bool((settings.backup_enc_key or "").strip())
+
+
+def _backup_fernet():
+    """Fernet на ключе BACKUP_ENC_KEY. Отдельный ключ: копия уходит в
+    Telegram, и он не должен совпадать с тем, что лежит рядом с ней."""
+    from cryptography.fernet import Fernet
+
+    from app.core.phones import _fernet_key
+
+    secret = (settings.backup_enc_key or "").strip()
+    if not secret:
+        raise RuntimeError("BACKUP_ENC_KEY не задан")
+    return Fernet(_fernet_key(secret))
+
+
+def encrypt_backup(data: bytes) -> bytes:
+    """Шифрует архив целиком, с проверкой целостности (Fernet = AES-CBC +
+    HMAC): подменённый файл не расшифруется, а не «расшифруется мусором»."""
+    return ENC_MAGIC + _backup_fernet().encrypt(data)
+
+
+def decrypt_backup(blob: bytes) -> bytes:
+    """Расшифровывает копию. Бросает исключение при неверном ключе или
+    подмене данных — молча возвращать мусор здесь нельзя."""
+    from cryptography.fernet import InvalidToken
+
+    if not blob.startswith(ENC_MAGIC):
+        raise ValueError("Это не зашифрованная копия (нет метки NEOBK1)")
+    try:
+        return _backup_fernet().decrypt(blob[len(ENC_MAGIC):])
+    except InvalidToken as e:
+        raise ValueError("Неверный ключ или файл повреждён/подменён") from e
+
+
 def checksum(data: bytes) -> str:
     """SHA-256 архива. Уходит в подпись сообщения, чтобы при восстановлении
     можно было убедиться, что скачан именно тот файл и он не побился."""
@@ -171,6 +213,27 @@ async def send_backup_to_owner() -> BackupResult:
         return BackupResult(False,
             f"Дамп создан, но не прошёл проверку: {problem}. "
             "Отправлять такую копию нельзя — восстанавливать из неё нечего.")
+
+    # Шифруем ПОСЛЕ проверки содержимого: проверять зашифрованное нечем,
+    # а отправлять непроверенное нельзя.
+    if encryption_enabled():
+        try:
+            data = encrypt_backup(data)
+        except Exception as e:
+            return BackupResult(False,
+                f"Копия не зашифрована ({type(e).__name__}) — не отправляем. "
+                "Проверьте BACKUP_ENC_KEY.")
+        filename += ".enc"
+        digest = checksum(data)
+        size_mb = len(data) / (1024 * 1024)
+    elif settings.is_pro:
+        # В Pro копия уходит в Telegram — без шифрования это отправка всей
+        # базы в чат. День не закрываем, чтобы попытка повторилась после
+        # настройки ключа.
+        return BackupResult(False,
+            "BACKUP_ENC_KEY не задан: копия содержит персональные данные и "
+            "без шифрования не отправляется. Задайте ключ и храните его "
+            "отдельно от резервных копий.")
 
     from app.bots import telegram as tg
     caption = (f"💾 Бэкап базы за {dt.date.today().isoformat()} "

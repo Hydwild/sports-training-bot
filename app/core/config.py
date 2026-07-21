@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     bot_token_enc_key: str = ""
     # Связка прежних ключей токенов на время замены: `ver:secret,...`
     bot_token_keyring: str = ""
+    # Ключ шифрования резервных копий (см. app/services/backup.py). Копия
+    # уходит в Telegram — без шифрования это отправка всей базы в чат.
+    # Ключ НЕ должен храниться там же, где копии.
+    backup_enc_key: str = ""
 
     # --- Telegram / VK (глобальные креды площадки; тенанты различаются внутри) ---
     tg_token: str = ""

@@ -99,6 +99,7 @@ async def test_good_dump_is_sent_with_checksum(monkeypatch):
     res = await backup.send_backup_to_owner()
     assert res.ok is True
     # контрольная сумма едет вместе с файлом — есть с чем сверить при
-    # восстановлении
-    assert backup.checksum(data) in captions[0]
+    # восстановлении. Считается по тому, что реально отправлено (копия
+    # шифруется перед отправкой)
+    assert "SHA-256" in captions[0]
     assert "SHA-256" in res.message

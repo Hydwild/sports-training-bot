@@ -85,9 +85,11 @@ async def test_successful_backup_sends_document(monkeypatch):
     assert result.ok and "отправлен" in result.message
     assert len(calls) == 1
     assert calls[0][0] == 12345
-    assert calls[0][1] == "backup_2026-01-01.sql.gz"
-    assert calls[0][2] == _valid_dump()
-    assert backup.checksum(_valid_dump()) in calls[0][3]   # сумма в подписи
+    # копия уходит зашифрованной, поэтому имя с .enc, а содержимое — не дамп
+    assert calls[0][1] == "backup_2026-01-01.sql.gz.enc"
+    assert calls[0][2] != _valid_dump()
+    assert backup.decrypt_backup(calls[0][2]) == _valid_dump()
+    assert backup.checksum(calls[0][2]) in calls[0][3]   # сумма отправленного
 
 
 async def test_send_failure_reported(monkeypatch):

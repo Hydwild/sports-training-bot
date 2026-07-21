@@ -12,6 +12,8 @@ os.environ.setdefault("JWT_SECRET", "test-secret")
 # Pro требует отдельный ключ для токенов ботов: без него
 # токен клуба сохранить нельзя (app/core/bot_tokens.py)
 os.environ.setdefault("BOT_TOKEN_ENC_KEY", "test-bot-token-key")
+# копия уходит в Telegram и без ключа не отправляется
+os.environ.setdefault("BACKUP_ENC_KEY", "test-backup-key")
 os.environ.setdefault("LOG_DIR", "/tmp/test_logs_v2")
 os.environ.setdefault("TG_TOKEN", "123456:TESTTOKEN")
 
