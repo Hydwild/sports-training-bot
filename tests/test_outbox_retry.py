@@ -92,6 +92,95 @@ async def test_claim_pending_outbox_is_atomic_no_double_claim(maker):
         assert second == []  # уже захвачено первым "экземпляром"
 
 
+async def test_undelivered_message_becomes_dead_not_silently_sent(
+        monkeypatch, maker):
+    """Регресс: исчерпав попытки, сообщение помечалось sent=True — провал
+    доставки становился неотличим от успеха, и о нём никто не узнавал.
+    Теперь у него отдельное состояние dead и сохранённая причина."""
+    monkeypatch.setattr(tasks, "SessionLocal", maker)
+    await _seed_outbox_message(maker)
+
+    async def failing_sender(user_id, text, tenant_id=None):
+        raise RuntimeError("бот заблокирован пользователем")
+
+    tasks.register_sender("tg", failing_sender)
+    try:
+        for _ in range(tasks.MAX_OUTBOX_ATTEMPTS):
+            await tasks._deliver_once()
+
+        async with maker() as s:
+            g = GlobalRepository(s)
+            assert await g.fetch_pending_outbox("tg") == []
+            assert await g.count_dead_outbox() == 1
+            from sqlalchemy import select
+
+            from app.models.entities import Outbox
+            row = (await s.execute(select(Outbox))).scalar_one()
+            assert row.status == "dead"
+            assert "заблокирован" in row.last_error
+    finally:
+        tasks._senders.pop("tg", None)
+
+
+async def test_claim_stuck_in_processing_is_requeued(monkeypatch, maker):
+    """Ключевой сценарий: процесс убили (деплой, перезапуск) между захватом
+    сообщения и его отправкой. Раньше запись навсегда оставалась помеченной
+    как отправленная, и уведомление пропадало молча."""
+    import datetime as dt
+
+    from sqlalchemy import select
+
+    from app.models.entities import Outbox
+
+    monkeypatch.setattr(tasks, "SessionLocal", maker)
+    await _seed_outbox_message(maker)
+
+    # захват произошёл, отправка не началась — процесс прервали
+    async with maker() as s:
+        claimed = await GlobalRepository(s).claim_pending_outbox("tg")
+        assert len(claimed) == 1
+        await s.commit()
+
+    async with maker() as s:
+        row = (await s.execute(select(Outbox))).scalar_one()
+        assert row.status == "processing"
+        # состариваем захват, как будто прошло больше времени простоя
+        row.claimed_at = (dt.datetime.now(dt.timezone.utc)
+                          - dt.timedelta(minutes=tasks.STALE_CLAIM_MINUTES + 1))
+        await s.commit()
+
+    delivered = []
+
+    async def ok_sender(user_id, text, tenant_id=None):
+        delivered.append(text)
+
+    tasks.register_sender("tg", ok_sender)
+    try:
+        await tasks._deliver_once()
+        assert delivered == ["тест-сообщение"], "сообщение потеряно"
+        async with maker() as s:
+            row = (await s.execute(select(Outbox))).scalar_one()
+            assert row.status == "sent"
+    finally:
+        tasks._senders.pop("tg", None)
+
+
+async def test_fresh_claim_is_not_stolen_by_requeue(maker):
+    """Свежий захват трогать нельзя: иначе два прохода очереди отправят
+    одно и то же сообщение дважды."""
+    async with maker() as s:
+        await GlobalRepository(s).claim_pending_outbox("tg")
+        await s.commit()
+    await _seed_outbox_message(maker)
+
+    async with maker() as s:
+        g = GlobalRepository(s)
+        claimed = await g.claim_pending_outbox("tg")
+        await s.commit()
+        assert len(claimed) == 1
+        assert await g.requeue_stale_outbox(10) == 0
+
+
 async def test_outbox_delivers_on_success_without_retry(monkeypatch, maker):
     monkeypatch.setattr(tasks, "SessionLocal", maker)
     await _seed_outbox_message(maker)

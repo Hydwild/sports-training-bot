@@ -76,9 +76,20 @@ async def supervise(name: str, coro_factory: Callable[[], Awaitable[None]],
 MAX_OUTBOX_ATTEMPTS = 5
 
 
+# через сколько минут захват считается протухшим (процесс убили посреди
+# отправки) и сообщение возвращается в очередь
+STALE_CLAIM_MINUTES = 10
+
+
 async def _deliver_once() -> None:
     async with SessionLocal() as session:
         g = GlobalRepository(session)
+        # сначала подбираем то, что зависло в processing после перезапуска
+        revived = await g.requeue_stale_outbox(STALE_CLAIM_MINUTES)
+        if revived:
+            logger.warning("Вернули в очередь %d зависших сообщений "
+                           "(процесс прервали посреди отправки)", revived)
+            await session.commit()
         for platform, sender in _senders.items():
             # claim_pending_outbox сразу помечает захваченные записи sent=True
             # (UPDATE ... WHERE sent=False ... RETURNING) — коммитим это до
@@ -95,20 +106,22 @@ async def _deliver_once() -> None:
                     except TypeError:
                         await sender(item.user_id, item.text)
                     await g.mark_outbox_sent(item.id)
-                except Exception:
+                except Exception as e:
                     attempts = (item.attempts or 0) + 1
+                    reason = f"{type(e).__name__}: {e}"
                     if attempts >= MAX_OUTBOX_ATTEMPTS:
                         logger.warning(
                             "Доставка %s user=%s не удалась %d раз подряд — "
-                            "отказываемся, сообщение снято с очереди",
-                            platform, item.user_id, attempts)
-                        await g.mark_outbox_sent(item.id)
+                            "сообщение помечено недоставленным: %s",
+                            platform, item.user_id, attempts, reason)
+                        await g.mark_outbox_dead(item.id, reason)
                     else:
                         logger.info(
                             "Доставка %s user=%s не удалась (попытка %d/%d), "
-                            "повторим на следующем проходе",
-                            platform, item.user_id, attempts, MAX_OUTBOX_ATTEMPTS)
-                        await g.record_outbox_failure(item.id, attempts)
+                            "повторим на следующем проходе: %s",
+                            platform, item.user_id, attempts,
+                            MAX_OUTBOX_ATTEMPTS, reason)
+                        await g.record_outbox_failure(item.id, attempts, reason)
             await session.commit()
 
 
@@ -411,12 +424,17 @@ async def _daily_maintenance(last_day: list) -> None:
     from app.repositories.repo import TenantRepository
 
     async with SessionLocal() as session:
-        # отправленные сообщения старше 30 дней и "web"-хвосты больше не нужны
+        # доставленные сообщения старше 30 дней и "web"-хвосты больше не
+        # нужны. Недоставленные (status='dead') НЕ трогаем: это диагностика,
+        # по ней видно, что кому-то перестали приходить уведомления
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
         await session.execute(delete(Outbox).where(
             (Outbox.platform == "web")
-            | ((Outbox.sent.is_(True)) & (Outbox.created_at < cutoff))))
+            | ((Outbox.status == "sent") & (Outbox.created_at < cutoff))))
         await session.commit()
+
+        from app.repositories.repo import GlobalRepository
+        dead_count = await GlobalRepository(session).count_dead_outbox()
 
         # SaaS: клубы с истекающей (≤3 дня) или уже истёкшей оплатой
         tenants = list((await session.execute(select(Tenant))).scalars())
@@ -455,19 +473,30 @@ async def _daily_maintenance(last_day: list) -> None:
 
     # сводка владельцу платформы — вне сессии, только чтение уже
     # загруженных скалярных полей (name/id/paid_until) и отправка сообщения
-    if not expiring:
-        return
     owner_tg_id = settings.platform_owner_tg_id
     tg_sender = _senders.get("tg")
-    if owner_tg_id and tg_sender:
-        lines = ["💳 Оплата клубов (SaaS):"]
+    if not (owner_tg_id and tg_sender):
+        return
+
+    lines: list[str] = []
+    if expiring:
+        lines.append("💳 Оплата клубов (SaaS):")
         for t in expiring:
             state = "ИСТЕКЛА" if t.paid_until < today_s else f"до {t.paid_until}"
             lines.append(f"  • {t.name} (id={t.id}): {state}")
-        try:
-            await tg_sender(owner_tg_id, "\n".join(lines))
-        except Exception:
-            pass
+    # молчаливо терять уведомления нельзя: если что-то так и не дошло,
+    # владелец должен об этом узнать
+    if dead_count:
+        if lines:
+            lines.append("")
+        lines.append(f"📮 Недоставленных уведомлений в очереди: {dead_count}. "
+                     "Обычно это заблокированный бот или удалённый чат.")
+    if not lines:
+        return
+    try:
+        await tg_sender(owner_tg_id, "\n".join(lines))
+    except Exception:
+        pass
 
 
 # демо-тренировки, создаваемые заново при каждом ночном сбросе (дни/время —

@@ -217,8 +217,21 @@ class Outbox(Base):
     user_id: Mapped[int] = mapped_column(BigInteger)
     text: Mapped[str] = mapped_column(Text)
     sent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    # число неудачных попыток доставки; после лимита сообщение считается
-    # безнадёжным и снимается с очереди, чтобы не ретраить вечно (см. tasks.py)
+    # состояние доставки, см. tasks.py:
+    #   pending    — ждёт отправки
+    #   processing — захвачено рабочим циклом, отправляется прямо сейчас
+    #   sent       — доставлено
+    #   dead       — не доставлено после MAX_OUTBOX_ATTEMPTS попыток
+    # Отдельное «processing» нужно, чтобы перезапуск процесса посреди
+    # отправки не терял сообщение молча: зависшие захваты возвращаются в
+    # pending по времени (claimed_at), а не пропадают навсегда.
+    status: Mapped[str] = mapped_column(String(12), default="pending",
+                                        index=True)
+    claimed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True))
+    last_error: Mapped[str] = mapped_column(String(300), default="")
+    # число неудачных попыток доставки; после лимита сообщение помечается
+    # dead, чтобы не ретраить вечно (например, бот заблокирован юзером)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow

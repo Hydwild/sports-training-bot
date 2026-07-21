@@ -627,30 +627,54 @@ class GlobalRepository:
         которая захватывает записи атомарно перед отправкой."""
         stmt = select(Outbox).where(
             Outbox.platform == platform,
-            Outbox.sent.is_(False),
+            Outbox.status == "pending",
         ).order_by(Outbox.id.asc()).limit(limit)
         return list((await self.session.execute(stmt)).scalars())
 
+    async def requeue_stale_outbox(self, older_than_min: int = 10) -> int:
+        """Возвращает в очередь сообщения, зависшие в processing.
+
+        Захват держится только на время отправки. Если процесс убили
+        посреди неё (деплой, перезапуск контейнера), запись осталась бы
+        в processing навсегда и сообщение потерялось бы молча. Через
+        older_than_min минут считаем захват протухшим и повторяем."""
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+            minutes=older_than_min)
+        result = await self.session.execute(
+            update(Outbox)
+            .where(Outbox.status == "processing", Outbox.claimed_at < cutoff)
+            .values(status="pending", sent=False, claimed_at=None)
+            # массовое обновление: не пересчитываем условие в Python по
+            # объектам сессии (на SQLite там наивные даты — сравнение с
+            # aware-границей падало бы с TypeError)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount or 0
+
     async def claim_pending_outbox(self, platform: str,
                                    limit: int = 50) -> list[Outbox]:
-        """Атомарно захватывает пачку неотправленных сообщений: сразу
-        помечает их sent=True (UPDATE ... WHERE sent=False ... RETURNING),
-        до того как реальная отправка вообще началась. Если приложение
-        когда-нибудь запустят в нескольких экземплярах одновременно, каждое
-        сообщение достанется только одному из них — второй UPDATE для тех
-        же id не найдёт строк с sent=False и вернёт пустой список. Если
-        отправка не удастся, вызывающий код возвращает sent обратно в False
-        через record_outbox_failure — для повтора на следующем проходе."""
+        """Атомарно захватывает пачку сообщений: переводит их из pending в
+        processing (UPDATE ... WHERE status='pending' ... RETURNING) до того,
+        как отправка вообще началась. Если приложение запустят в нескольких
+        экземплярах, каждое сообщение достанется только одному: второй
+        UPDATE для тех же id не найдёт строк в pending и вернёт пустой
+        список.
+
+        Дальше сообщение обязано прийти в одно из конечных состояний —
+        sent или dead (см. mark_outbox_sent / mark_outbox_dead), либо
+        вернуться в pending (record_outbox_failure). Зависшие в processing
+        подбирает requeue_stale_outbox."""
         subq = (
             select(Outbox.id)
-            .where(Outbox.platform == platform, Outbox.sent.is_(False))
+            .where(Outbox.platform == platform, Outbox.status == "pending")
             .order_by(Outbox.id.asc())
             .limit(limit)
         )
         stmt = (
             update(Outbox)
             .where(Outbox.id.in_(subq))
-            .values(sent=True)
+            .values(status="processing", sent=True,
+                    claimed_at=dt.datetime.now(dt.timezone.utc))
             .returning(Outbox)
         )
         result = await self.session.execute(stmt)
@@ -658,17 +682,35 @@ class GlobalRepository:
 
     async def mark_outbox_sent(self, outbox_id: int) -> None:
         await self.session.execute(
-            update(Outbox).where(Outbox.id == outbox_id).values(sent=True)
+            update(Outbox).where(Outbox.id == outbox_id)
+            .values(sent=True, status="sent", claimed_at=None)
         )
 
-    async def record_outbox_failure(self, outbox_id: int, attempts: int) -> None:
-        """Фиксирует неудачную попытку доставки и снимает захват (sent=False),
-        чтобы сообщение снова стало доступно для повтора на следующем
-        проходе очереди (см. claim_pending_outbox и tasks.py)."""
+    async def mark_outbox_dead(self, outbox_id: int, error: str = "") -> None:
+        """Сообщение недоставляемо: попытки исчерпаны. Отдельное состояние,
+        а не sent=True — иначе провал доставки неотличим от успеха и о нём
+        никто никогда не узнает."""
         await self.session.execute(
             update(Outbox).where(Outbox.id == outbox_id)
-            .values(attempts=attempts, sent=False)
+            .values(sent=True, status="dead", claimed_at=None,
+                    last_error=error[:300])
         )
+
+    async def record_outbox_failure(self, outbox_id: int, attempts: int,
+                                    error: str = "") -> None:
+        """Фиксирует неудачную попытку и снимает захват (обратно в pending),
+        чтобы сообщение повторилось на следующем проходе очереди."""
+        await self.session.execute(
+            update(Outbox).where(Outbox.id == outbox_id)
+            .values(attempts=attempts, sent=False, status="pending",
+                    claimed_at=None, last_error=error[:300])
+        )
+
+    async def count_dead_outbox(self) -> int:
+        """Сколько сообщений так и не доставлено — для отчёта владельцу."""
+        stmt = select(func.count()).select_from(Outbox).where(
+            Outbox.status == "dead")
+        return int((await self.session.execute(stmt)).scalar() or 0)
 
     async def trainings_needing_reminder(self, window_min: int = 60) -> list[Training]:
         now = _utcnow()
