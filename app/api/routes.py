@@ -978,7 +978,7 @@ async def public_club(tenant_id: int, rated: str = "",
                 f'maxlength="100" placeholder="Ваше имя" aria-label="Ваше имя">'
                 f'<input name="phone" type="tel" autocomplete="tel" required '
                 f'minlength="10" maxlength="16" '
-                f'placeholder="Телефон (одна оценка на номер)" '
+                f'placeholder="Телефон, по которому записывались" '
                 f'aria-label="Телефон">'
                 f'<input name="text" maxlength="300" '
                 f'placeholder="Короткий отзыв (необязательно)">'
@@ -1006,8 +1006,19 @@ async def public_club(tenant_id: int, rated: str = "",
             '<button type="button" id="mfilter"></button></div>'
             + slots_inner + my_form + '</div>')
 
-        rated_note = ('<div class="card note rated-ok">Спасибо! '
-                      'Оценка сохранена.</div>' if rated == "1" else "")
+        if rated == "1":
+            rated_note = ('<div class="card note rated-ok">Спасибо! '
+                          'Оценка сохранена.</div>')
+        elif rated == "novisit":
+            # честно объясняем, почему оценка не принята
+            rated_note = (
+                '<div class="card note">Оценку можно оставить после визита: '
+                'мы не нашли записи на этот номер к выбранному '
+                f'{_h.escape(vc["master_word"])}у. Если записывались по '
+                'телефону или через бота — попросите администратора '
+                'добавить запись.</div>')
+        else:
+            rated_note = ""
         body = (profile_html + rated_note + home_html + masters_scr
                 + slots_scr + _CLUB_JS)
     else:
@@ -1126,6 +1137,12 @@ async def public_rate_master(tenant_id: int,
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
     if await svc.repo.get_master(master_id) is None:
         raise HTTPException(status_code=404, detail="Мастер не найден")
+    # оценку принимаем только от того, кто действительно приходил: иначе
+    # рейтинг — это опрос случайных людей, а не отзыв клиентов
+    if not await svc.repo.has_visited_master(master_id, "web",
+                                             _phone_uid(digits)):
+        return RedirectResponse(f"/club/{tenant_id}?rated=novisit",
+                                status_code=303)
     await svc.repo.upsert_master_review(
         master_id=master_id, user_id=_phone_uid(digits),
         author_name=name, rating=rating, text=text.strip()[:500])

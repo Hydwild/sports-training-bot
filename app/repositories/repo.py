@@ -443,6 +443,24 @@ class TenantRepository:
 
     # ---------- Рейтинг мастеров ----------
 
+    async def has_visited_master(self, master_id: int, platform: str,
+                                 user_id: int) -> bool:
+        """Был ли у человека состоявшийся визит к этому мастеру.
+
+        Оценку имеет смысл принимать только от того, кто действительно
+        приходил: запись должна быть активной (не в очереди, не отменённой)
+        и на занятие, которое уже началось."""
+        now = dt.datetime.now(dt.timezone.utc)
+        stmt = (select(func.count()).select_from(Signup)
+                .join(Training, Training.id == Signup.training_id)
+                .where(Signup.tenant_id == self.tenant_id,
+                       Signup.platform == platform,
+                       Signup.user_id == user_id,
+                       Signup.status == "active",
+                       Training.master_id == master_id,
+                       Training.start_at <= now))
+        return bool((await self.session.execute(stmt)).scalar() or 0)
+
     async def upsert_master_review(self, *, master_id: int, user_id: int,
                                    author_name: str, rating: int,
                                    text: str = "") -> MasterReview:

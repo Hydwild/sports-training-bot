@@ -88,6 +88,37 @@ def _mk_training(c, tid, title="Слот", days=2, maxp=1, **extra):
     return r.json()["id"]
 
 
+def _visited(c, tid, master_id, phone, name="Клиент"):
+    """Состоявшийся визит: человек записался к мастеру, и занятие прошло.
+
+    Оценку принимаем только после визита, поэтому тестам рейтинга нужна
+    настоящая история: записываемся на будущий слот через публичную форму,
+    затем сдвигаем занятие в прошлое — как если бы оно уже состоялось."""
+    import asyncio
+    import datetime as dt
+
+    tr = _mk_training(c, tid, title="Визит", maxp=50, master_id=master_id)
+    r = c.post(f"/club/{tid}/signup", data={
+        "consent": "1", "training_id": tr, "name": name, "phone": phone})
+    assert r.status_code == 200, r.text
+
+    async def move_to_past():
+        from sqlalchemy import select
+
+        from app.db.engine import SessionLocal, engine
+        from app.models.entities import Training
+        await engine.dispose()
+        async with SessionLocal() as s:
+            t = (await s.execute(
+                select(Training).where(Training.id == tr))).scalar_one()
+            t.start_at = (dt.datetime.now(dt.timezone.utc)
+                          - dt.timedelta(hours=3))
+            await s.commit()
+
+    asyncio.run(move_to_past())
+    return tr
+
+
 def test_funnel_screens_present_with_masters():
     with TestClient(app) as c:
         tid = c.post("/api/tenants", json={
@@ -173,6 +204,8 @@ def test_rate_master_shows_average_and_count():
         m = c.post(f"/api/tenants/{tid}/masters", headers=H,
                    json={"name": "Мастер Рита"}).json()
         _mk_training(c, tid, title="Слот", master_id=m["id"])
+        _visited(c, tid, m["id"], "79110000001", "Клиент А")
+        _visited(c, tid, m["id"], "79110000002", "Клиент Б")
 
         r = c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "5", "name": "Клиент А",
@@ -200,6 +233,7 @@ def test_rate_master_same_phone_updates_not_duplicates():
         m = c.post(f"/api/tenants/{tid}/masters", headers=H,
                    json={"name": "Мастер Ева"}).json()
         _mk_training(c, tid, title="Слот", master_id=m["id"])
+        _visited(c, tid, m["id"], "79110000009", "Тот же")
 
         c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "2", "name": "Тот же",
@@ -209,6 +243,50 @@ def test_rate_master_same_phone_updates_not_duplicates():
             "phone": "79110000009"})
         page = c.get(f"/club/{tid}").text
         assert "★ 5.0" in page and "1 оценка" in page   # заменилась, не дубль
+
+
+def test_rate_master_requires_real_visit():
+    """Рейтинг — отзыв клиентов, а не опрос прохожих: без состоявшейся
+    записи оценка не сохраняется, и человеку объясняют почему."""
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={
+            "name": "Салон Визитов", "vertical": "beauty"},
+            headers=H).json()["id"]
+        m = c.post(f"/api/tenants/{tid}/masters", headers=H,
+                   json={"name": "Мастер Инна"}).json()
+        _mk_training(c, tid, title="Слот", master_id=m["id"])
+
+        # чужой человек: записи нет
+        r = c.post(f"/club/{tid}/rate", data={
+            "consent": "1", "master_id": m["id"], "rating": "5",
+            "name": "Прохожий", "phone": "79110007777"},
+            follow_redirects=False)
+        assert r.status_code == 303
+        assert r.headers["location"] == f"/club/{tid}?rated=novisit"
+        page = c.get(f"/club/{tid}?rated=novisit").text
+        assert "после визита" in page
+        assert "★" not in page.split('class="ms-strip"')[0]  # рейтинга нет
+
+        # запись есть, но занятие ещё не прошло — тоже рано
+        tr = _mk_training(c, tid, title="Будущее", maxp=50,
+                          master_id=m["id"])
+        c.post(f"/club/{tid}/signup", data={
+            "consent": "1", "training_id": tr, "name": "Ранний",
+            "phone": "79110008888"})
+        early = c.post(f"/club/{tid}/rate", data={
+            "consent": "1", "master_id": m["id"], "rating": "5",
+            "name": "Ранний", "phone": "79110008888"},
+            follow_redirects=False)
+        assert early.headers["location"] == f"/club/{tid}?rated=novisit"
+
+        # после визита — принимаем
+        _visited(c, tid, m["id"], "79110009999", "Настоящий")
+        ok = c.post(f"/club/{tid}/rate", data={
+            "consent": "1", "master_id": m["id"], "rating": "5",
+            "name": "Настоящий", "phone": "79110009999"},
+            follow_redirects=False)
+        assert ok.headers["location"] == f"/club/{tid}?rated=1"
+        assert "★ 5.0" in c.get(f"/club/{tid}").text
 
 
 def test_rate_master_validation_and_unknown_master():
@@ -240,6 +318,7 @@ def test_master_review_admin_delete():
         m = c.post(f"/api/tenants/{tid}/masters", headers=H,
                    json={"name": "Мастер"}).json()
         _mk_training(c, tid, title="Слот", master_id=m["id"])
+        _visited(c, tid, m["id"], "79110000004", "Спамер")
         c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "1", "name": "Спамер",
             "phone": "79110000004", "text": "спам"})
