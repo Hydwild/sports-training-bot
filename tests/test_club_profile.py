@@ -130,7 +130,7 @@ def test_funnel_full_slot_has_no_chip():
         m = c.post(f"/api/tenants/{tid}/masters", headers=H,
                    json={"name": "Мастер Зоя"}).json()
         tr = _mk_training(c, tid, title="Занятый", master_id=m["id"])
-        c.post(f"/club/{tid}/signup", data={
+        c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": tr, "name": "Клиент", "phone": "79995556677"})
         page = c.get(f"/club/{tid}").text
         assert f'data-slot="{tr}"' not in page   # занятое окно не предлагаем
@@ -174,13 +174,13 @@ def test_rate_master_shows_average_and_count():
                    json={"name": "Мастер Рита"}).json()
         _mk_training(c, tid, title="Слот", master_id=m["id"])
 
-        r = c.post(f"/club/{tid}/rate", data={
+        r = c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "5", "name": "Клиент А",
             "phone": "79110000001", "text": "Отличный мастер!"},
             follow_redirects=False)
         assert r.status_code == 303
         assert r.headers["location"] == f"/club/{tid}?rated=1"
-        c.post(f"/club/{tid}/rate", data={
+        c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "4", "name": "Клиент Б",
             "phone": "79110000002"})
 
@@ -201,10 +201,10 @@ def test_rate_master_same_phone_updates_not_duplicates():
                    json={"name": "Мастер Ева"}).json()
         _mk_training(c, tid, title="Слот", master_id=m["id"])
 
-        c.post(f"/club/{tid}/rate", data={
+        c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "2", "name": "Тот же",
             "phone": "79110000009"})
-        c.post(f"/club/{tid}/rate", data={
+        c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "5", "name": "Тот же",
             "phone": "79110000009"})
         page = c.get(f"/club/{tid}").text
@@ -219,15 +219,15 @@ def test_rate_master_validation_and_unknown_master():
         m = c.post(f"/api/tenants/{tid}/masters", headers=H,
                    json={"name": "Мастер"}).json()
         # плохой рейтинг
-        assert c.post(f"/club/{tid}/rate", data={
+        assert c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "9", "name": "X Y",
             "phone": "79110000003"}).status_code == 400
         # плохой телефон
-        assert c.post(f"/club/{tid}/rate", data={
+        assert c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "5", "name": "X Y",
             "phone": "12"}).status_code == 400
         # несуществующий мастер
-        assert c.post(f"/club/{tid}/rate", data={
+        assert c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": 99999, "rating": "5", "name": "X Y",
             "phone": "79110000003"}).status_code == 404
 
@@ -240,7 +240,7 @@ def test_master_review_admin_delete():
         m = c.post(f"/api/tenants/{tid}/masters", headers=H,
                    json={"name": "Мастер"}).json()
         _mk_training(c, tid, title="Слот", master_id=m["id"])
-        c.post(f"/club/{tid}/rate", data={
+        c.post(f"/club/{tid}/rate", data={"consent": "1", 
             "master_id": m["id"], "rating": "1", "name": "Спамер",
             "phone": "79110000004", "text": "спам"})
         assert "★ 1.0" in c.get(f"/club/{tid}").text

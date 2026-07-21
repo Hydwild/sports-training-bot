@@ -33,11 +33,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      # Причину падения выносим в аннотацию прогона: она видна на странице
+      # Actions без входа в GitHub, в отличие от полного лога.
       - name: "Линтер: неизвестные имена и битые импорты"
-        run: ruff check --select F .
+        run: |
+          set +e
+          ruff check --select F . > lint.log 2>&1
+          code=$?
+          cat lint.log
+          if [ $code -ne 0 ]; then
+            echo "::error title=Линтер::$(tail -c 1500 lint.log | tr '\n' ' ')"
+          fi
+          exit $code
 
       - name: Тесты
-        run: pytest -q
+        run: |
+          set +e
+          pytest -q > tests.log 2>&1
+          code=$?
+          cat tests.log
+          if [ $code -ne 0 ]; then
+            echo "::error title=Тесты (код $code)::$(tail -c 1500 tests.log | tr '\n' ' ')"
+          fi
+          exit $code
 
   migrations:
     name: Миграции на PostgreSQL

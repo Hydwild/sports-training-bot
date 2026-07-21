@@ -11,7 +11,7 @@ from __future__ import annotations
 import html as _h
 
 from app.api.public_style import (
-    SITE_CSS, TELEGRAM_CONTACT, head_meta, site_footer, site_nav,
+    SITE_CSS, TELEGRAM_CONTACT, consent_field, head_meta, site_footer, site_nav,
 )
 from app.models.entities import Review
 
@@ -165,6 +165,8 @@ def render_reviews_page(reviews: list[Review], notice: str | None = None,
         '<textarea id="text" name="text" maxlength="1000" required></textarea></div>'
         '<input class="hp" type="text" name="website" tabindex="-1" '
         'autocomplete="off" aria-hidden="true">'
+        + consent_field("имени и текста отзыва для публикации на этой "
+                        "странице") +
         '<button class="submit" type="submit">Отправить отзыв</button>'
         '</form></div>')
 

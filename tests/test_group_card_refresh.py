@@ -283,7 +283,7 @@ def test_public_web_signup_refreshes_tg_group_card(monkeypatch):
         }).json()
         train_id = train["id"]
 
-        r = c.post(f"/club/{tid}/signup", data={
+        r = c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": train_id, "name": "Веб Участник",
             "phone": "79991234567"})
         assert "Вы записаны" in r.text
@@ -303,7 +303,7 @@ def test_public_web_cancel_refreshes_tg_group_card(monkeypatch):
         }).json()
         train_id = train["id"]
 
-        signup_resp = c.post(f"/club/{tid}/signup", data={
+        signup_resp = c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": train_id, "name": "Веб Участник",
             "phone": "79991234568"})
 

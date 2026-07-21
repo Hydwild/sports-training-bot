@@ -170,7 +170,34 @@ footer.site a{color:var(--gold);text-decoration:none;font-weight:600;
   margin:0 4px;display:inline-flex;align-items:center;min-height:44px;
   padding:0 4px}
 footer.site a:hover{text-decoration:underline}
+
+/* ---------- галочка согласия на формах ---------- */
+.consent{display:flex;gap:10px;align-items:flex-start;margin:4px 0 12px;
+  cursor:pointer;min-height:44px;padding:8px 0}
+.consent input{width:20px;height:20px;flex:0 0 auto;margin-top:1px;
+  accent-color:var(--gold);cursor:pointer}
+.consent span{font:400 13px/1.45 -apple-system,system-ui,sans-serif;
+  color:var(--muted);text-align:left}
+.consent a{color:var(--gold);font-weight:600}
 """.replace("GRAIN_URI", _GRAIN)
+
+
+def consent_field(what: str) -> str:
+    """Галочка согласия для любой формы, где посетитель вводит имя, телефон
+    или текст отзыва. `what` — что именно обрабатывается, человеческими
+    словами («имени и телефона»).
+
+    Обязательность продублирована на сервере: атрибут required в браузере
+    отключаемый, а отправить форму можно и мимо страницы."""
+    return (
+        '<label class="consent">'
+        '<input type="checkbox" name="consent" value="1" required>'
+        f'<span>Согласен на обработку {what} — '
+        '<a href="/privacy" target="_blank" rel="noopener">как мы их '
+        'обрабатываем</a></span></label>')
+
+
+CONSENT_ERROR = "Чтобы отправить форму, нужно согласие на обработку данных."
 
 
 def site_nav(active: str) -> str:
@@ -193,5 +220,6 @@ def site_footer() -> str:
     return (
         f'<footer class="site"><div class="links">'
         f'<a href="/promo">о продукте</a>·<a href="/faq">вопросы и ответы</a>'
-        f'·<a href="/reviews">отзывы</a>·<a href="{TELEGRAM_CONTACT}">написать в Telegram</a>'
+        f'·<a href="/reviews">отзывы</a>·<a href="/privacy">обработка данных</a>'
+        f'·<a href="{TELEGRAM_CONTACT}">написать в Telegram</a>'
         f'</div>© 2026 · Боты для записей — Telegram + ВКонтакте</footer>')

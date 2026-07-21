@@ -56,7 +56,7 @@ def test_rate_limit_is_per_client_behind_proxy():
         for i in range(7):
             r = c.post(f"/club/{tid}/signup",
                        headers={"x-forwarded-for": "203.0.113.10"},
-                       data={"training_id": tr, "name": f"A{i}",
+                       data={"consent": "1", "training_id": tr, "name": f"A{i}",
                              "phone": f"7911000{i:04d}"})
             codes_first.append(r.status_code)
         assert 429 in codes_first, codes_first
@@ -64,7 +64,7 @@ def test_rate_limit_is_per_client_behind_proxy():
         # другой клиент (другой X-Forwarded-For) записывается нормально
         r2 = c.post(f"/club/{tid}/signup",
                     headers={"x-forwarded-for": "203.0.113.20"},
-                    data={"training_id": tr, "name": "Борис",
+                    data={"consent": "1", "training_id": tr, "name": "Борис",
                           "phone": "79115550001"})
         assert r2.status_code == 200, "лимит утёк на другого клиента"
 

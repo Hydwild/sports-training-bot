@@ -43,13 +43,13 @@ def test_public_web_flow():
         assert "<h1>Веб-клуб</h1>" in r.text
         assert "🏸" not in r.text
         # запись
-        r = c.post(f"/club/{tid}/signup", data={
+        r = c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": tr, "name": "Олег", "phone": "79123456789"})
         assert "Вы записаны" in r.text and "/cancel?" in r.text
         # имена записанных видны на странице
         assert "Олег" in c.get(f"/club/{tid}").text
         # повтор
-        r = c.post(f"/club/{tid}/signup", data={
+        r = c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": tr, "name": "Олег", "phone": "79123456789"})
         assert "уже записаны" in r.text
         # мои записи по телефону
@@ -63,7 +63,7 @@ def test_public_web_flow():
         bad = re.sub(r"s=\w+", "s=deadbeefdeadbeef", link)
         assert c.get(bad).status_code == 403
         # валидация телефона
-        r = c.post(f"/club/{tid}/signup", data={
+        r = c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": tr, "name": "X", "phone": "12"})
         assert r.status_code == 400
         # QR
@@ -81,7 +81,7 @@ def test_public_rate_limit():
         tr = _mk_training(c, tid, maxp=50)
         codes = []
         for i in range(7):
-            r = c.post(f"/club/{tid}/signup", data={
+            r = c.post(f"/club/{tid}/signup", data={"consent": "1", 
                 "training_id": tr, "name": f"U{i}",
                 "phone": f"7912000{i:04d}"})
             codes.append(r.status_code)

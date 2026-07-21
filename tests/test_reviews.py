@@ -41,7 +41,7 @@ def test_reviews_page_empty_state():
 
 def test_submitted_review_pending_not_shown_publicly():
     with TestClient(app) as c:
-        r = c.post("/reviews", data={
+        r = c.post("/reviews", data={"consent": "1", 
             "name": "Игорь", "club_name": "Смэш-клуб", "rating": "5",
             "text": "Отличный бот, участники сами записываются."},
             follow_redirects=False)
@@ -57,7 +57,7 @@ def test_submitted_review_pending_not_shown_publicly():
 
 def test_honeypot_filled_silently_drops_without_creating_review():
     with TestClient(app) as c:
-        r = c.post("/reviews", data={
+        r = c.post("/reviews", data={"consent": "1", 
             "name": "Бот", "rating": "5", "text": "спам-текст",
             "website": "http://spam.example"}, follow_redirects=False)
         assert r.status_code == 303  # тихо "принимаем", чтобы не подсказывать боту
@@ -69,7 +69,7 @@ def test_honeypot_filled_silently_drops_without_creating_review():
 
 def test_empty_fields_rejected_with_notice():
     with TestClient(app) as c:
-        r = c.post("/reviews", data={"name": "", "rating": "5", "text": ""})
+        r = c.post("/reviews", data={"consent": "1", "name": "", "rating": "5", "text": ""})
         assert r.status_code == 200
         assert "Заполните имя" in r.text
 
@@ -78,7 +78,7 @@ def test_rate_limit_on_review_submission():
     with TestClient(app) as c:
         codes = []
         for i in range(7):
-            r = c.post("/reviews", data={
+            r = c.post("/reviews", data={"consent": "1", 
                 "name": f"У{i}", "rating": "4", "text": "текст отзыва"},
                 follow_redirects=False)
             codes.append(r.status_code)
@@ -95,7 +95,7 @@ def test_moderation_requires_platform_auth():
 
 def test_approve_makes_review_public_then_delete_hides_it():
     with TestClient(app) as c:
-        c.post("/reviews", data={
+        c.post("/reviews", data={"consent": "1", 
             "name": "Марина", "club_name": "Клуб Заря", "rating": "5",
             "text": "Пользуемся два месяца, участники довольны."})
 
@@ -131,7 +131,7 @@ def test_approve_makes_review_public_then_delete_hides_it():
 
 def test_approve_without_csrf_rejected():
     with TestClient(app) as c:
-        c.post("/reviews", data={
+        c.post("/reviews", data={"consent": "1", 
             "name": "Без CSRF", "rating": "3", "text": "текст"})
         _login(c)
         mod = c.get("/admin/platform/reviews")

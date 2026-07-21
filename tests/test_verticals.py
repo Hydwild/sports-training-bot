@@ -103,7 +103,7 @@ def test_single_slot_full_shows_waitlist_text():
             "name": "Салон Очередь", "vertical": "beauty"},
             headers=H).json()["id"]
         tr = _mk_training(c, tid, title="Депиляция", maxp=1)
-        c.post(f"/club/{tid}/signup", data={
+        c.post(f"/club/{tid}/signup", data={"consent": "1", 
             "training_id": tr, "name": "Ирина", "phone": "79990001122"})
         page = c.get(f"/club/{tid}").text
         assert "время занято — запись в лист ожидания" in page

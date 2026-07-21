@@ -521,6 +521,14 @@ _I_USERS = ('<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/>'
             '<circle cx="16.5" cy="9" r="2.4"/>'
             '<path d="M16 14.7c2.6.3 4.5 2 4.5 4.5"/></svg>')
 
+# Согласие на обработку — там, где посетитель ОСТАВЛЯЕТ данные. На форме
+# «Мои записи» галочки нет намеренно: там человек ищет свою же запись по
+# телефону, новых данных не появляется.
+from app.api.public_style import consent_field as _consent_field
+
+_CONSENT_SIGNUP = _consent_field("имени и телефона для записи")
+_CONSENT_RATE = _consent_field("имени, телефона и отзыва для оценки мастера")
+
 # Страница записи клуба: тёплая палитра общего сайта (/promo, /faq, /reviews),
 # фирменный цвет клуба ({color}) — акцент кнопок/ссылок/прогресса.
 _PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -718,6 +726,13 @@ outline-offset:2px;border-radius:6px}}
 .rated-ok{{border-color:var(--accent);color:var(--ink)}}
 .mbio{{margin:12px 0 0;font:400 13.5px/1.55 -apple-system,system-ui,sans-serif;
 color:var(--muted)}}
+.consent{{display:flex;gap:10px;align-items:flex-start;margin:2px 0 10px;
+cursor:pointer;min-height:44px;padding:6px 0}}
+.consent input{{width:20px;height:20px;flex:0 0 auto;margin-top:1px;
+accent-color:var(--accent);cursor:pointer}}
+.consent span{{font:400 12.5px/1.45 -apple-system,system-ui,sans-serif;
+color:var(--muted);text-align:left}}
+.consent a{{color:var(--accent);font-weight:600}}
 .danger{{color:#b23a2e}}
 .note{{text-align:center;color:var(--muted);
 font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
@@ -728,7 +743,8 @@ font:400 12.5px/1.6 -apple-system,system-ui,sans-serif}}
 {cover}<span class="eyebrow">{eyebrow}</span>
 <h1>{title}</h1>{body}
 <p class="foot">Запись онлайн — без регистрации ·
-<a href="/promo">платформа «Боты для записей»</a></p>
+<a href="/promo">платформа «Боты для записей»</a> ·
+<a href="/privacy">обработка данных</a></p>
 </body></html>"""
 
 
@@ -867,6 +883,7 @@ async def public_club(tenant_id: int, rated: str = "",
             f'<input name="phone" type="tel" autocomplete="tel" required '
             f'minlength="10" maxlength="16" '
             f'placeholder="Телефон (для мастера)" aria-label="Телефон">'
+            f'{_CONSENT_SIGNUP}'
             f'<button>Записаться</button></form></div>')
     my_form = (f'<div class="card"><div class="t">Мои записи</div>'
                f'<form method="post" action="/club/{tenant_id}/my">'
@@ -965,6 +982,7 @@ async def public_club(tenant_id: int, rated: str = "",
                 f'aria-label="Телефон">'
                 f'<input name="text" maxlength="300" '
                 f'placeholder="Короткий отзыв (необязательно)">'
+                f'{_CONSENT_RATE}'
                 f'<button>Отправить оценку</button></form></details>')
             bio_html = (f'<p class="mbio">{_h.escape(m.bio)}</p>'
                         if getattr(m, "bio", "") else "")
@@ -1009,9 +1027,13 @@ async def public_signup(tenant_id: int,
                         training_id: int = Form(...),
                         name: str = Form(...),
                         phone: str = Form(...),
+                        consent: str = Form(""),
                         session: AsyncSession = Depends(get_session)):
     """Запись с публичной страницы: имя + телефон (телефон видит тренер)."""
     import html as _h
+    if not consent.strip():
+        from app.api.public_style import CONSENT_ERROR
+        raise HTTPException(status_code=400, detail=CONSENT_ERROR)
     ip = client_ip(request)
     if not _rate_ok(ip, scope="signup"):
         raise HTTPException(status_code=429,
@@ -1080,11 +1102,15 @@ async def public_rate_master(tenant_id: int,
                              name: str = Form(...),
                              phone: str = Form(...),
                              text: str = Form(""),
+                             consent: str = Form(""),
                              session: AsyncSession = Depends(get_session)):
     """Оценка мастера с публичной страницы. Анти-накрутка: телефон
     обязателен, одна оценка на номер (повторная заменяет прежнюю),
     плюс общий IP-лимит."""
     from fastapi.responses import RedirectResponse
+    if not consent.strip():
+        from app.api.public_style import CONSENT_ERROR
+        raise HTTPException(status_code=400, detail=CONSENT_ERROR)
     ip = client_ip(request)
     if not _rate_ok(ip, scope="rate"):
         raise HTTPException(status_code=429,
@@ -1229,6 +1255,13 @@ async def faq_page():
     return FAQ_HTML
 
 
+@public_router.get("/privacy", response_class=HTMLResponse)
+async def privacy_page():
+    """Политика обработки персональных данных — в privacy_page.py."""
+    from app.api.privacy_page import PRIVACY_HTML
+    return PRIVACY_HTML
+
+
 @public_router.get("/reviews", response_class=HTMLResponse)
 async def reviews_page(sent: str = "",
                        session: AsyncSession = Depends(get_session)):
@@ -1248,6 +1281,7 @@ async def reviews_submit(request: Request,
                          rating: int = Form(...),
                          text: str = Form(...),
                          website: str = Form(""),
+                         consent: str = Form(""),
                          session: AsyncSession = Depends(get_session)):
     """Приём нового отзыва: honeypot-поле + лимит по IP против спама,
     отзыв уходит в модерацию (approved=False) и не виден на странице сразу."""
@@ -1266,6 +1300,12 @@ async def reviews_submit(request: Request,
         return render_reviews_page(
             reviews, notice="Слишком много попыток, попробуйте через минуту.",
             notice_kind="err")
+
+    if not consent.strip():
+        from app.api.public_style import CONSENT_ERROR
+        reviews = await g.list_approved_reviews()
+        return render_reviews_page(reviews, notice=CONSENT_ERROR,
+                                   notice_kind="err")
 
     name = name.strip()
     text = text.strip()
