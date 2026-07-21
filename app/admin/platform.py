@@ -40,6 +40,9 @@ from app.repositories.repo import GlobalRepository
 
 logger = logging.getLogger("app")
 
+# ключ в platform_state: дата последнего успешного restore drill
+DRILL_STATE_KEY = "last_restore_drill"
+
 router = APIRouter(prefix="/admin/platform", tags=["platform-admin"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -143,11 +146,13 @@ async def _dashboard_rows(request: Request, session: AsyncSession) -> list[dict]
 async def platform_dashboard(request: Request,
                              _auth: None = Depends(require_platform_admin),
                              session: AsyncSession = Depends(get_session)):
+    g = GlobalRepository(session)
     rows = await _dashboard_rows(request, session)
-    pending = await GlobalRepository(session).list_pending_reviews()
+    pending = await g.list_pending_reviews()
     return templates.TemplateResponse(
         request, "platform_dashboard.html",
         _ctx(request, tenants=rows, backup_msg=None,
+             last_drill=await g.get_state(DRILL_STATE_KEY),
              pending_reviews_count=len(pending)))
 
 
@@ -160,11 +165,13 @@ async def platform_backup_now(request: Request,
                               session: AsyncSession = Depends(get_session)):
     from app.services import backup
     result = await backup.send_backup_to_owner()
+    g = GlobalRepository(session)
     rows = await _dashboard_rows(request, session)
-    pending = await GlobalRepository(session).list_pending_reviews()
+    pending = await g.list_pending_reviews()
     return templates.TemplateResponse(
         request, "platform_dashboard.html",
         _ctx(request, tenants=rows, backup_msg=result,
+             last_drill=await g.get_state(DRILL_STATE_KEY),
              pending_reviews_count=len(pending)))
 
 
@@ -561,3 +568,43 @@ async def platform_outbox_discard(outbox_id: int,
     logger.warning("Оператор отбросил недоставленное сообщение id=%s "
                    "(успешно: %s)", outbox_id, ok)
     return RedirectResponse("/admin/platform/outbox", status_code=303)
+
+
+# ---------- Restore drill: проверка копии реальным восстановлением ----------
+
+@router.post("/restore-drill", response_class=HTMLResponse)
+async def platform_restore_drill(request: Request,
+                                 _auth: None = Depends(require_platform_admin),
+                                 _csrf: None = Depends(require_csrf(COOKIE)),
+                                 session: AsyncSession = Depends(get_session)):
+    """Снимает свежую копию и восстанавливает её в ОТДЕЛЬНУЮ временную базу.
+    Рабочую БД не трогает: цель — временная, см. restore_drill."""
+    import datetime as _dt
+
+    from app.services import backup, restore_drill
+
+    dump = await backup._make_dump()
+    g = GlobalRepository(session)
+    if dump is None:
+        msg = backup.BackupResult(False, "Проверка не выполнена: не удалось снять копию.")
+    else:
+        data, _name = dump
+        # шифруем, если ключ задан — проверяем ровно то, что уходит в Telegram
+        blob = backup.encrypt_backup(data) if backup.encryption_enabled() else data
+        result = await restore_drill.run_drill(blob)
+        if result.ok:
+            stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            await g.set_state(DRILL_STATE_KEY,
+                              f"{stamp}; {result.details}")
+            await session.commit()
+            msg = backup.BackupResult(True, f"Восстановление успешно ({stamp}). Строк: {result.details}")
+        else:
+            msg = backup.BackupResult(False, f"Проверка не пройдена: {result.message}")
+
+    rows = await _dashboard_rows(request, session)
+    pending = await g.list_pending_reviews()
+    return templates.TemplateResponse(
+        request, "platform_dashboard.html",
+        _ctx(request, tenants=rows, backup_msg=msg,
+             last_drill=await g.get_state(DRILL_STATE_KEY),
+             pending_reviews_count=len(pending)))

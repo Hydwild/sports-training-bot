@@ -388,6 +388,18 @@ class MasterReview(Base):
         DateTime(timezone=True), default=_utcnow)
 
 
+class PlatformState(Base):
+    """Служебное хранилище ключ-значение уровня платформы: одиночные факты,
+    для которых заводить отдельную таблицу избыточно (дата последнего
+    успешного restore drill и т.п.)."""
+    __tablename__ = "platform_state"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(300), default="")
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)
+
+
 class RateBucket(Base):
     """Счётчик частоты запросов, общий для всех процессов приложения.
 

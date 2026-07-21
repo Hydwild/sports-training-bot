@@ -67,5 +67,16 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="btn" type="submit">💾 Создать бэкап сейчас</button>
   </form>
+
+  <h3 style="margin-top:20px">Проверка восстановлением</h3>
+  <p class="muted">Снимает свежую копию и восстанавливает её в отдельную
+    временную базу — проверяет, что из копии реально можно восстановиться,
+    а не только что файл похож на дамп. Рабочую базу не трогает.</p>
+  <p class="muted">Последняя успешная проверка:
+    <b>{{ last_drill or 'ещё не проводилась' }}</b></p>
+  <form method="post" action="/admin/platform/restore-drill">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn" type="submit">🧪 Проверить восстановление</button>
+  </form>
 </div>
 {% endblock %}

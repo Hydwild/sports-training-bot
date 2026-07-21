@@ -1000,6 +1000,21 @@ class GlobalRepository:
             source="platform-form"))
         await self.session.flush()
 
+    async def get_state(self, key: str) -> str:
+        from app.models.entities import PlatformState
+        row = await self.session.get(PlatformState, key)
+        return row.value if row else ""
+
+    async def set_state(self, key: str, value: str) -> None:
+        from app.models.entities import PlatformState
+        row = await self.session.get(PlatformState, key)
+        if row:
+            row.value = value[:300]
+            row.updated_at = _utcnow()
+        else:
+            self.session.add(PlatformState(key=key, value=value[:300]))
+        await self.session.flush()
+
     async def demo_tenant_id(self) -> int | None:
         """Клуб-витрина (Tenant.is_demo), на который можно спокойно послать
         любого посетителя. None — если демо-клуба нет."""
