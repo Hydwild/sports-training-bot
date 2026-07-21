@@ -416,9 +416,9 @@ class TenantRepository:
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def add_master(self, *, name: str, specialty: str = "",
-                         photo_url: str | None = None) -> Master:
+                         bio: str = "", photo_url: str | None = None) -> Master:
         m = Master(tenant_id=self.tenant_id, name=name, specialty=specialty,
-                   photo_url=photo_url, active=True)
+                   bio=bio, photo_url=photo_url, active=True)
         self.session.add(m)
         await self.session.flush()
         return m

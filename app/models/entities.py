@@ -326,6 +326,8 @@ class Master(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(120))
     specialty: Mapped[str] = mapped_column(String(160), default="")
+    # описание под фото: опыт, регалии («парикмахер, опыт 3 года...»)
+    bio: Mapped[str] = mapped_column(String(500), default="")
     photo_url: Mapped[str | None] = mapped_column(String(500))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[dt.datetime] = mapped_column(

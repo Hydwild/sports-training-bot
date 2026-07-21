@@ -137,6 +137,32 @@ def test_funnel_full_slot_has_no_chip():
         assert "Свободных окон пока нет" in page
 
 
+def test_master_bio_shown_on_masters_screen():
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={
+            "name": "Салон Био", "vertical": "beauty"}, headers=H).json()["id"]
+        # через API
+        m = c.post(f"/api/tenants/{tid}/masters", headers=H, json={
+            "name": "Наталья", "specialty": "Парикмахер",
+            "bio": "Опыт 3 года, колорист"}).json()
+        assert m["bio"] == "Опыт 3 года, колорист"
+        _mk_training(c, tid, title="Стрижка", master_id=m["id"])
+        page = c.get(f"/club/{tid}").text
+        assert "Наталья" in page and "Парикмахер" in page
+        assert 'class="mbio">Опыт 3 года, колорист</p>' in page
+
+        # через форму панели оператора
+        _op_login(c)
+        page2 = c.get(f"/admin/platform/{tid}/masters")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page2.text).group(1)
+        r = c.post(f"/admin/platform/{tid}/masters/add", data={
+            "csrf": csrf, "name": "Ирина", "specialty": "Бровист",
+            "bio": "Опыт 5 лет"}, follow_redirects=False)
+        assert r.status_code == 303
+        page3 = c.get(f"/club/{tid}").text
+        assert "Ирина" in page3 and "Опыт 5 лет" in page3
+
+
 # ---------- рейтинг мастеров ----------
 
 def test_rate_master_shows_average_and_count():

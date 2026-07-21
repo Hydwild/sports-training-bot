@@ -150,6 +150,7 @@ async def create_master(tenant_id: int, body: MasterCreate,
     svc = BookingService(session, tenant_id)
     m = await svc.repo.add_master(name=body.name.strip(),
                                   specialty=body.specialty.strip(),
+                                  bio=body.bio.strip(),
                                   photo_url=body.photo_url)
     await session.commit()
     return MasterOut.model_validate(m)
@@ -685,6 +686,8 @@ transition:color .15s var(--ease)}}
 .rating-pick input:focus-visible + label{{outline:2px solid var(--accent);
 outline-offset:2px;border-radius:6px}}
 .rated-ok{{border-color:var(--accent);color:var(--ink)}}
+.mbio{{margin:12px 0 0;font:400 13.5px/1.55 -apple-system,system-ui,sans-serif;
+color:var(--muted)}}
 .danger{{color:#b23a2e}}
 .note{{text-align:center;color:var(--muted);
 font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}}
@@ -933,10 +936,12 @@ async def public_club(tenant_id: int, rated: str = "",
                 f'<input name="text" maxlength="300" '
                 f'placeholder="Короткий отзыв (необязательно)">'
                 f'<button>Отправить оценку</button></form></details>')
+            bio_html = (f'<p class="mbio">{_h.escape(m.bio)}</p>'
+                        if getattr(m, "bio", "") else "")
             mcards.append(
                 f'<div class="card mcard"><div class="master">{av}'
                 f'<div><b>{_h.escape(m.name)}</b>{spec}'
-                f'{_rate_badge(m.id)}</div></div>'
+                f'{_rate_badge(m.id)}</div></div>{bio_html}'
                 f'{chips_html}{rev_html}{rate_form}</div>')
         masters_scr = (
             '<div id="scr-masters" class="scr">'

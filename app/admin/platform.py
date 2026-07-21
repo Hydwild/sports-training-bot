@@ -282,6 +282,7 @@ async def platform_masters_add(tenant_id: int, request: Request,
                                _csrf: None = Depends(require_csrf(COOKIE)),
                                name: str = Form(...),
                                specialty: str = Form(""),
+                               bio: str = Form(""),
                                photo_url: str = Form(""),
                                session: AsyncSession = Depends(get_session)):
     from pydantic import ValidationError
@@ -291,7 +292,7 @@ async def platform_masters_add(tenant_id: int, request: Request,
         # та же валидация, что в API (в т.ч. http(s) для photo_url —
         # адрес попадает в <img src> публичной страницы)
         body = MasterCreate(name=name, specialty=specialty,
-                            photo_url=photo_url or None)
+                            bio=bio, photo_url=photo_url or None)
     except ValidationError:
         ctx = await _masters_ctx(request, session, tenant_id)
         ctx["error"] = ("Проверьте поля: имя от 2 символов, фото — "
@@ -301,6 +302,7 @@ async def platform_masters_add(tenant_id: int, request: Request,
     repo = TenantRepository(session, tenant_id)
     await repo.add_master(name=body.name.strip(),
                           specialty=body.specialty.strip(),
+                          bio=body.bio.strip(),
                           photo_url=body.photo_url)
     await session.commit()
     return RedirectResponse(f"/admin/platform/{tenant_id}/masters",

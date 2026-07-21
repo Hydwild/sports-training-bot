@@ -52,6 +52,7 @@ class TrainingCreate(BaseModel):
 class MasterCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     specialty: str = Field(default="", max_length=160)
+    bio: str = Field(default="", max_length=500)
     photo_url: str | None = Field(default=None, max_length=500)
 
     @field_validator("photo_url")
@@ -71,6 +72,7 @@ class MasterOut(BaseModel):
     id: int
     name: str
     specialty: str
+    bio: str = ""
     photo_url: str | None
     active: bool
 
