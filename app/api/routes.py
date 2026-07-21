@@ -372,17 +372,44 @@ def _phone_uid(digits: str) -> int:
     return int(digits)
 
 
-def _rate_ok(ip: str, limit: int = 5, window: int = 60) -> bool:
+def client_ip(request: Request) -> str:
+    """Реальный IP клиента за обратным прокси (Railway, Cloudflare и т.п.).
+
+    Критично для лимитов: request.client.host за прокси — это адрес самого
+    прокси, ОДИНАКОВЫЙ для всех посетителей. С ним лимит «5 в минуту»
+    становится общим на весь сайт: шестой человек за минуту получал 429,
+    и любой мог заблокировать запись всем, отправив 5 запросов.
+
+    Берём первый адрес из X-Forwarded-For (его ставит прокси; клиентский
+    заголовок прокси перезаписывает). Если заголовка нет — обычный
+    request.client.host, как при локальном запуске.
+    """
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        first = fwd.split(",")[0].strip()
+        if first:
+            return first
+    real = request.headers.get("x-real-ip", "").strip()
+    if real:
+        return real
+    return request.client.host if request.client else "?"
+
+
+def _rate_ok(ip: str, limit: int = 5, window: int = 60,
+             scope: str = "default") -> bool:
+    """Лимит по (scope, ip). scope разделяет формы: всплеск записей на
+    страницу клуба не должен закрывать вход в панель оператора и наоборот."""
     import time
     now = time.time()
-    hits = [t for t in _ip_hits.get(ip, []) if now - t < window]
+    key = f"{scope}|{ip}"
+    hits = [t for t in _ip_hits.get(key, []) if now - t < window]
     if len(hits) >= limit:
-        _ip_hits[ip] = hits
+        _ip_hits[key] = hits
         return False
     hits.append(now)
-    _ip_hits[ip] = hits
-    # чистим ТОЛЬКО «протухшие» IP (без активных попыток), чтобы поток запросов
-    # с чужих адресов не сбрасывал лимит всем сразу.
+    _ip_hits[key] = hits
+    # чистим ТОЛЬКО «протухшие» ключи (без активных попыток), чтобы поток
+    # запросов с чужих адресов не сбрасывал лимит всем сразу.
     if len(_ip_hits) > 5000:
         stale = [k for k, v in _ip_hits.items()
                  if not any(now - t < window for t in v)]
@@ -985,8 +1012,8 @@ async def public_signup(tenant_id: int,
                         session: AsyncSession = Depends(get_session)):
     """Запись с публичной страницы: имя + телефон (телефон видит тренер)."""
     import html as _h
-    ip = (request.client.host if request.client else "?")
-    if not _rate_ok(ip):
+    ip = client_ip(request)
+    if not _rate_ok(ip, scope="signup"):
         raise HTTPException(status_code=429,
                             detail="Слишком много запросов, попробуйте через минуту")
     tenant = await _ensure_tenant(session, tenant_id)
@@ -1058,8 +1085,8 @@ async def public_rate_master(tenant_id: int,
     обязателен, одна оценка на номер (повторная заменяет прежнюю),
     плюс общий IP-лимит."""
     from fastapi.responses import RedirectResponse
-    ip = (request.client.host if request.client else "?")
-    if not _rate_ok(ip):
+    ip = client_ip(request)
+    if not _rate_ok(ip, scope="rate"):
         raise HTTPException(status_code=429,
                             detail="Слишком много запросов, попробуйте через минуту")
     tenant = await _ensure_tenant(session, tenant_id)
@@ -1143,8 +1170,8 @@ async def public_my(tenant_id: int,
     самой записи, иначе телефон можно перебирать без ограничений.
     """
     import html as _h
-    ip = (request.client.host if request.client else "?")
-    if not _rate_ok(ip):
+    ip = client_ip(request)
+    if not _rate_ok(ip, scope="my"):
         raise HTTPException(status_code=429,
                             detail="Слишком много запросов, попробуйте через минуту")
     tenant = await _ensure_tenant(session, tenant_id)
@@ -1226,7 +1253,7 @@ async def reviews_submit(request: Request,
     отзыв уходит в модерацию (approved=False) и не виден на странице сразу."""
     from fastapi.responses import RedirectResponse
     from app.api.reviews_page import render_reviews_page
-    ip = (request.client.host if request.client else "?")
+    ip = client_ip(request)
     g = GlobalRepository(session)
 
     if website.strip():
@@ -1234,7 +1261,7 @@ async def reviews_submit(request: Request,
         # чтобы не подсказывать боту, что его вычислили
         return RedirectResponse(url="/reviews?sent=1", status_code=303)
 
-    if not _rate_ok(ip):
+    if not _rate_ok(ip, scope="site-review"):
         reviews = await g.list_approved_reviews()
         return render_reviews_page(
             reviews, notice="Слишком много попыток, попробуйте через минуту.",

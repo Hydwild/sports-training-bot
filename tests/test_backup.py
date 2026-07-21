@@ -7,12 +7,13 @@ import gzip
 
 from app.core.config import settings
 from app.services import backup, tasks
+from app.services.backup import BackupResult
 
 
 async def test_no_owner_id_returns_clear_message(monkeypatch):
     monkeypatch.setattr(settings, "platform_owner_tg_id", 0)
     result = await backup.send_backup_to_owner()
-    assert "PLATFORM_OWNER_TG_ID" in result
+    assert not result.ok and "PLATFORM_OWNER_TG_ID" in result.message
 
 
 async def test_dump_failure_returns_clear_message(monkeypatch):
@@ -23,7 +24,7 @@ async def test_dump_failure_returns_clear_message(monkeypatch):
 
     monkeypatch.setattr(backup, "_make_dump", fake_make_dump)
     result = await backup.send_backup_to_owner()
-    assert "Не удалось создать дамп" in result
+    assert not result.ok and "Не удалось создать дамп" in result.message
 
 
 async def test_oversized_dump_not_sent(monkeypatch):
@@ -46,7 +47,8 @@ async def test_oversized_dump_not_sent(monkeypatch):
     monkeypatch.setattr(tg, "send_document_to_owner", fake_send)
 
     result = await backup.send_backup_to_owner()
-    assert "МБ" in result and "не отправлен" in result
+    assert not result.ok
+    assert "МБ" in result.message and "не отправлен" in result.message
     assert sent["called"] is False
 
 
@@ -68,7 +70,7 @@ async def test_successful_backup_sends_document(monkeypatch):
     monkeypatch.setattr(tg, "send_document_to_owner", fake_send)
 
     result = await backup.send_backup_to_owner()
-    assert "отправлен" in result
+    assert result.ok and "отправлен" in result.message
     assert len(calls) == 1
     assert calls[0][0] == 12345
     assert calls[0][1] == "backup_2026-01-01.sql.gz"
@@ -90,7 +92,7 @@ async def test_send_failure_reported(monkeypatch):
     monkeypatch.setattr(tg, "send_document_to_owner", fake_send)
 
     result = await backup.send_backup_to_owner()
-    assert "не удалось" in result
+    assert not result.ok and "не удалось" in result.message
 
 
 # ---------- pg_dump: успех/ошибка через мок subprocess ----------
@@ -187,7 +189,7 @@ async def test_offsite_backup_marks_day_only_after_attempt(monkeypatch):
 
 async def test_offsite_backup_marks_day_after_successful_attempt(monkeypatch):
     async def fake_send_ok():
-        return "Бэкап отправлен: ok"
+        return BackupResult(True, "Бэкап отправлен: ok")
 
     monkeypatch.setattr(backup, "send_backup_to_owner", fake_send_ok)
     last_day = [None]

@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import asyncio
 import datetime as dt
 import gzip
@@ -94,32 +96,50 @@ async def _make_dump() -> tuple[bytes, str] | None:
     return await _dump_postgres()
 
 
-async def send_backup_to_owner() -> str:
+@dataclass
+class BackupResult:
+    """Структурированный итог бэкапа. Раньше возвращалась только строка —
+    вызывающий код не мог отличить успех от ошибки и помечал день
+    выполненным даже когда бэкап НЕ ушёл (см. tasks._offsite_backup)."""
+    ok: bool
+    message: str
+
+    def __str__(self) -> str:          # совместимость со старым выводом
+        return self.message
+
+
+async def send_backup_to_owner() -> BackupResult:
     """
     Делает дамп базы и отправляет владельцу площадки в Telegram файлом.
-    Возвращает текстовое описание результата (для лога и для ручного
-    вызова из панели оператора — оператор сразу видит, что пошло не так).
+    Возвращает BackupResult: ok=False означает, что копии за сегодня нет и
+    попытку нужно повторить (день не помечается выполненным).
     """
     owner_id = settings.platform_owner_tg_id
     if not owner_id:
-        return ("PLATFORM_OWNER_TG_ID не задан — некому отправлять бэкап. "
-                "Задайте переменную в Railway (ваш Telegram ID).")
+        return BackupResult(False,
+            "PLATFORM_OWNER_TG_ID не задан — некому отправлять бэкап. "
+            "Задайте переменную в Railway (ваш Telegram ID).")
 
     result = await _make_dump()
     if result is None:
-        return "Не удалось создать дамп базы (подробности в логах сервиса)."
+        return BackupResult(False,
+            "Не удалось создать дамп базы (подробности в логах сервиса).")
     data, filename = result
 
     size_mb = len(data) / (1024 * 1024)
     if size_mb > MAX_TELEGRAM_FILE_MB:
-        return (f"Дамп получился {size_mb:.1f} МБ — это больше лимита "
-                f"Telegram-бота на отправку файлов ({MAX_TELEGRAM_FILE_MB} МБ). "
-                "Бэкап не отправлен: нужно внешнее хранилище (S3/Backblaze) "
-                "вместо/вместе с отправкой в Telegram.")
+        # повторять бессмысленно — размер сам не уменьшится; но и успехом
+        # это не является: нужен внешний storage, оператора надо оповестить
+        return BackupResult(False,
+            f"Дамп получился {size_mb:.1f} МБ — это больше лимита "
+            f"Telegram-бота на отправку файлов ({MAX_TELEGRAM_FILE_MB} МБ). "
+            "Бэкап не отправлен: нужно внешнее хранилище (S3/Backblaze) "
+            "вместо/вместе с отправкой в Telegram.")
 
     from app.bots import telegram as tg
     caption = f"💾 Бэкап базы за {dt.date.today().isoformat()} ({size_mb:.1f} МБ)"
     ok = await tg.send_document_to_owner(owner_id, filename, data, caption=caption)
     if not ok:
-        return "Дамп создан, но отправить в Telegram не удалось (бот недоступен?)."
-    return f"Бэкап отправлен: {filename} ({size_mb:.1f} МБ)."
+        return BackupResult(False,
+            "Дамп создан, но отправить в Telegram не удалось (бот недоступен?).")
+    return BackupResult(True, f"Бэкап отправлен: {filename} ({size_mb:.1f} МБ).")

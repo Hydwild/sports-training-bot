@@ -84,6 +84,10 @@ button.submit:active{transform:scale(.98)}
 _FOOT = "</body></html>"
 
 
+# со скольки отзывов показываем средний балл (раньше показывали с одного)
+MIN_REVIEWS_FOR_AVG = 5
+
+
 def _stars(n: int) -> str:
     n = max(1, min(5, n))
     return "★" * n + "☆" * (5 - n)
@@ -101,12 +105,18 @@ def render_reviews_page(reviews: list[Review], notice: str | None = None,
         '<h1>Что говорят наши клиенты</h1>'
         '<p>Тренеры, клубы и мастера, которые каждый день ведут запись '
         'через бота — своими словами о том, что изменилось.</p>')
-    if count:
+    # средний балл показываем только когда он на чём-то основан: «5.0 по
+    # одному отзыву» доверия не добавляет, а выглядит как накрутка
+    if count >= MIN_REVIEWS_FOR_AVG:
         parts.append(
             '<div class="stats">'
             f'<div class="stat"><b>{avg:.1f}</b><span>средняя оценка</span></div>'
-            f'<div class="stat"><b>{count}</b><span>{"отзыв" if count == 1 else "отзывов"}</span></div>'
+            f'<div class="stat"><b>{count}</b><span>отзывов</span></div>'
             '</div>')
+    elif count:
+        parts.append(
+            f'<div class="stats"><div class="stat"><b>{count}</b>'
+            f'<span>{"отзыв" if count == 1 else "отзыва"}</span></div></div>')
     parts.append(f'<div class="cta-row"><a class="btn-gold" href="#leave">'
                  f'Оставить отзыв</a><a class="btn-ghost" href="{TELEGRAM_CONTACT}">'
                  f'Написать администратору</a></div>')

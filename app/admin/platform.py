@@ -24,6 +24,7 @@ from app.api.routes import (
     BillingPatch,
     TokensPatch,
     _rate_ok,
+    client_ip,
     create_tenant as _create_tenant,
     set_tenant_billing as _set_tenant_billing,
     set_tenant_tokens as _set_tenant_tokens,
@@ -80,8 +81,8 @@ async def platform_login_page(request: Request):
 
 @router.post("/login")
 async def platform_login_submit(request: Request, token: str = Form(...)):
-    ip = request.client.host if request.client else "?"
-    if not _rate_ok(ip, limit=5, window=300):
+    ip = client_ip(request)
+    if not _rate_ok(ip, limit=5, window=300, scope="platform-login"):
         raise HTTPException(status_code=429,
                             detail="Слишком много попыток, попробуйте позже")
     expected = settings.admin_api_token or ""

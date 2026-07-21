@@ -231,12 +231,16 @@ async def _offsite_backup(last_day: list) -> None:
         return
     from app.services import backup
     result = await backup.send_backup_to_owner()
-    # день помечаем выполненным только после попытки: если send_backup_to_owner
-    # упадёт необработанным исключением, last_day останется прежним и
-    # scheduler_loop (уже оборачивающий вызов в try/except) повторит попытку
-    # на следующем проходе (через 60 секунд), а не будет молчать до завтра
+    if not result.ok:
+        # копии за сегодня НЕТ: день не помечаем — планировщик повторит
+        # попытку на следующем проходе. Раньше день закрывался при любом
+        # исходе, и «бэкап не ушёл» молча превращался в «бэкап за сегодня
+        # сделан». Владельца оповещаем, но не чаще раза в час (_alert_admins).
+        logger.error("Внешний бэкап НЕ выполнен: %s", result.message)
+        await _alert_admins("внешний бэкап", RuntimeError(result.message))
+        return
     last_day[0] = today
-    logger.info("Внешний бэкап: %s", result)
+    logger.info("Внешний бэкап: %s", result.message)
 
 
 async def _process_schedules() -> None:
@@ -470,12 +474,29 @@ async def _daily_maintenance(last_day: list) -> None:
 # относительно момента сброса, чтобы демо всегда выглядело "живым")
 _DEMO_SEED = [
     {"title": "Вечерняя игра", "days": 1, "hour": 19, "duration_min": 90,
-     "max_participants": 8, "location": "Зал №1"},
+     "max_participants": 8, "location": "Зал №1", "coach": 0},
     {"title": "Утренняя тренировка", "days": 2, "hour": 9, "duration_min": 60,
-     "max_participants": 6, "location": "Зал №2"},
+     "max_participants": 6, "location": "Зал №2", "coach": 1},
     {"title": "Турнир выходного дня", "days": 5, "hour": 12, "duration_min": 180,
-     "max_participants": 16, "location": "Главный корт"},
+     "max_participants": 16, "location": "Главный корт", "coach": 0},
 ]
+
+# тренеры демо-клуба: витрина должна выглядеть прилично для показа клиентам
+_DEMO_MASTERS = [
+    {"name": "Алексей Морозов", "specialty": "Старший тренер",
+     "bio": "Мастер спорта, опыт 12 лет. Групповые и персональные занятия."},
+    {"name": "Ирина Соколова", "specialty": "Тренер по ОФП",
+     "bio": "Опыт 6 лет, специализация — начинающие и юниоры."},
+]
+
+# витрина демо-клуба (обложка не задаётся — только текст, чтобы не зависеть
+# от внешней картинки)
+_DEMO_PROFILE = {
+    "about": ("Демо-клуб платформы: здесь можно посмотреть, как выглядит "
+              "страница записи. Данные обновляются каждую ночь."),
+    "address": "г. Москва, ул. Спортивная, 1",
+    "contact_phone": "+7 900 000-00-00",
+}
 
 
 # час (в таймзоне клуба), начиная с которого отправляется утренний дайджест
@@ -561,14 +582,36 @@ async def _demo_reset_daily(last_day: list) -> None:
                 await session.execute(delete(model).where(model.tenant_id == t.id))
             svc = BookingService(session, t.id, tz=t.timezone)
             now = dt.datetime.now(dt.timezone.utc)
+            # витрина и тренеры — чтобы демо было презентабельным без
+            # ручной настройки (Master удаляется каскадом вместе со слотами
+            # только при удалении клуба, здесь чистим сами)
+            from sqlalchemy import delete as _delete
+            from app.models.entities import Master
+            await session.execute(
+                _delete(Master).where(Master.tenant_id == t.id))
+            masters = []
+            for m in _DEMO_MASTERS:
+                masters.append(await svc.repo.add_master(
+                    name=m["name"], specialty=m["specialty"], bio=m["bio"]))
+            if not (t.about or "").strip():
+                t.about = _DEMO_PROFILE["about"]
+            if not (t.address or "").strip():
+                t.address = _DEMO_PROFILE["address"]
+            if not (t.contact_phone or "").strip():
+                t.contact_phone = _DEMO_PROFILE["contact_phone"]
             for item in _DEMO_SEED:
                 start_at = (now + dt.timedelta(days=item["days"])).replace(
                     hour=item["hour"], minute=0, second=0, microsecond=0)
+                coach_idx = item.get("coach")
+                master_id = (masters[coach_idx].id
+                             if coach_idx is not None and coach_idx < len(masters)
+                             else None)
                 await svc.repo.add_training(
                     title=item["title"], start_at=start_at, location=item["location"],
                     max_participants=item["max_participants"],
                     duration_min=item["duration_min"], state="published",
-                    publish_at=None, created_by_platform="system", created_by_id=0)
+                    publish_at=None, created_by_platform="system", created_by_id=0,
+                    master_id=master_id)
             await session.commit()
         logger.info("Демо-клубы пересобраны: %d", len(demo_tenants))
     last_day[0] = today

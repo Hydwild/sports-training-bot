@@ -249,7 +249,8 @@ def test_backup_now_shows_result_on_dashboard(monkeypatch):
     from app.services import backup
 
     async def fake_send():
-        return "Бэкап отправлен: backup_test.sql.gz (0.1 МБ)."
+        from app.services.backup import BackupResult
+        return BackupResult(True, "Бэкап отправлен: backup_test.sql.gz (0.1 МБ).")
 
     monkeypatch.setattr(backup, "send_backup_to_owner", fake_send)
 

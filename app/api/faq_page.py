@@ -31,8 +31,12 @@ details.expanded summary::after{transform:rotate(225deg);top:2px}
    скриптом по реальной высоте контента, поэтому длинные ответы не обрезаются;
    после раскрытия ставится none (контент может менять высоту). */
 details.js-acc .faq-body{overflow:hidden;max-height:0;opacity:0;
-  transition:max-height .32s var(--ease),opacity .25s var(--ease)}
-details.js-acc.expanded .faq-body{opacity:1}
+  visibility:hidden;
+  transition:max-height .32s var(--ease),opacity .25s var(--ease),
+    visibility 0s linear .32s}
+details.js-acc.expanded .faq-body{opacity:1;visibility:visible;
+  transition:max-height .32s var(--ease),opacity .25s var(--ease),
+    visibility 0s}
 details p, details ol, details ul{margin:0 0 16px;color:var(--ink);
   font:400 14.5px/1.6 -apple-system,system-ui,sans-serif}
 details ol, details ul{padding-left:20px}
@@ -58,10 +62,15 @@ _FAQ_JS = """<script>
     body.appendChild(inner);
     d.appendChild(body);
     d.classList.add('js-acc');
-    d.open = true;
+    d.open = false;
     s.setAttribute('aria-expanded', 'false');
     s.addEventListener('click', function(e){
       e.preventDefault();
+      var willOpen = !d.classList.contains('expanded');
+      // нативный open включаем ДО анимации открытия и выключаем ПОСЛЕ
+      // анимации закрытия — состояние <details> совпадает с видимым,
+      // а свёрнутый ответ не читается скринридером и не ловит Tab
+      if (willOpen) d.open = true;
       var expanded = d.classList.toggle('expanded');
       s.setAttribute('aria-expanded', expanded ? 'true' : 'false');
       if (expanded) {
@@ -78,6 +87,9 @@ _FAQ_JS = """<script>
         body.style.maxHeight = inner.scrollHeight + 'px';
         void body.offsetHeight;
         body.style.maxHeight = '0px';
+        setTimeout(function(){
+          if (!d.classList.contains('expanded')) d.open = false;
+        }, 340);
       }
     });
   });
@@ -252,9 +264,12 @@ Telegram (без пароля, кнопка «Войти через Telegram»).
 <summary>Откуда берётся рейтинг мастера?</summary>
 <p>Клиенты ставят оценку 1–5 и могут оставить короткий отзыв на карточке
 мастера. Под именем показывается средний балл и количество оценок
-(★ 4.8 · 12 оценок). Защита от накрутки: одна оценка на номер телефона —
-повторная заменяет прежнюю, а не добавляется. Некорректный отзыв
-администратор платформы может удалить.</p>
+(★ 4.8 · 12 оценок).</p>
+<p>Одна оценка на номер телефона: повторная оценка с того же номера
+заменяет прежнюю, а не добавляется. Номер сейчас не подтверждается
+кодом — то есть от массовой накрутки это не защищает; администратор
+платформы может удалить некорректные оценки. Подтверждение номера и
+оценку только после реального визита планируем добавить.</p>
 </details>
 
 <details>
