@@ -33,7 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Линтер (реальные ошибки: неизвестные имена, битые импорты)
+      - name: "Линтер: неизвестные имена и битые импорты"
         run: ruff check --select F .
 
       - name: Тесты
