@@ -392,7 +392,11 @@ class WebCustomer(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     phone_index: Mapped[str] = mapped_column(String(64), index=True)
     phone_enc: Mapped[str] = mapped_column(Text, default="")
+    # версия ключа шифротекста и версия ключа индекса хранятся отдельно:
+    # во время перехода строка может быть уже перешифрована, но ещё не
+    # переиндексирована — и наоборот (см. scripts/migrate_phone_keys.py)
     key_ver: Mapped[str] = mapped_column(String(8), default="jwt")
+    index_ver: Mapped[str] = mapped_column(String(8), default="jwt")
     name: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow)

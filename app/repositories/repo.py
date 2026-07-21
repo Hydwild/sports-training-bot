@@ -456,30 +456,43 @@ class TenantRepository:
         from app.core import phones
         from app.models.entities import WebCustomer
 
-        idx = phones.phone_index(phone)
-        stmt = select(WebCustomer).where(WebCustomer.tenant_id == self.tenant_id,
-                                         WebCustomer.phone_index == idx)
-        row = (await self.session.execute(stmt)).scalar_one_or_none()
+        row = await self._find_web_customer(phone)
         if row is not None:
             if name and row.name != name:
                 row.name = name[:200]
             return row.id
         enc, key_ver = phones.encrypt(phone)
-        row = WebCustomer(tenant_id=self.tenant_id, phone_index=idx,
-                          phone_enc=enc, key_ver=key_ver, name=name[:200])
+        row = WebCustomer(tenant_id=self.tenant_id,
+                          phone_index=phones.phone_index(phone),
+                          phone_enc=enc, key_ver=key_ver,
+                          index_ver=phones.active_key_ver(),
+                          name=name[:200])
         self.session.add(row)
         await self.session.flush()
         return row.id
 
-    async def find_web_customer_id(self, phone: str) -> int | None:
-        """id по телефону без создания — для «моих записей»."""
+    async def _find_web_customer(self, phone: str):
+        """Клиент по телефону с учётом версий ключа индекса.
+
+        Ищем индексом активной версии, затем индексами читаемых старых
+        версий. Без этого добавление нового ключа «теряло» существующего
+        клиента и на том же номере заводился дубль."""
         from app.core import phones
         from app.models.entities import WebCustomer
 
-        stmt = select(WebCustomer.id).where(
-            WebCustomer.tenant_id == self.tenant_id,
-            WebCustomer.phone_index == phones.phone_index(phone))
-        return (await self.session.execute(stmt)).scalar_one_or_none()
+        for _ver, idx in phones.index_candidates(phone):
+            stmt = select(WebCustomer).where(
+                WebCustomer.tenant_id == self.tenant_id,
+                WebCustomer.phone_index == idx)
+            row = (await self.session.execute(stmt)).scalar_one_or_none()
+            if row is not None:
+                return row
+        return None
+
+    async def find_web_customer_id(self, phone: str) -> int | None:
+        """id по телефону без создания."""
+        row = await self._find_web_customer(phone)
+        return row.id if row is not None else None
 
     async def web_phones_map(self) -> dict[int, str]:
         """{user_id: расшифрованный телефон} по клубу — для карточки тренера,
