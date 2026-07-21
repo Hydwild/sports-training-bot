@@ -11,8 +11,17 @@ needs_stamp() отличает этот безопасный случай ("сх
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.db.pre_migrate import needs_stamp
+import pytest
+
+from app.db.pre_migrate import ALLOW_FLAG, needs_stamp
 from app.models.entities import Base
+
+
+@pytest.fixture(autouse=True)
+def _allow_stamp(monkeypatch):
+    # с блока 9 stamp требует явного разрешения оператора; эти регресс-тесты
+    # проверяют распознавание безопасного случая — флаг им нужен
+    monkeypatch.setenv(ALLOW_FLAG, "1")
 
 
 async def _make_engine():
@@ -33,6 +42,7 @@ async def test_schema_exists_without_alembic_version_needs_stamp():
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        # схема полна и оператор разрешил (фикстура) — stamp уместен
         assert await needs_stamp(engine) is True
     finally:
         await engine.dispose()
