@@ -1259,10 +1259,13 @@ async def public_my(tenant_id: int,
 
 
 @public_router.get("/promo", response_class=HTMLResponse)
-async def promo_page():
-    """Промо-страница продукта (лендинг). Контакты и цены — в promo_page.py."""
-    from app.api.promo_page import PROMO_HTML
-    return PROMO_HTML
+async def promo_page(session: AsyncSession = Depends(get_session)):
+    """Промо-страница продукта (лендинг). Контакты и цены — в promo_page.py.
+    Ссылку на демонстрационную страницу записи берём из БД: показывать
+    вместо неё клуб реального заказчика нельзя."""
+    from app.api.promo_page import render_promo_page
+    demo_id = await GlobalRepository(session).demo_tenant_id()
+    return render_promo_page(demo_id)
 
 
 @public_router.get("/faq", response_class=HTMLResponse)

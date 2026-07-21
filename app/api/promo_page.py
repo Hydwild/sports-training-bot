@@ -255,15 +255,30 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
       настоящем клубе. Данные сбрасываются каждую ночь.</p>
     <a class="btn-gold" href=\"""" + DEMO_BOT_URL + """\">Открыть бота →</a>
   </div>
-  <div class="demo-card">
-    <span class="tag">Быстрый взгляд</span>
-    <h3>Страница записи</h3>
-    <p>Как видит клуб участник без Telegram и ВК — по прямой ссылке
-      или QR-коду в зале.</p>
-    <a class="btn-ghost" href="/club/1">Открыть страницу →</a>
-  </div>
+  <!--DEMO_CLUB_CARD-->
 </div>
 
 """ + site_footer() + """
 </main>
 </body></html>""")
+
+# Карточка «Страница записи» показывается ТОЛЬКО если есть демо-клуб
+# (Tenant.is_demo). Раньше здесь была ссылка на /club/1 — страницу
+# настоящего заказчика: посторонние попадали на чужой клуб, а выглядел он
+# как заброшенное демо. Лучше не показать карточку вовсе, чем показать чужое.
+_DEMO_CLUB_SLOT = "<!--DEMO_CLUB_CARD-->"
+
+
+def render_promo_page(demo_club_id: int | None) -> str:
+    if demo_club_id is None:
+        return PROMO_HTML.replace(_DEMO_CLUB_SLOT, "")
+    card = (
+        '<div class="demo-card">'
+        '<span class="tag">Быстрый взгляд</span>'
+        '<h3>Страница записи</h3>'
+        '<p>Как видит клуб участник без Telegram и ВК — по прямой ссылке '
+        'или QR-коду в зале.</p>'
+        f'<a class="btn-ghost" href="/club/{demo_club_id}">'
+        'Открыть страницу →</a>'
+        '</div>')
+    return PROMO_HTML.replace(_DEMO_CLUB_SLOT, card)

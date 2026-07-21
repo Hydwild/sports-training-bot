@@ -755,6 +755,14 @@ class GlobalRepository:
         await self.session.flush()
         return r
 
+    async def demo_tenant_id(self) -> int | None:
+        """Клуб-витрина (Tenant.is_demo), на который можно спокойно послать
+        любого посетителя. None — если демо-клуба нет."""
+        stmt = (select(Tenant.id).where(Tenant.is_demo.is_(True),
+                                        Tenant.is_active.is_(True))
+                .order_by(Tenant.id.asc()).limit(1))
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def list_approved_reviews(self, limit: int = 50) -> list[Review]:
         stmt = (select(Review).where(Review.approved.is_(True))
                 .order_by(Review.created_at.desc()).limit(limit))
