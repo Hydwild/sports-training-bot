@@ -196,7 +196,7 @@ async def test_offsite_backup_marks_day_only_after_attempt(monkeypatch):
     last_day = [None]
     try:
         await tasks._offsite_backup(last_day)
-        assert False, "ожидалось исключение"
+        raise AssertionError("ожидалось исключение")
     except RuntimeError:
         pass
     assert last_day[0] is None  # день НЕ помечен — повтор возможен на следующем проходе

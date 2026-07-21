@@ -225,8 +225,8 @@ if settings.is_pro:
         body = await request.body()
         try:
             payload = await request.json()
-        except Exception:
-            raise HTTPException(status_code=400, detail="bad payload")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="bad payload") from e
         remote_ip = request.client.host if request.client else None
         async with SessionLocal() as session:
             ok = await payment_service.handle_webhook(
@@ -274,8 +274,8 @@ async def telegram_webhook(
 async def vk_webhook(request: Request) -> Response:
     try:
         body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="bad payload")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="bad payload") from e
     # VK требует ответить строкой подтверждения на событие confirmation
     if body.get("type") == "confirmation":
         return Response(content=settings.vk_confirmation, media_type="text/plain")

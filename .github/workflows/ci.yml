@@ -35,10 +35,12 @@ jobs:
 
       # Причину падения выносим в аннотацию прогона: она видна на странице
       # Actions без входа в GitHub, в отличие от полного лога.
-      - name: "Линтер: неизвестные имена и битые импорты"
+      # ruff без флагов — та же команда, что и локально (правила в
+      # pyproject.toml), а не расходящийся --select.
+      - name: Линтер
         run: |
           set +e
-          ruff check --select F . > lint.log 2>&1
+          ruff check . > lint.log 2>&1
           code=$?
           cat lint.log
           if [ $code -ne 0 ]; then
@@ -107,10 +109,49 @@ jobs:
           alembic downgrade base
           alembic upgrade head
 
+      # Тесты, которым нужна НАСТОЯЩАЯ PostgreSQL: конкурентный захват
+      # outbox (SKIP LOCKED) и общий счётчик лимита на живой базе. На
+      # SQLite они бы проверяли не тот механизм.
+      - name: Тесты на живом PostgreSQL
+        run: python -m pytest -q -m pg tests/test_pg_concurrency.py
+
+      # backup -> restore на настоящей базе: снимаем дамп, восстанавливаем
+      # во ВТОРУЮ базу, проверяем. Ровно то, что делает restore_drill.
+      - name: Проверка backup → restore
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -e
+          createdb -h localhost -U postgres -p 5432 restore_target
+          pg_dump --no-owner --no-acl \
+            --dbname "postgresql://postgres:postgres@localhost:5432/ci" \
+            > /tmp/ci_dump.sql
+          test -s /tmp/ci_dump.sql
+          grep -q "CREATE TABLE" /tmp/ci_dump.sql
+          psql -v ON_ERROR_STOP=1 \
+            "postgresql://postgres:postgres@localhost:5432/restore_target" \
+            < /tmp/ci_dump.sql
+          # восстановленная база отвечает на запрос к критической таблице
+          psql -v ON_ERROR_STOP=1 -tAqc "SELECT count(*) FROM tenants;" \
+            "postgresql://postgres:postgres@localhost:5432/restore_target"
+          dropdb -h localhost -U postgres -p 5432 restore_target
+
   image:
     name: Образ и smoke-тест
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: prod
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -120,45 +161,46 @@ jobs:
       - name: Сборка образа
         run: docker build -t booking-bot:ci .
 
-      - name: Запуск контейнера
+      # ---- Lite / SQLite ----
+      - name: Lite (SQLite) — запуск
         run: |
-          docker run -d --name smoke -p 8000:8000 \
+          docker run -d --name smoke_lite -p 8000:8000 \
             -e EDITION=lite \
             -e DATABASE_URL=sqlite+aiosqlite:////data/smoke.db \
             -e ADMIN_API_TOKEN=ci-token \
             -e JWT_SECRET=ci-secret-ci-secret-ci-secret \
             -e TG_TOKEN=123456:CITOKEN \
-            -e TG_MODE=webhook \
-            -e TG_WEBHOOK_SECRET=ci-webhook-secret \
+            -e TG_MODE=webhook -e TG_WEBHOOK_SECRET=ci-webhook-secret \
             -e RUN_VK_POLLING=false \
             booking-bot:ci
 
-      - name: Приложение отвечает и открывает публичные страницы
-        run: |
-          for i in $(seq 1 30); do
-            if curl -fsS http://localhost:8000/health > /dev/null; then break; fi
-            sleep 2
-          done
-          health=$(curl -fsS http://localhost:8000/health) || {
-            echo "::error title=Smoke::/health не ответил"
-            docker logs smoke | tail -50
-            exit 1
-          }
-          echo "health: $health"
-          for path in /promo /faq /privacy /reviews; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8000$path")
-            echo "$path -> $code"
-            if [ "$code" != "200" ]; then
-              echo "::error title=Smoke::$path вернул $code"
-              docker logs smoke | tail -50
-              exit 1
-            fi
-          done
+      - name: Lite — /health и публичные страницы
+        run: bash .github/smoke.sh 8000 lite sqlite
 
-      - name: Логи контейнера
+      # ---- Pro / PostgreSQL: тот же start.sh, миграции, edition=pro ----
+      - name: Pro (PostgreSQL) — запуск
+        run: |
+          docker run -d --name smoke_pro -p 8001:8000 \
+            --add-host=host.docker.internal:host-gateway \
+            -e EDITION=pro \
+            -e DATABASE_URL=postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/prod \
+            -e ADMIN_API_TOKEN=ci-token \
+            -e JWT_SECRET=ci-secret-ci-secret-ci-secret \
+            -e BOT_TOKEN_ENC_KEY=ci-bot-key -e BACKUP_ENC_KEY=ci-backup-key \
+            -e TG_TOKEN=123456:CITOKEN \
+            -e TG_MODE=webhook -e TG_WEBHOOK_SECRET=ci-webhook-secret \
+            -e RUN_VK_POLLING=false \
+            booking-bot:ci
+
+      - name: Pro — /health c edition=pro и db=postgres
+        run: bash .github/smoke.sh 8001 pro postgres
+
+      - name: Логи контейнеров
         if: always()
-        run: docker logs smoke | tail -80
+        run: |
+          echo "=== lite ==="; docker logs smoke_lite | tail -60 || true
+          echo "=== pro ===";  docker logs smoke_pro  | tail -60 || true
 
       - name: Остановка
         if: always()
-        run: docker rm -f smoke || true
+        run: docker rm -f smoke_lite smoke_pro || true

@@ -376,7 +376,7 @@ async def btn_my(message: Message) -> None:
             full = await _is_full(svc, training)
             cards.append((training.id, f"{mark}\n\n{card}", full))
     await message.answer("📅 <b>Ваши записи:</b>", parse_mode="HTML")
-    for tid_, text, full in cards:
+    for tid_, text, _full in cards:
         await message.answer(text, reply_markup=_my_kb(tid_),
                              parse_mode="HTML")
 

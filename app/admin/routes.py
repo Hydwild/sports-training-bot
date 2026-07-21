@@ -224,8 +224,9 @@ async def avatar_proxy(platform: str, user_id: int,
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url)
-    except httpx.HTTPError:
-        raise HTTPException(status_code=502, detail="Не удалось получить аватар")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502,
+                            detail="Не удалось получить аватар") from e
     if r.status_code != 200:
         raise HTTPException(status_code=404, detail="Нет аватара")
     media = r.headers.get("content-type", "image/jpeg")
