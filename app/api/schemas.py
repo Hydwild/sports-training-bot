@@ -57,15 +57,11 @@ class MasterCreate(BaseModel):
 
     @field_validator("photo_url")
     @classmethod
-    def _photo_url_must_be_http(cls, v: str | None) -> str | None:
-        """URL фото вставляется в <img src> публичной страницы записи —
-        не даём подсунуть javascript:/data: и т.п."""
-        if v is None or not v.strip():
-            return None
-        v = v.strip()
-        if not (v.startswith("http://") or v.startswith("https://")):
-            raise ValueError("photo_url должен начинаться с http:// или https://")
-        return v
+    def _photo_url_https_and_public(cls, v: str | None) -> str | None:
+        """URL фото попадает в <img src> публичной страницы: только https
+        и не локальный/внутренний хост — см. app/core/image_url.py."""
+        from app.core.image_url import validate_image_url
+        return validate_image_url(v)
 
 
 class MasterOut(BaseModel):

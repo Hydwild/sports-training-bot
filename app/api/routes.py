@@ -791,10 +791,11 @@ async def public_club(tenant_id: int, rated: str = "",
 
     # ─── витрина клуба: обложка, описание, адрес/телефон, мастера ───
     cover_html = ""
-    if tenant.cover_url and tenant.cover_url.startswith(("http://", "https://")):
+    if tenant.cover_url and tenant.cover_url.startswith("https://"):
+        # referrerpolicy: адрес страницы клуба не уходит на чужой хост фото
         cover_html = (f'<div class="cover"><img '
                       f'src="{_h.escape(tenant.cover_url, quote=True)}" '
-                      f'alt=""></div>')
+                      f'alt="" loading="lazy" referrerpolicy="no-referrer"></div>')
     profile_parts = []
     if tenant.about:
         profile_parts.append(
@@ -819,7 +820,7 @@ async def public_club(tenant_id: int, rated: str = "",
         for m in strip_masters[:12]:
             if m.photo_url:
                 av = (f'<img src="{_h.escape(m.photo_url, quote=True)}" '
-                      f'alt="" loading="lazy">')
+                      f'alt="" loading="lazy" referrerpolicy="no-referrer">')
             else:
                 av = f'<span class="mi">{_h.escape(m.name[:1].upper())}</span>'
             spec = (f'<span>{_h.escape(m.specialty)}</span>'
@@ -884,7 +885,7 @@ async def public_club(tenant_id: int, rated: str = "",
         if m:
             if m.photo_url:
                 avatar = (f'<img src="{_h.escape(m.photo_url, quote=True)}" '
-                          f'alt="" loading="lazy">')
+                          f'alt="" loading="lazy" referrerpolicy="no-referrer">')
             else:
                 avatar = f'<span class="mi">{_h.escape(m.name[:1].upper())}</span>'
             spec = (f'<span>{_h.escape(m.specialty)}</span>'
@@ -961,7 +962,7 @@ async def public_club(tenant_id: int, rated: str = "",
         for m in strip_masters:
             if m.photo_url:
                 av = (f'<img src="{_h.escape(m.photo_url, quote=True)}" '
-                      f'alt="" loading="lazy">')
+                      f'alt="" loading="lazy" referrerpolicy="no-referrer">')
             else:
                 av = f'<span class="mi">{_h.escape(m.name[:1].upper())}</span>'
             spec = (f'<span>{_h.escape(m.specialty)}</span>'

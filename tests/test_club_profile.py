@@ -66,16 +66,27 @@ def test_profile_absent_when_fields_empty():
         assert 'class="biz-info"' not in page
 
 
-def test_cover_url_must_be_http():
+def test_cover_url_must_be_https_and_public():
     with TestClient(app) as c:
         tid = c.post("/api/tenants", json={"name": "Клуб XSS"},
                      headers=H).json()["id"]
         _op_login(c)
+        # опасная схема отвергается
         r = _edit_form(c, tid, club_name="Клуб XSS",
                        cover_url="javascript:alert(1)")
         assert r.status_code == 400
-        assert "http(s)-ссылкой" in r.text
+        assert "Фото-обложка" in r.text
         assert "javascript:alert" not in c.get(f"/club/{tid}").text
+        # plain http тоже (mixed content, перехват)
+        assert _edit_form(c, tid, club_name="Клуб XSS",
+                          cover_url="http://example.com/c.jpg").status_code == 400
+        # локальный адрес — тоже
+        assert _edit_form(c, tid, club_name="Клуб XSS",
+                          cover_url="https://127.0.0.1/c.jpg").status_code == 400
+        # нормальный https проходит
+        ok = _edit_form(c, tid, club_name="Клуб XSS",
+                        cover_url="https://cdn.example.com/c.jpg")
+        assert ok.status_code == 200
 
 
 def _mk_training(c, tid, title="Слот", days=2, maxp=1, **extra):

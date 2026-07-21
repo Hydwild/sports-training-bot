@@ -452,15 +452,16 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     tenant.vertical = vertical if vertical in VERTICALS else "sport"
     # витрина: обложка попадает в <img src> публичной страницы —
     # принимаем только http(s), иначе показываем ошибку
-    cover_url = cover_url.strip()
-    if cover_url and not cover_url.startswith(("http://", "https://")):
+    from app.core.image_url import validate_image_url
+    try:
+        tenant.cover_url = validate_image_url(cover_url)
+    except ValueError as e:
         return templates.TemplateResponse(request, "platform_edit.html",
             _ctx(request, t=tenant, saved=False,
                  tg_state=bot_tokens.mask(tenant, "tg"),
                  vk_state=bot_tokens.mask(tenant, "vk"),
-                 error="Фото-обложка должна быть http(s)-ссылкой на картинку"),
+                 error=f"Фото-обложка: {e}"),
             status_code=400)
-    tenant.cover_url = cover_url[:500] or None
     tenant.about = about.strip()[:2000] or None
     tenant.address = address.strip()[:300] or None
     tenant.contact_phone = contact_phone.strip()[:32] or None
