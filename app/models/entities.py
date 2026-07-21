@@ -370,6 +370,27 @@ class MasterReview(Base):
         DateTime(timezone=True), default=_utcnow)
 
 
+class ManageToken(Base):
+    """Персональная ссылка управления своими записями (веб-запись).
+
+    Сам токен случайный и нигде не хранится — в базе только его SHA-256.
+    Утечка дампа не даёт доступа к чужим записям, а при удалении данных
+    ссылку можно отозвать (revoked), чего нельзя сделать с выводимой из
+    телефона HMAC-подписью."""
+    __tablename__ = "manage_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    platform: Mapped[str] = mapped_column(String(8), default="web")
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)
+
+
 class Review(Base):
     """Отзыв о сервисе (не о конкретном клубе) — публикуется на /reviews
     только после ручного одобрения оператором площадки (защита от спама и

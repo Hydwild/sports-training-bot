@@ -1083,9 +1083,14 @@ async def public_signup(tenant_id: int,
     cancel_link = ""
     if res.result in ("active", "queue"):
         token = _cancel_token(tenant_id, training_id, uid)
+        manage = await _issue_manage_link(svc, tenant_id, uid)
+        await session.commit()
         cancel_link = (
             f'<a href="/club/{tenant_id}/cancel'
-            f'?t={training_id}&u={uid}&s={token}">Отменить эту запись</a><br>')
+            f'?t={training_id}&u={uid}&s={token}">Отменить эту запись</a><br>'
+            # личная ссылка: по ней видны все свои записи, выгрузка и
+            # удаление данных — без ввода телефона
+            f'<a href="{manage}">Мои записи и данные</a><br>')
     body = (f'<div class="card"><div class="ok-icon">{icon}</div>'
             f'<p class="ok">{msg}</p>'
             f'<div class="links">{cancel_link}<a href="/club/{tenant_id}">'
@@ -1161,6 +1166,26 @@ def _cancel_token(tenant_id: int, training_id: int, uid: int) -> str:
     msg = f"{tenant_id}:{training_id}:{uid}".encode()
     return _hmac.new(settings.jwt_secret.encode(), msg,
                      hashlib.sha256).hexdigest()[:32]
+
+
+def _new_manage_token() -> tuple[str, str]:
+    """(сам токен для ссылки, его SHA-256 для базы). Токен случайный: из
+    базы его восстановить нельзя, а при удалении данных — отзывается."""
+    import hashlib
+    import secrets
+    token = secrets.token_urlsafe(24)
+    return token, hashlib.sha256(token.encode()).hexdigest()
+
+
+def _manage_hash(token: str) -> str:
+    import hashlib
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+async def _issue_manage_link(svc, tenant_id: int, uid: int) -> str:
+    token, token_hash = _new_manage_token()
+    await svc.repo.issue_manage_token("web", uid, token_hash)
+    return f"/club/{tenant_id}/m/{token}"
 
 
 @public_router.get("/club/{tenant_id}/cancel", response_class=HTMLResponse)
@@ -1240,6 +1265,139 @@ async def club_qr(tenant_id: int, request: Request,
     return StreamingResponse(buf, media_type="image/png")
 
 
+async def _manage_owner(session, tenant_id: int, token: str):
+    """(tenant, svc, uid) по ссылке управления или 404. Неверный токен и
+    несуществующий клуб отвечают одинаково — по ответу нельзя перебирать
+    действующие ссылки."""
+    tenant = await _ensure_tenant(session, tenant_id)
+    svc = BookingService(session, tenant_id, tz=tenant.timezone)
+    row = await svc.repo.resolve_manage_token(_manage_hash(token))
+    if row is None:
+        raise HTTPException(status_code=404,
+                            detail="Ссылка недействительна или устарела")
+    return tenant, svc, row.user_id
+
+
+def _manage_page(tenant, tenant_id: int, token: str, rows, svc,
+                 notice: str = "") -> str:
+    import html as _h
+    parts = []
+    if notice:
+        parts.append(f'<div class="card note">{_h.escape(notice)}</div>')
+    if not rows:
+        parts.append('<div class="card note">Активных записей нет.</div>')
+    for t, status, position in rows:
+        chip = ('<span class="chip">записаны</span>' if status == "active"
+                else f'<span class="chip q">в очереди №{position}</span>')
+        parts.append(
+            f'<div class="card">'
+            f'<div class="head"><div class="t">{_h.escape(t.title)}</div>'
+            f'{chip}</div>'
+            f'<div class="m">{_I_CAL} {svc.format_local(t.start_at)}</div>'
+            f'<form method="post" action="/club/{tenant_id}/m/{token}/cancel">'
+            f'<input type="hidden" name="training_id" value="{t.id}">'
+            f'<button class="danger-btn">Отменить запись</button></form>'
+            f'</div>')
+    parts.append(
+        f'<div class="card"><div class="t">Мои данные</div>'
+        f'<p class="note">Можно забрать копию всего, что о вас хранится, '
+        f'или удалить это.</p>'
+        f'<div class="links" style="margin-bottom:12px">'
+        f'<a href="/club/{tenant_id}/m/{token}/export">Скачать мои данные</a>'
+        f'</div>'
+        f'<form method="post" action="/club/{tenant_id}/m/{token}/forget">'
+        f'<button class="danger-btn">Удалить мои данные</button></form>'
+        f'<p class="note" style="margin-top:8px">Удаление отменит записи и '
+        f'уберёт имя, телефон и оценки. Эта ссылка перестанет работать.</p>'
+        f'</div>')
+    parts.append(f'<div class="links"><a href="/club/{tenant_id}">'
+                 f'← к списку</a></div>')
+    title = tenant.brand_name or tenant.name
+    return _PAGE.format(cover="", eyebrow=_eyebrow(tenant),
+                        title=_h.escape(title),
+                        color=_safe_color(tenant.brand_color),
+                        body="".join(parts))
+
+
+@public_router.get("/club/{tenant_id}/m/{token}", response_class=HTMLResponse)
+async def public_manage(tenant_id: int, token: str,
+                        session: AsyncSession = Depends(get_session)):
+    """Управление своими записями по персональной ссылке — без ввода
+    телефона, который для чужого списка работал бы как угаданный пароль."""
+    tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+    rows = await svc.my_trainings("web", uid)
+    return _manage_page(tenant, tenant_id, token, rows, svc)
+
+
+@public_router.post("/club/{tenant_id}/m/{token}/cancel",
+                    response_class=HTMLResponse)
+async def public_manage_cancel(tenant_id: int, token: str,
+                               training_id: int = Form(...),
+                               session: AsyncSession = Depends(get_session)):
+    tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+    res = await svc.cancel_signup(training_id, "web", uid)
+    await session.commit()
+    if res.get("cancelled"):
+        await _notify_group_card_changed(tenant_id, training_id)
+    rows = await svc.my_trainings("web", uid)
+    notice = "Запись отменена." if res.get("cancelled") else "Запись не найдена."
+    return _manage_page(tenant, tenant_id, token, rows, svc, notice)
+
+
+@public_router.get("/club/{tenant_id}/m/{token}/export")
+async def public_manage_export(tenant_id: int, token: str,
+                               session: AsyncSession = Depends(get_session)):
+    """Выгрузка своих данных — то, что о человеке хранится в этом клубе."""
+    from fastapi.responses import JSONResponse
+    tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+    rows = await svc.my_trainings("web", uid)
+    subs = await svc.repo.aliases_map_all()
+    data = {
+        "клуб": tenant.brand_name or tenant.name,
+        "выгружено": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "подпись_у_администратора": subs.get(("web", uid), ""),
+        "записи": [
+            {"занятие": t.title,
+             "начало": svc.format_local(t.start_at),
+             "статус": status,
+             "место_в_очереди": position}
+            for t, status, position in rows
+        ],
+    }
+    return JSONResponse(
+        data,
+        headers={"Content-Disposition":
+                 f'attachment; filename="my-data-club-{tenant_id}.json"'},
+        media_type="application/json; charset=utf-8")
+
+
+@public_router.post("/club/{tenant_id}/m/{token}/forget",
+                    response_class=HTMLResponse)
+async def public_manage_forget(tenant_id: int, token: str,
+                               session: AsyncSession = Depends(get_session)):
+    """Удаление своих данных в этом клубе."""
+    import html as _h
+    tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+    rows = await svc.my_trainings("web", uid)
+    affected = [t.id for t, _s, _p in rows]
+    removed = await svc.repo.forget_user("web", uid)
+    await session.commit()
+    for tr_id in affected:
+        await _notify_group_card_changed(tenant_id, tr_id)
+    body = (f'<div class="card"><div class="ok-icon">{_I_CHECK}</div>'
+            f'<p class="ok">Данные удалены.</p>'
+            f'<p class="note">Записей: {removed.get("signups", 0)}, '
+            f'оценок: {removed.get("master_reviews", 0)}, '
+            f'профиль с телефоном: {removed.get("subscribers", 0)}. '
+            f'Ссылка управления больше не работает.</p>'
+            f'<div class="links"><a href="/club/{tenant_id}">'
+            f'← к списку занятий</a></div></div>')
+    title = tenant.brand_name or tenant.name
+    return _PAGE.format(cover="", eyebrow=_eyebrow(tenant),
+                        title=_h.escape(title),
+                        color=_safe_color(tenant.brand_color), body=body)
+
+
 @public_router.post("/club/{tenant_id}/my", response_class=HTMLResponse)
 async def public_my(tenant_id: int,
                     request: Request,
@@ -1289,6 +1447,14 @@ async def public_my(tenant_id: int,
                 f'<div class="links" style="text-align:left;margin-top:12px">'
                 f'<a href="/club/{tenant_id}/cancel?t={t.id}&u={uid}'
                 f'&s={token}" class="danger">Отменить запись</a></div></div>')
+        manage = await _issue_manage_link(svc, tenant_id, uid)
+        await session.commit()
+        items.append(
+            f'<div class="card"><div class="t">Личная ссылка</div>'
+            f'<p class="note">Сохраните её — по ней видны все ваши записи, '
+            f'выгрузка и удаление данных, без ввода телефона.</p>'
+            f'<div class="links"><a href="{manage}">Открыть мои записи</a>'
+            f'</div></div>')
         items.append(f'<div class="links">'
                      f'<a href="/club/{tenant_id}">← к списку</a></div>')
         body = "".join(items)

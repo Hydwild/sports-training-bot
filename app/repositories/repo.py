@@ -13,6 +13,7 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import (
+    ManageToken,
     Master,
     MasterReview,
     Membership,
@@ -440,6 +441,58 @@ class TenantRepository:
         отображения у существующих слотов)."""
         stmt = select(Master).where(Master.tenant_id == self.tenant_id)
         return {m.id: m for m in (await self.session.execute(stmt)).scalars()}
+
+    # ---------- Персональные ссылки управления ----------
+
+    async def issue_manage_token(self, platform: str, user_id: int,
+                                 token_hash: str, days: int = 90) -> ManageToken:
+        """Регистрирует новую ссылку управления. Сам токен сюда не попадает
+        — только его SHA-256: из базы восстановить ссылку нельзя."""
+        t = ManageToken(
+            tenant_id=self.tenant_id, platform=platform, user_id=user_id,
+            token_hash=token_hash,
+            expires_at=_utcnow() + dt.timedelta(days=days))
+        self.session.add(t)
+        await self.session.flush()
+        return t
+
+    async def resolve_manage_token(self, token_hash: str) -> ManageToken | None:
+        """Действующая (не отозванная, не истёкшая) ссылка или None."""
+        stmt = select(ManageToken).where(
+            ManageToken.tenant_id == self.tenant_id,
+            ManageToken.token_hash == token_hash,
+            ManageToken.revoked.is_(False),
+            ManageToken.expires_at > _utcnow())
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def revoke_manage_tokens(self, platform: str, user_id: int) -> None:
+        await self.session.execute(
+            update(ManageToken)
+            .where(ManageToken.tenant_id == self.tenant_id,
+                   ManageToken.platform == platform,
+                   ManageToken.user_id == user_id)
+            .values(revoked=True)
+            .execution_options(synchronize_session=False))
+
+    async def forget_user(self, platform: str, user_id: int) -> dict[str, int]:
+        """Удаляет персональные данные человека в этом клубе: записи,
+        профиль с телефоном в подписи, оценки мастеров, ссылки управления.
+
+        Возвращает, что именно удалено — человеку показываем результат, а не
+        «готово» вслепую."""
+        from sqlalchemy import delete
+
+        removed = {}
+        for model in (Signup, MasterReview, Subscriber):
+            res = await self.session.execute(
+                delete(model).where(model.tenant_id == self.tenant_id,
+                                    model.user_id == user_id,
+                                    *([model.platform == platform]
+                                      if hasattr(model, "platform") else [])))
+            removed[model.__tablename__] = res.rowcount or 0
+        await self.revoke_manage_tokens(platform, user_id)
+        await self.session.flush()
+        return removed
 
     # ---------- Рейтинг мастеров ----------
 
