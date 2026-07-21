@@ -15,15 +15,19 @@ H = {"x-admin-token": "tok"}
 
 @pytest.fixture(autouse=True)
 def _clear_rate_limit():
-    from app.api import routes as api_routes
-    api_routes._ip_hits.clear()
+    from app.api import rate_limit
+    rate_limit._memory.clear()
     yield
-    api_routes._ip_hits.clear()
+    rate_limit._memory.clear()
 
 
 # ---------- 1. IP за прокси ----------
 
-def test_client_ip_prefers_forwarded_header():
+def test_client_ip_ignores_client_supplied_headers():
+    """Регресс: раньше X-Forwarded-For разбирался в обработчике, и любой
+    клиент присылал свой адрес сам — новая «личность» на каждый запрос,
+    лимит обходился одной строкой. Доверие к заголовку теперь настраивается
+    при запуске (uvicorn --forwarded-allow-ips), а не в коде."""
     from app.api.routes import client_ip
 
     class _Req:
@@ -31,19 +35,31 @@ def test_client_ip_prefers_forwarded_header():
             self.headers = headers
             self.client = type("C", (), {"host": host})()
 
-    # цепочка прокси: берём первый (реальный клиент)
-    assert client_ip(_Req({"x-forwarded-for": "203.0.113.7, 10.0.0.5"})) == "203.0.113.7"
-    assert client_ip(_Req({"x-real-ip": "203.0.113.9"})) == "203.0.113.9"
-    # без заголовков — обычный адрес соединения (локальный запуск)
+    assert client_ip(_Req({"x-forwarded-for": "203.0.113.7"})) == "10.0.0.1"
+    assert client_ip(_Req({"x-real-ip": "203.0.113.9"})) == "10.0.0.1"
     assert client_ip(_Req({})) == "10.0.0.1"
 
 
-def test_rate_limit_is_per_client_behind_proxy():
-    """Ключевой регресс: разные клиенты за одним прокси не должны
-    расходовать общий лимит. Раньше шестая запись за минуту падала с 429
-    независимо от того, кто её делает."""
+def test_client_ip_normalizes_and_bounds_value():
+    from app.api.routes import client_ip
+
+    class _Req:
+        def __init__(self, host):
+            self.headers = {}
+            self.client = type("C", (), {"host": host})()
+
+    # IPv6 приводится к канонической записи
+    assert client_ip(_Req("2001:0db8:0000:0000:0000:0000:0000:0001")) == "2001:db8::1"
+    # мусор не роняет и не растёт бесконтрольно
+    assert client_ip(_Req("x" * 500))[:10] == "xxxxxxxxxx"
+    assert len(client_ip(_Req("x" * 500))) <= 45
+    assert client_ip(_Req("")) == "?"
+
+
+def test_spoofed_header_cannot_reset_the_limit():
+    """Смена X-Forwarded-For больше не даёт новый лимит."""
     with TestClient(app) as c:
-        tid = c.post("/api/tenants", json={"name": "Клуб Прокси"},
+        tid = c.post("/api/tenants", json={"name": "Клуб Подделок"},
                      headers=H).json()["id"]
         import datetime as dt
         start = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=3)).isoformat()
@@ -51,41 +67,36 @@ def test_rate_limit_is_per_client_behind_proxy():
             "title": "Игра", "start_at": start, "max_participants": 50,
         }).json()["id"]
 
-        # один клиент исчерпывает свой лимит
-        codes_first = []
-        for i in range(7):
+        codes = []
+        for i in range(8):
             r = c.post(f"/club/{tid}/signup",
-                       headers={"x-forwarded-for": "203.0.113.10"},
+                       # каждый раз новый «адрес» — раньше это сбрасывало счёт
+                       headers={"x-forwarded-for": f"203.0.113.{i}"},
                        data={"consent": "1", "training_id": tr, "name": f"A{i}",
                              "phone": f"7911000{i:04d}"})
-            codes_first.append(r.status_code)
-        assert 429 in codes_first, codes_first
-
-        # другой клиент (другой X-Forwarded-For) записывается нормально
-        r2 = c.post(f"/club/{tid}/signup",
-                    headers={"x-forwarded-for": "203.0.113.20"},
-                    data={"consent": "1", "training_id": tr, "name": "Борис",
-                          "phone": "79115550001"})
-        assert r2.status_code == 200, "лимит утёк на другого клиента"
+            codes.append(r.status_code)
+        assert 429 in codes, codes
 
 
-def test_rate_limit_is_separate_per_club():
-    """Посетители за одним NAT, записывающиеся в РАЗНЫЕ клубы, не должны
-    расходовать общий лимит."""
-    from app.api.routes import _rate_ok
-    for _ in range(5):
-        assert _rate_ok("5.6.7.8", scope="signup", tenant_id=1) is True
-    assert _rate_ok("5.6.7.8", scope="signup", tenant_id=1) is False
-    assert _rate_ok("5.6.7.8", scope="signup", tenant_id=2) is True
+def test_limit_response_tells_when_to_retry():
+    with TestClient(app) as c:
+        tid = c.post("/api/tenants", json={"name": "Клуб Retry"},
+                     headers=H).json()["id"]
+        import datetime as dt
+        start = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=3)).isoformat()
+        tr = c.post(f"/api/tenants/{tid}/trainings", headers=H, json={
+            "title": "Игра", "start_at": start, "max_participants": 50,
+        }).json()["id"]
 
-
-def test_rate_limit_scopes_are_independent():
-    """Всплеск записей не должен закрывать вход в панель оператора."""
-    from app.api.routes import _rate_ok
-    for _ in range(5):
-        assert _rate_ok("1.2.3.4", scope="signup") is True
-    assert _rate_ok("1.2.3.4", scope="signup") is False        # свой лимит исчерпан
-    assert _rate_ok("1.2.3.4", scope="platform-login") is True  # другой не задет
+        last = None
+        for i in range(8):
+            last = c.post(f"/club/{tid}/signup", data={
+                "consent": "1", "training_id": tr, "name": f"B{i}",
+                "phone": f"7911777{i:04d}"})
+            if last.status_code == 429:
+                break
+        assert last.status_code == 429
+        assert int(last.headers["retry-after"]) > 0
 
 
 # ---------- 2. Бэкап ----------

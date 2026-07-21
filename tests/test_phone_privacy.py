@@ -17,10 +17,10 @@ PHONE = "79141234567"
 
 @pytest.fixture(autouse=True)
 def _clear_rate_limit():
-    from app.api import routes as api_routes
-    api_routes._ip_hits.clear()
+    from app.api import rate_limit
+    rate_limit._memory.clear()
     yield
-    api_routes._ip_hits.clear()
+    rate_limit._memory.clear()
 
 
 def _signup(c, phone=PHONE, name="Анна"):

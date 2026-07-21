@@ -379,57 +379,63 @@ def _phone_uid(digits: str) -> int:
 
 
 def client_ip(request: Request) -> str:
-    """Реальный IP клиента за обратным прокси (Railway, Cloudflare и т.п.).
+    """Адрес клиента для лимитов.
 
-    Критично для лимитов: request.client.host за прокси — это адрес самого
-    прокси, ОДИНАКОВЫЙ для всех посетителей. С ним лимит «5 в минуту»
-    становится общим на весь сайт: шестой человек за минуту получал 429,
-    и любой мог заблокировать запись всем, отправив 5 запросов.
+    Разбирать X-Forwarded-For здесь мы больше НЕ будем. Заголовок ставит
+    кто угодно: клиент, обратившийся к приложению напрямую, присылал
+    `X-Forwarded-For: любой.адрес` и получал новую «личность» на каждый
+    запрос — лимит обходился одной строкой.
 
-    Берём первый адрес из X-Forwarded-For (его ставит прокси; клиентский
-    заголовок прокси перезаписывает). Если заголовка нет — обычный
-    request.client.host, как при локальном запуске.
+    Доверие к заголовку — вопрос развёртывания, а не обработчика: uvicorn
+    запускается с --proxy-headers и --forwarded-allow-ips (см. start.sh и
+    TRUSTED_PROXIES) и сам подставляет реальный адрес в client.host. Если
+    прокси доверенным не объявлен, здесь окажется адрес прокси: лимит
+    станет строже, но обойти его нельзя.
+
+    Значение проверяем через ipaddress — в client.host бывает и IPv6, и
+    мусор, а ключ лимита не должен расти бесконтрольно.
     """
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        first = fwd.split(",")[0].strip()
-        if first:
-            return first
-    real = request.headers.get("x-real-ip", "").strip()
-    if real:
-        return real
-    return request.client.host if request.client else "?"
+    import ipaddress
+
+    raw = ((request.client.host if request.client else "") or "").strip()[:64]
+    if not raw:
+        return "?"
+    try:
+        return ipaddress.ip_address(raw).compressed
+    except ValueError:
+        return raw[:45]      # не адрес (тестовый клиент, unix-сокет)
+
+
+async def _rate_guard(session, ip: str, *, scope: str,
+                      tenant_id: int | None = None,
+                      limit: int = 5, window: int = 60) -> None:
+    """Проверка лимита для публичных форм. Отказ — 429 с Retry-After:
+    клиент должен знать, когда повторять, а не долбиться вслепую.
+
+    Счётчик общий на все процессы приложения (PostgreSQL); на SQLite
+    остаётся счётчик в памяти — см. app/api/rate_limit.py."""
+    from app.api import rate_limit
+
+    ok, retry = await rate_limit.allow(
+        session, scope=scope, tenant_id=tenant_id, client=ip,
+        limit=limit, window=window)
+    if not ok:
+        raise HTTPException(
+            status_code=429,
+            detail="Слишком много запросов, попробуйте позже",
+            headers={"Retry-After": str(retry)})
 
 
 def _rate_ok(ip: str, limit: int = 5, window: int = 60,
              scope: str = "default", tenant_id: int | None = None) -> bool:
-    """Лимит по (scope, клуб, ip).
+    """Синхронная проверка для мест без сессии БД (вход в панель
+    оператора). Счёт в памяти процесса: вход не публичная форма и не
+    размазан по клубам, общий счётчик ради него не нужен."""
+    from app.api import rate_limit
 
-    scope разделяет формы: всплеск записей на страницу клуба не должен
-    закрывать вход в панель оператора и наоборот. tenant_id разделяет
-    клубы: соседи по офису или посетители за одним корпоративным NAT,
-    записывающиеся в РАЗНЫЕ клубы, не должны мешать друг другу.
-
-    Счётчик живёт в памяти процесса: при нескольких экземплярах приложения
-    лимит станет мягче в число экземпляров. Сейчас экземпляр один; если их
-    станет больше — счётчик надо выносить в общее хранилище."""
-    import time
-    now = time.time()
-    key = f"{scope}|{tenant_id or '-'}|{ip}"
-    hits = [t for t in _ip_hits.get(key, []) if now - t < window]
-    if len(hits) >= limit:
-        _ip_hits[key] = hits
-        return False
-    hits.append(now)
-    _ip_hits[key] = hits
-    # чистим ТОЛЬКО «протухшие» ключи (без активных попыток), чтобы поток
-    # запросов с чужих адресов не сбрасывал лимит всем сразу.
-    if len(_ip_hits) > 5000:
-        stale = [k for k, v in _ip_hits.items()
-                 if not any(now - t < window for t in v)]
-        for k in stale:
-            del _ip_hits[k]
-    return True
+    ok, _retry = rate_limit.check_memory(
+        rate_limit.bucket_key(scope, tenant_id, ip), limit, window)
+    return ok
 
 import datetime as _dt
 
@@ -1071,10 +1077,8 @@ async def public_signup(tenant_id: int,
     if not consent.strip():
         from app.api.public_style import CONSENT_ERROR
         raise HTTPException(status_code=400, detail=CONSENT_ERROR)
-    ip = client_ip(request)
-    if not _rate_ok(ip, scope="signup", tenant_id=tenant_id):
-        raise HTTPException(status_code=429,
-                            detail="Слишком много запросов, попробуйте через минуту")
+    await _rate_guard(session, client_ip(request), scope="signup",
+                      tenant_id=tenant_id)
     tenant = await _ensure_tenant(session, tenant_id)
     if not tenant.is_active:
         raise HTTPException(status_code=404, detail="Клуб не найден")
@@ -1170,10 +1174,8 @@ async def public_rate_master(tenant_id: int,
     if not consent.strip():
         from app.api.public_style import CONSENT_ERROR
         raise HTTPException(status_code=400, detail=CONSENT_ERROR)
-    ip = client_ip(request)
-    if not _rate_ok(ip, scope="rate", tenant_id=tenant_id):
-        raise HTTPException(status_code=429,
-                            detail="Слишком много запросов, попробуйте через минуту")
+    await _rate_guard(session, client_ip(request), scope="rate",
+                      tenant_id=tenant_id)
     tenant = await _ensure_tenant(session, tenant_id)
     if not tenant.is_active:
         raise HTTPException(status_code=404, detail="Клуб не найден")
@@ -1568,10 +1570,8 @@ async def public_my(tenant_id: int,
     получали 404 и человек видел объяснение, что делать дальше.
     """
     import html as _h
-    ip = client_ip(request)
-    if not _rate_ok(ip, scope="my", tenant_id=tenant_id):
-        raise HTTPException(status_code=429,
-                            detail="Слишком много запросов, попробуйте через минуту")
+    await _rate_guard(session, client_ip(request), scope="my",
+                      tenant_id=tenant_id)
     tenant = await _ensure_tenant(session, tenant_id)
     title = tenant.brand_name or tenant.name
     return _PAGE.format(cover="", eyebrow=_eyebrow(tenant), title=_h.escape(title),
@@ -1649,10 +1649,14 @@ async def reviews_submit(request: Request,
         # чтобы не подсказывать боту, что его вычислили
         return RedirectResponse(url="/reviews?sent=1", status_code=303)
 
-    if not _rate_ok(ip, scope="site-review"):
+    from app.api import rate_limit
+    ok, retry = await rate_limit.allow(session, scope="site-review",
+                                       tenant_id=None, client=ip)
+    if not ok:
         reviews = await g.list_approved_reviews()
         return render_reviews_page(
-            reviews, notice="Слишком много попыток, попробуйте через минуту.",
+            reviews,
+            notice=f"Слишком много попыток, попробуйте через {retry} с.",
             notice_kind="err")
 
     if not consent.strip():

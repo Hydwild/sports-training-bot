@@ -18,10 +18,10 @@ def _clear_login_rate_limit():
     """Rate-limit на /admin/platform/login общий на весь процесс (по IP);
     в этом файле много тестов логинятся с одного и того же тестового IP —
     без сброса они бы упирались в лимит друг друга."""
-    from app.api import routes as api_routes
-    api_routes._ip_hits.clear()
+    from app.api import rate_limit
+    rate_limit._memory.clear()
     yield
-    api_routes._ip_hits.clear()
+    rate_limit._memory.clear()
 
 
 def _csrf(html: str) -> str:
@@ -330,14 +330,14 @@ def test_platform_builder_without_csrf_rejected():
 
 
 def test_rate_limit_on_login_attempts():
-    from app.api import routes as api_routes
-    api_routes._ip_hits.clear()
+    from app.api import rate_limit
+    rate_limit._memory.clear()
     with TestClient(app) as c:
         codes = [c.post("/admin/platform/login", data={"token": "wrong"},
                         follow_redirects=False).status_code
                 for _ in range(7)]
         assert codes.count(429) >= 1, codes
-    api_routes._ip_hits.clear()
+    rate_limit._memory.clear()
 
 
 # ---------- Тоггл "демо-клуб" в формах создания/редактирования ----------

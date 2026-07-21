@@ -29,4 +29,11 @@ if [ -f /code/seed.db ] && [ ! -f /data/badminton.db ]; then
   echo "Стартовые данные клуба скопированы в /data/badminton.db"
 fi
 
+# Доверие к X-Forwarded-For настраивается ЗДЕСЬ, а не в коде приложения:
+# заголовок ставит кто угодно, и разбирать его в обработчике означало бы
+# позволить любому клиенту менять свой адрес на каждый запрос.
+# TRUSTED_PROXIES пусто -> uvicorn доверяет только локальному адресу.
+if [ -n "$TRUSTED_PROXIES" ]; then
+  exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"        --proxy-headers --forwarded-allow-ips "$TRUSTED_PROXIES"
+fi
 exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"

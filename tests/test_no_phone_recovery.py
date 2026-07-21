@@ -18,10 +18,10 @@ PHONE = "79151112233"
 
 @pytest.fixture(autouse=True)
 def _clear_rate_limit():
-    from app.api import routes as api_routes
-    api_routes._ip_hits.clear()
+    from app.api import rate_limit
+    rate_limit._memory.clear()
     yield
-    api_routes._ip_hits.clear()
+    rate_limit._memory.clear()
 
 
 def _club_with_booking(c):

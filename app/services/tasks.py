@@ -433,6 +433,11 @@ async def _daily_maintenance(last_day: list) -> None:
             | ((Outbox.status == "sent") & (Outbox.created_at < cutoff))))
         await session.commit()
 
+        # отработавшие окна лимита и истёкшие ссылки управления
+        from app.api.rate_limit import purge_old_buckets
+        await purge_old_buckets(session)
+        await session.commit()
+
         from app.repositories.repo import GlobalRepository
         dead_count = await GlobalRepository(session).count_dead_outbox()
 

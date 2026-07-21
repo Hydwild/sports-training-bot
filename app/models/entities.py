@@ -383,6 +383,29 @@ class MasterReview(Base):
         DateTime(timezone=True), default=_utcnow)
 
 
+class RateBucket(Base):
+    """Счётчик частоты запросов, общий для всех процессов приложения.
+
+    Пока экземпляр один, хватало и словаря в памяти. Но при двух и более
+    процессах лимит множится на их число, а после перезапуска обнуляется —
+    то есть перестаёт быть лимитом. Здесь одна строка на (ключ, окно), и
+    инкремент атомарен: INSERT ... ON CONFLICT DO UPDATE ... RETURNING.
+
+    На SQLite (редакция Lite, локальная отладка) используется прежний
+    счётчик в памяти — см. app/api/rate_limit.py."""
+    __tablename__ = "rate_buckets"
+    __table_args__ = (
+        UniqueConstraint("bucket_key", "window_start", name="uq_rate_bucket"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # scope|tenant|клиент — собирается в rate_limit.bucket_key()
+    bucket_key: Mapped[str] = mapped_column(String(200), index=True)
+    # начало окна в секундах эпохи: окна не «скользят», а нарезаны по сетке
+    window_start: Mapped[int] = mapped_column(BigInteger, index=True)
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class ConsentEvent(Base):
     """Факт согласия на обработку данных — append-only журнал.
 

@@ -15,10 +15,10 @@ H = {"x-admin-token": "tok"}
 
 @pytest.fixture(autouse=True)
 def _clear_rate_limit():
-    from app.api import routes as api_routes
-    api_routes._ip_hits.clear()
+    from app.api import rate_limit
+    rate_limit._memory.clear()
     yield
-    api_routes._ip_hits.clear()
+    rate_limit._memory.clear()
 
 
 def _mk_training(c, tid, title="Игра", days=10, maxp=2):
@@ -85,8 +85,8 @@ def test_public_web_flow():
 
 
 def test_public_rate_limit():
-    from app.api import routes as api_routes
-    api_routes._ip_hits.clear()
+    from app.api import rate_limit
+    rate_limit._memory.clear()
     with TestClient(app) as c:
         tid = c.post("/api/tenants", json={"name": "Спам-клуб"},
                      headers=H).json()["id"]
@@ -98,7 +98,7 @@ def test_public_rate_limit():
                 "phone": f"7912000{i:04d}"})
             codes.append(r.status_code)
         assert codes.count(429) >= 1, codes  # лишние запросы отбиты
-    api_routes._ip_hits.clear()
+    rate_limit._memory.clear()
 
 
 def test_schedule_autocreate_and_dedup():

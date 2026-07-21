@@ -18,10 +18,10 @@ H = {"x-admin-token": "tok"}
 
 @pytest.fixture(autouse=True)
 def _clear_rate_limit():
-    from app.api import routes as api_routes
-    api_routes._ip_hits.clear()
+    from app.api import rate_limit
+    rate_limit._memory.clear()
     yield
-    api_routes._ip_hits.clear()
+    rate_limit._memory.clear()
 
 
 def _mk_training(c, tid, title="Слот", days=3, hour_shift=0, maxp=2, **extra):
