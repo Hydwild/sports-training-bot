@@ -106,3 +106,58 @@ jobs:
         run: |
           alembic downgrade base
           alembic upgrade head
+
+  image:
+    name: Образ и smoke-тест
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # Собираем ровно тот образ, который поедет на Railway: сломанный
+      # Dockerfile или отсутствующий системный пакет иначе всплывают уже
+      # на проде (так однажды и случилось с pg_dump).
+      - name: Сборка образа
+        run: docker build -t booking-bot:ci .
+
+      - name: Запуск контейнера
+        run: |
+          docker run -d --name smoke -p 8000:8000 \
+            -e EDITION=lite \
+            -e DATABASE_URL=sqlite+aiosqlite:////data/smoke.db \
+            -e ADMIN_API_TOKEN=ci-token \
+            -e JWT_SECRET=ci-secret-ci-secret-ci-secret \
+            -e TG_TOKEN=123456:CITOKEN \
+            -e TG_MODE=webhook \
+            -e RUN_VK_POLLING=false \
+            booking-bot:ci
+
+      - name: Приложение отвечает и открывает публичные страницы
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health > /dev/null; then break; fi
+            sleep 2
+          done
+          health=$(curl -fsS http://localhost:8000/health) || {
+            echo "::error title=Smoke::/health не ответил"
+            docker logs smoke | tail -50
+            exit 1
+          }
+          echo "health: $health"
+          for path in /promo /faq /privacy /reviews; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8000$path")
+            echo "$path -> $code"
+            if [ "$code" != "200" ]; then
+              echo "::error title=Smoke::$path вернул $code"
+              docker logs smoke | tail -50
+              exit 1
+            fi
+          done
+
+      - name: Логи контейнера
+        if: always()
+        run: docker logs smoke | tail -80
+
+      - name: Остановка
+        if: always()
+        run: docker rm -f smoke || true
