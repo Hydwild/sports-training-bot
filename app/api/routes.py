@@ -396,12 +396,20 @@ def client_ip(request: Request) -> str:
 
 
 def _rate_ok(ip: str, limit: int = 5, window: int = 60,
-             scope: str = "default") -> bool:
-    """Лимит по (scope, ip). scope разделяет формы: всплеск записей на
-    страницу клуба не должен закрывать вход в панель оператора и наоборот."""
+             scope: str = "default", tenant_id: int | None = None) -> bool:
+    """Лимит по (scope, клуб, ip).
+
+    scope разделяет формы: всплеск записей на страницу клуба не должен
+    закрывать вход в панель оператора и наоборот. tenant_id разделяет
+    клубы: соседи по офису или посетители за одним корпоративным NAT,
+    записывающиеся в РАЗНЫЕ клубы, не должны мешать друг другу.
+
+    Счётчик живёт в памяти процесса: при нескольких экземплярах приложения
+    лимит станет мягче в число экземпляров. Сейчас экземпляр один; если их
+    станет больше — счётчик надо выносить в общее хранилище."""
     import time
     now = time.time()
-    key = f"{scope}|{ip}"
+    key = f"{scope}|{tenant_id or '-'}|{ip}"
     hits = [t for t in _ip_hits.get(key, []) if now - t < window]
     if len(hits) >= limit:
         _ip_hits[key] = hits
@@ -1048,7 +1056,7 @@ async def public_signup(tenant_id: int,
         from app.api.public_style import CONSENT_ERROR
         raise HTTPException(status_code=400, detail=CONSENT_ERROR)
     ip = client_ip(request)
-    if not _rate_ok(ip, scope="signup"):
+    if not _rate_ok(ip, scope="signup", tenant_id=tenant_id):
         raise HTTPException(status_code=429,
                             detail="Слишком много запросов, попробуйте через минуту")
     tenant = await _ensure_tenant(session, tenant_id)
@@ -1130,7 +1138,7 @@ async def public_rate_master(tenant_id: int,
         from app.api.public_style import CONSENT_ERROR
         raise HTTPException(status_code=400, detail=CONSENT_ERROR)
     ip = client_ip(request)
-    if not _rate_ok(ip, scope="rate"):
+    if not _rate_ok(ip, scope="rate", tenant_id=tenant_id):
         raise HTTPException(status_code=429,
                             detail="Слишком много запросов, попробуйте через минуту")
     tenant = await _ensure_tenant(session, tenant_id)
@@ -1411,7 +1419,7 @@ async def public_my(tenant_id: int,
     """
     import html as _h
     ip = client_ip(request)
-    if not _rate_ok(ip, scope="my"):
+    if not _rate_ok(ip, scope="my", tenant_id=tenant_id):
         raise HTTPException(status_code=429,
                             detail="Слишком много запросов, попробуйте через минуту")
     tenant = await _ensure_tenant(session, tenant_id)

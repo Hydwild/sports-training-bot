@@ -69,6 +69,16 @@ def test_rate_limit_is_per_client_behind_proxy():
         assert r2.status_code == 200, "лимит утёк на другого клиента"
 
 
+def test_rate_limit_is_separate_per_club():
+    """Посетители за одним NAT, записывающиеся в РАЗНЫЕ клубы, не должны
+    расходовать общий лимит."""
+    from app.api.routes import _rate_ok
+    for _ in range(5):
+        assert _rate_ok("5.6.7.8", scope="signup", tenant_id=1) is True
+    assert _rate_ok("5.6.7.8", scope="signup", tenant_id=1) is False
+    assert _rate_ok("5.6.7.8", scope="signup", tenant_id=2) is True
+
+
 def test_rate_limit_scopes_are_independent():
     """Всплеск записей не должен закрывать вход в панель оператора."""
     from app.api.routes import _rate_ok
