@@ -49,7 +49,9 @@ jobs:
       - name: Тесты
         run: |
           set +e
-          pytest -q > tests.log 2>&1
+          # именно `python -m`: так корень проекта попадает в sys.path и
+          # conftest.py находит пакет app (голый `pytest` этого не делает)
+          python -m pytest -q > tests.log 2>&1
           code=$?
           cat tests.log
           if [ $code -ne 0 ]; then
