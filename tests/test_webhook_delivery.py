@@ -240,6 +240,55 @@ async def test_telegram_mode_registers_webhook_before_saving(
     assert calls[0][1]["secret_token"]
 
 
+async def test_global_telegram_webhook_is_registered_automatically(monkeypatch):
+    from app.bots import telegram
+
+    calls = []
+
+    class FakeBot:
+        async def set_webhook(self, **kwargs):
+            calls.append(("set", kwargs))
+            return True
+
+        async def delete_webhook(self, **kwargs):
+            calls.append(("delete", kwargs))
+            return True
+
+    monkeypatch.setattr(telegram, "_bot", FakeBot())
+    monkeypatch.setattr(telegram.settings, "tg_mode", "webhook")
+    monkeypatch.setattr(telegram.settings, "tg_webhook_secret", "s" * 32)
+    monkeypatch.setattr(
+        telegram.settings, "public_base_url", "https://bot.example.com/",
+    )
+
+    await telegram.configure_global_delivery()
+
+    assert calls == [("set", {
+        "url": "https://bot.example.com/webhook/telegram",
+        "secret_token": "s" * 32,
+        "allowed_updates": ["message", "callback_query"],
+        "drop_pending_updates": False,
+    })]
+
+
+async def test_global_telegram_polling_deletes_webhook(monkeypatch):
+    from app.bots import telegram
+
+    calls = []
+
+    class FakeBot:
+        async def delete_webhook(self, **kwargs):
+            calls.append(kwargs)
+            return True
+
+    monkeypatch.setattr(telegram, "_bot", FakeBot())
+    monkeypatch.setattr(telegram.settings, "tg_mode", "polling")
+
+    await telegram.configure_global_delivery()
+
+    assert calls == [{"drop_pending_updates": False}]
+
+
 async def test_vk_mode_registers_callback_and_persists_group(monkeypatch, maker):
     from app.services import delivery_modes, webhook_security
 
