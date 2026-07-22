@@ -20,10 +20,6 @@ target_metadata = Base.metadata
 
 
 def do_run_migrations(connection) -> None:
-    if connection.dialect.name == "postgresql":
-        # SQLite блокировок уровня строк/таблиц в этом смысле не имеет —
-        # там параметр не поддерживается и не нужен.
-        connection.exec_driver_sql(f"SET lock_timeout = '{lock_timeout()}'")
     context.configure(connection=connection, target_metadata=target_metadata,
                       compare_type=True)
     with context.begin_transaction():
@@ -31,10 +27,26 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
+    kwargs = {}
+    if "asyncpg" in settings.database_url:
+        # lock_timeout задаём ПАРАМЕТРОМ СОЕДИНЕНИЯ, а не отдельным SET
+        # внутри транзакции миграции: лишний запрос в той же транзакции
+        # ломал `alembic check` (проверку схемы на PostgreSQL).
+        #
+        # Ограничивается только ожидание блокировки: ALTER TABLE требует
+        # ACCESS EXCLUSIVE, а во время деплоя старый контейнер ещё держит
+        # запросы к тем же таблицам, и по умолчанию PostgreSQL ждёт
+        # бесконечно — start.sh не доходит до uvicorn, и деплой висит без
+        # единой строки в логах. Длительность самой миграции не ограничена,
+        # долгий бэкфилл не прервётся.
+        kwargs["connect_args"] = {
+            "server_settings": {"lock_timeout": lock_timeout()}
+        }
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        **kwargs,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

@@ -175,7 +175,11 @@ def test_lock_timeout_rejects_injection(monkeypatch, bad):
 
 
 def test_lock_timeout_applied_only_to_postgres():
-    """SQLite такого параметра не знает — там SET выполняться не должен.
+    """SQLite такого параметра не знает — там он не задаётся.
+
+    Задавать его надо ПАРАМЕТРОМ СОЕДИНЕНИЯ, а не отдельным SET внутри
+    транзакции миграции: лишний запрос в той же транзакции ломал
+    `alembic check` на PostgreSQL (CI это и поймал).
 
     env.py читаем как текст: импортировать его нельзя, он на импорте
     немедленно запускает миграции."""
@@ -183,6 +187,9 @@ def test_lock_timeout_applied_only_to_postgres():
 
     src = Path(__file__).resolve().parents[1] / "alembic" / "env.py"
     text = src.read_text(encoding="utf-8")
-    assert 'dialect.name == "postgresql"' in text
-    assert "SET lock_timeout" in text
+    assert '"asyncpg" in settings.database_url' in text
+    assert '"lock_timeout": lock_timeout()' in text
+    assert "server_settings" in text
     assert "from app.db.migration_settings import lock_timeout" in text
+    # регресс: SET внутри транзакции миграции больше не выполняем
+    assert "SET lock_timeout" not in text
