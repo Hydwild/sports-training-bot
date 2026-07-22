@@ -609,3 +609,67 @@ async def platform_restore_drill(request: Request,
         _ctx(request, tenants=rows, backup_msg=msg,
              last_drill=await g.get_state(DRILL_STATE_KEY),
              pending_reviews_count=len(pending)))
+
+
+# ---------- Диагностика памяти ----------
+#
+# Railway тарифицирует СРЕДНЮЮ память, и в проде обнаружился разрыв: импорт
+# кода занимает ~150 МБ, а живой процесс держал 721 МБ при трёх клубах и
+# сотне запросов в день. Гадать, что именно удерживает память, бессмысленно
+# — этот отчёт показывает факты: что за объекты накопились, сколько живёт
+# asyncio-задач и растёт ли RSS со временем.
+#
+# Только для оператора площадки. Ни персональных данных, ни секретов: одни
+# имена типов и счётчики.
+
+_STARTED_AT = dt.datetime.now(dt.timezone.utc)
+
+
+@router.get("/diag")
+async def memory_diagnostics(_auth: None = Depends(require_platform_admin)):
+    """Отчёт о памяти процесса: RSS, время жизни, топ типов объектов,
+    незавершённые asyncio-задачи и статистика сборщика мусора.
+
+    Как читать. Снимите отчёт дважды с интервалом в час:
+      * RSS растёт, растёт и число объектов какого-то типа — утечка,
+        виновник виден в top_objects;
+      * RSS растёт, а объекты нет — фрагментация или буферы библиотек;
+      * RSS стабилен — память выделилась разово при старте.
+    """
+    import asyncio as _aio
+    import gc
+    import sys
+    import threading
+    from collections import Counter
+
+    from app.main import _rss_mb
+
+    counts: Counter = Counter()
+    for obj in gc.get_objects():
+        counts[type(obj).__name__] += 1
+
+    try:
+        tasks = _aio.all_tasks()
+        task_names = Counter(t.get_coro().__qualname__ for t in tasks
+                             if t.get_coro() is not None)
+    except (RuntimeError, AttributeError):
+        tasks, task_names = (), Counter()
+
+    uptime_min = round(
+        (dt.datetime.now(dt.timezone.utc) - _STARTED_AT).total_seconds() / 60, 1)
+
+    return {
+        "rss_mb": _rss_mb(),
+        "uptime_min": uptime_min,
+        "modules": len(sys.modules),
+        "threads": threading.active_count(),
+        # незавершённые задачи: классический источник роста памяти, если
+        # их порождают на каждое событие и не ждут
+        "asyncio_tasks": len(tasks),
+        "asyncio_top": dict(task_names.most_common(10)),
+        "gc_counts": gc.get_count(),
+        "gc_tracked": len(gc.get_objects()),
+        "top_objects": dict(counts.most_common(25)),
+        # тяжёлые библиотеки грузятся лениво — видно, поднялись ли они
+        "matplotlib_loaded": "matplotlib.pyplot" in sys.modules,
+    }
