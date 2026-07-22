@@ -106,6 +106,18 @@ async def _deliver_once() -> None:
             logger.warning("Вернули в очередь %d зависших сообщений "
                            "(процесс прервали посреди отправки)", revived)
             await session.commit()
+        # Сообщения платформ без канала доставки (например web — у веб-клиента
+        # нет мессенджера) никогда не будут захвачены циклом ниже: он ходит
+        # только по зарегистрированным senders. Такие строки висели в pending
+        # вечно и держали алерт «очередь не разгребается» включённым, скрывая
+        # за собой настоящие сбои. Хороним их честно, с причиной.
+        buried = await g.dead_letter_undeliverable(
+            list(_senders), "нет канала доставки для этой платформы")
+        if buried:
+            logger.warning("Похоронили %d сообщений платформ без канала "
+                           "доставки (подключённые: %s)", buried,
+                           ", ".join(sorted(_senders)) or "нет")
+            await session.commit()
         for platform, sender in _senders.items():
             # claim_pending_outbox сразу помечает захваченные записи sent=True
             # (UPDATE ... WHERE sent=False ... RETURNING) — коммитим это до

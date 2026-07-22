@@ -986,6 +986,30 @@ class GlobalRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars())
 
+    async def dead_letter_undeliverable(self, deliverable: list[str],
+                                        reason: str) -> int:
+        """Хоронит pending-сообщения платформ, для которых канала доставки
+        нет в принципе (например `web`: у веб-клиента нет мессенджера).
+
+        Иначе они висят в очереди вечно: `_deliver_once` перебирает только
+        зарегистрированные senders и такие строки даже не захватывает. В
+        проде из-за этого самое старое сообщение ждало отправки 22 дня, а
+        алерт «очередь не разгребается» кричал постоянно и перекрывал
+        настоящие сбои доставки.
+
+        Возвращает число похороненных. Пустой `deliverable` игнорируем: это
+        значит, что боты ещё не поднялись, и хоронить нельзя ничего."""
+        if not deliverable:
+            return 0
+        stmt = (
+            update(Outbox)
+            .where(Outbox.status == "pending",
+                   Outbox.platform.not_in(deliverable))
+            .values(sent=True, status="dead", claimed_at=None,
+                    last_error=reason[:300])
+        )
+        return (await self.session.execute(stmt)).rowcount or 0
+
     async def mark_outbox_sent(self, outbox_id: int) -> None:
         await self.session.execute(
             update(Outbox).where(Outbox.id == outbox_id)

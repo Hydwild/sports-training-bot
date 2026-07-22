@@ -293,6 +293,16 @@ async def _send_backup_to_owner() -> BackupResult:
             "PLATFORM_OWNER_TG_ID не задан — некому отправлять бэкап. "
             "Задайте переменную в Railway (ваш Telegram ID).")
 
+    # Конфигурацию проверяем ДО дампа. Раньше проверка ключа шифрования
+    # стояла после pg_dump/gzip/verify: при незаданном BACKUP_ENC_KEY каждая
+    # (обречённая) попытка всё равно перемалывала всю базу через память —
+    # а попытки повторяются много раз в сутки, пока день не закрыт.
+    if settings.is_pro and not encryption_enabled():
+        return BackupResult(False,
+            "BACKUP_ENC_KEY не задан: копия содержит персональные данные и "
+            "без шифрования не отправляется. Задайте ключ и храните его "
+            "отдельно от резервных копий.")
+
     result = await _make_dump()
     if result is None:
         return BackupResult(False,

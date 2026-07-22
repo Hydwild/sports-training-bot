@@ -20,8 +20,11 @@ def _with_key(monkeypatch):
 
 
 def _dump() -> bytes:
+    """mtime=0 обязателен: gzip пишет в заголовок текущее время, и два
+    вызова по разные стороны секунды давали разные байты — сверка
+    расшифрованного с эталоном падала примерно раз в несколько запусков."""
     body = b"SQLite format 3\x00" + b"\x00" * 4000
-    return gzip.compress(body)
+    return gzip.compress(body, mtime=0)
 
 
 def test_roundtrip():

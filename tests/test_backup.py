@@ -29,14 +29,18 @@ async def test_dump_failure_returns_clear_message(monkeypatch):
 
 def _valid_dump() -> bytes:
     """Правдоподобный архив: копия проверяется на содержимое перед
-    отправкой (см. backup.verify_dump), пустышка до Telegram не доедет."""
+    отправкой (см. backup.verify_dump), пустышка до Telegram не доедет.
+
+    mtime=0 обязателен: gzip пишет в заголовок текущее время, и два вызова
+    по разные стороны секунды давали разные байты — тест, сверяющий
+    отправленное с эталоном, падал примерно раз в несколько запусков."""
     import gzip
     if settings.is_sqlite:                     # в тестах база — SQLite
         body = b"SQLite format 3\x00" + b"\x00" * 4000
     else:
         body = (b"-- PostgreSQL database dump\n"
                 b"CREATE TABLE public.tenants (id integer);\n" + b"-" * 4000)
-    return gzip.compress(body)
+    return gzip.compress(body, mtime=0)
 
 
 async def test_oversized_dump_not_sent(monkeypatch):
@@ -223,3 +227,28 @@ async def test_offsite_backup_marks_day_after_successful_attempt(monkeypatch):
     await tasks._offsite_backup(last_day)
     import datetime as dt
     assert last_day[0] == dt.date.today().isoformat()
+
+
+# ---------- конфигурация проверяется ДО дампа ----------
+
+async def test_missing_enc_key_fails_before_dumping(monkeypatch):
+    """Боевой дефект: BACKUP_ENC_KEY не задан, попытки повторяются много раз
+    в сутки — и каждая обречённая попытка всё равно перемалывала всю базу
+    через память (pg_dump + gzip + verify), раздувая RSS. Теперь отказ
+    происходит до дампа."""
+    monkeypatch.setattr(settings, "platform_owner_tg_id", 12345)
+    monkeypatch.setattr(type(settings), "is_pro", property(lambda self: True))
+    monkeypatch.setattr(backup, "encryption_enabled", lambda: False)
+
+    dumped = []
+
+    async def fake_make_dump():
+        dumped.append(1)
+        return b"x", "backup.sql.gz"
+
+    monkeypatch.setattr(backup, "_make_dump", fake_make_dump)
+
+    res = await backup.send_backup_to_owner()
+    assert res.ok is False
+    assert "BACKUP_ENC_KEY" in res.message
+    assert not dumped, "база всё ещё дампится ради заведомо провальной попытки"
