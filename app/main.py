@@ -63,6 +63,9 @@ async def _ensure_columns(conn) -> None:
         ("tenants", "address", "VARCHAR(300)"),
         ("tenants", "contact_phone", "VARCHAR(32)"),
         ("masters", "bio", "VARCHAR(500) DEFAULT ''"),
+        ("tenants", "tg_delivery_mode", "VARCHAR(16) DEFAULT 'polling'"),
+        ("tenants", "vk_delivery_mode", "VARCHAR(16) DEFAULT 'longpoll'"),
+        ("tenants", "vk_confirmation_code", "VARCHAR(128) DEFAULT ''"),
     ]
     for table, column, coltype in wanted:
         try:
@@ -97,6 +100,34 @@ async def _scrub_legacy_photo_urls(conn) -> None:
             pass  # колонки/таблицы может не быть в этой редакции
 
 
+async def _assert_client_webhook_config() -> None:
+    """Fail-fast, если в БД уже есть webhook-клиенты без общих настроек."""
+    from sqlalchemy import func, or_, select
+
+    from app.db.engine import SessionLocal
+    from app.models.entities import Tenant
+
+    async with SessionLocal() as session:
+        count = (await session.execute(
+            select(func.count()).select_from(Tenant).where(or_(
+                Tenant.tg_delivery_mode == "webhook",
+                Tenant.vk_delivery_mode == "callback",
+            ))
+        )).scalar_one()
+    if not count:
+        return
+    if len(settings.webhook_master_secret or "") < 32:
+        raise RuntimeError(
+            "В БД есть клиентские webhook, но WEBHOOK_MASTER_SECRET "
+            "не задан или короче 32 символов"
+        )
+    base = (settings.public_base_url or "").strip().lower()
+    if not base.startswith("https://"):
+        raise RuntimeError(
+            "В БД есть клиентские webhook, но PUBLIC_BASE_URL не использует https://"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # не даём стартовать с небезопасными дефолтами (JWT/webhook-секреты)
@@ -118,6 +149,7 @@ async def lifespan(app: FastAPI):
         await _scrub_legacy_photo_urls(conn)
     logger.info("Таблицы готовы. БД: %s",
                 "SQLite" if settings.is_sqlite else "PostgreSQL")
+    await _assert_client_webhook_config()
 
     # readiness ключей телефонов по РЕАЛЬНЫМ данным. Результат НЕ проглатываем:
     # он влияет на /health (keys_ok=false → 503), а не только пишется в лог.
@@ -143,14 +175,15 @@ async def lifespan(app: FastAPI):
 
     import os as _os
     if _os.getenv("DISABLE_BACKGROUND") != "1":
+        from app.services import inbound
         _background.append(asyncio.create_task(tasks.deliver_outbox_loop()))
         _background.append(asyncio.create_task(tasks.scheduler_loop()))
-    if settings.tg_mode == "polling" and settings.tg_token:
+        _background.append(asyncio.create_task(inbound.worker_loop()))
         _background.append(asyncio.create_task(
             tasks.supervise("Telegram-поллинг", tg.run_polling)))
-    if settings.run_vk_polling and settings.vk_token:
-        _background.append(asyncio.create_task(
-            tasks.supervise("VK-поллинг", vk.run_polling)))
+        if settings.run_vk_polling:
+            _background.append(asyncio.create_task(
+                tasks.supervise("VK-поллинг", vk.run_polling)))
 
     logger.info("Старт завершён. Фоновых задач: %d", len(_background))
     try:
@@ -158,6 +191,11 @@ async def lifespan(app: FastAPI):
     finally:
         for t in _background:
             t.cancel()
+        if _background:
+            await asyncio.gather(*_background, return_exceptions=True)
+            _background.clear()
+        await tg.shutdown()
+        await vk.shutdown()
         await engine.dispose()
         logger.info("Остановка.")
 
@@ -349,12 +387,61 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str = Header(default=""),
 ) -> Response:
-    if settings.tg_webhook_secret and \
-            x_telegram_bot_api_secret_token != settings.tg_webhook_secret:
+    import hmac
+    if not settings.tg_webhook_secret:
+        raise HTTPException(status_code=403, detail="webhook not configured")
+    if not hmac.compare_digest(
+            x_telegram_bot_api_secret_token, settings.tg_webhook_secret):
         raise HTTPException(status_code=403, detail="bad secret")
     from app.bots import telegram as tg
     update = await request.json()
     await tg.feed_webhook_update(update)
+    return Response(status_code=200)
+
+
+@app.post("/webhook/telegram/{tenant_id}")
+async def tenant_telegram_webhook(
+    tenant_id: int,
+    request: Request,
+    x_telegram_bot_api_secret_token: str = Header(default=""),
+) -> Response:
+    """Принимает update клиентского бота, фиксирует его и быстро отвечает."""
+    import hmac
+
+    from app.core import bot_tokens
+    from app.db.engine import SessionLocal
+    from app.models.entities import Tenant
+    from app.services import inbound
+    from app.services.webhook_security import (
+        client_webhook_secret,
+        telegram_event_id,
+    )
+
+    async with SessionLocal() as session:
+        tenant = await session.get(Tenant, tenant_id)
+        token = bot_tokens.token_of(tenant, "tg") if tenant else ""
+    if not tenant or not tenant.is_active or \
+            tenant.tg_delivery_mode != "webhook" or not token or \
+            token == settings.tg_token:
+        raise HTTPException(status_code=404, detail="webhook not configured")
+
+    try:
+        expected = client_webhook_secret("tg", tenant.id, token)
+    except RuntimeError as exc:
+        logger.error("TG webhook tenant=%s не настроен: %s", tenant_id, exc)
+        raise HTTPException(status_code=503, detail="webhook unavailable") from exc
+    if not hmac.compare_digest(x_telegram_bot_api_secret_token, expected):
+        raise HTTPException(status_code=403, detail="bad secret")
+
+    try:
+        update = await request.json()
+        event_id = telegram_event_id(update)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="bad payload") from exc
+    await inbound.ingest(
+        platform="tg", tenant_id=tenant.id,
+        external_event_id=event_id, payload=update,
+    )
     return Response(status_code=200)
 
 
@@ -366,17 +453,64 @@ async def vk_webhook(request: Request) -> Response:
         body = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail="bad payload") from e
-    # VK требует ответить строкой подтверждения на событие confirmation
-    if body.get("type") == "confirmation":
-        return Response(content=settings.vk_confirmation, media_type="text/plain")
-    import hmac as _hmac
+    import hmac
+    from sqlalchemy import select
+
+    from app.core import bot_tokens
+    from app.db.engine import SessionLocal
+    from app.models.entities import Tenant
+    from app.services import inbound
+    from app.services.webhook_security import client_webhook_secret, vk_event_id
+
+    try:
+        group_id = int(body.get("group_id"))
+    except (TypeError, ValueError):
+        group_id = 0
+
+    tenant = None
+    token = ""
+    if group_id:
+        async with SessionLocal() as session:
+            tenant = (await session.execute(
+                select(Tenant).where(Tenant.vk_group_id == group_id)
+            )).scalar_one_or_none()
+            token = bot_tokens.token_of(tenant, "vk") if tenant else ""
+
+    # Клиентский Callback API: у каждого клуба свой производный секрет,
+    # confirmation-код и durable inbox с дедупликацией.
+    if tenant is not None and token and token != settings.vk_token:
+        if not tenant.is_active or tenant.vk_delivery_mode != "callback":
+            raise HTTPException(status_code=404, detail="webhook not configured")
+        try:
+            expected = client_webhook_secret("vk", tenant.id, token)
+        except RuntimeError as exc:
+            logger.error("VK webhook tenant=%s не настроен: %s", tenant.id, exc)
+            raise HTTPException(status_code=503, detail="webhook unavailable") from exc
+        if not hmac.compare_digest(str(body.get("secret") or ""), expected):
+            raise HTTPException(status_code=403, detail="bad secret")
+        if body.get("type") == "confirmation":
+            if not tenant.vk_confirmation_code:
+                raise HTTPException(status_code=503, detail="confirmation unavailable")
+            return Response(content=tenant.vk_confirmation_code,
+                            media_type="text/plain")
+        await inbound.ingest(
+            platform="vk", tenant_id=tenant.id,
+            external_event_id=vk_event_id(body), payload=body,
+        )
+        return Response(content="ok", media_type="text/plain")
+
+    # Обратно совместимый глобальный Callback API.
     # Секрет обязателен: без него любой мог бы подделать событие VK Callback API.
     if not settings.vk_secret:
         logger.error("VK webhook отклонён: VK_SECRET не задан. "
                      "Укажите секрет в настройках Callback API и в VK_SECRET.")
         raise HTTPException(status_code=403, detail="webhook secret not configured")
-    if not _hmac.compare_digest(str(body.get("secret") or ""), settings.vk_secret):
+    if not hmac.compare_digest(str(body.get("secret") or ""), settings.vk_secret):
         raise HTTPException(status_code=403, detail="bad secret")
+    if body.get("type") == "confirmation":
+        if not settings.vk_confirmation:
+            raise HTTPException(status_code=503, detail="confirmation unavailable")
+        return Response(content=settings.vk_confirmation, media_type="text/plain")
     from app.bots import vk as vk
     await vk.feed_callback_event(body)
     return Response(content="ok", media_type="text/plain")

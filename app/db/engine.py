@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 
@@ -35,6 +36,28 @@ if settings.is_sqlite:
 SessionLocal = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
 )
+
+
+@event.listens_for(Session, "after_flush")
+def _remember_outbox_insert(session, _flush_context) -> None:  # noqa: ANN001
+    # enqueue() часто делает flush до commit, поэтому метку ставим здесь,
+    # пока новые ORM-объекты ещё доступны. Импорт модели не нужен и циклов нет.
+    if any(getattr(type(obj), "__tablename__", "") == "outbox"
+           for obj in session.new):
+        session.info["outbox_inserted"] = True
+
+
+@event.listens_for(Session, "after_commit")
+def _wake_outbox_after_commit(session) -> None:  # noqa: ANN001
+    if not session.info.pop("outbox_inserted", False):
+        return
+    from app.services.tasks import notify_outbox_committed
+    notify_outbox_committed()
+
+
+@event.listens_for(Session, "after_rollback")
+def _forget_rolled_back_outbox(session) -> None:  # noqa: ANN001
+    session.info.pop("outbox_inserted", None)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

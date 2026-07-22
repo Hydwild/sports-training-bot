@@ -1,5 +1,5 @@
 """
-VK-бот (vkbottle), мультитенантный. Импорт vkbottle ленивый.
+Мультитенантный VK-бот на лёгком клиенте VK API.
 
 Работа в личных сообщениях сообщества:
   • Long Poll — бот сам опрашивает VK (run_polling).
@@ -16,6 +16,7 @@ import logging
 
 from app.bots.user_info import fetch_vk_profile
 from app.bots import views
+from app.bots.vk_api import VKBot, VKTransport
 from app.bots.views import profile_card
 from app.core.config import settings
 from app.core.features import features
@@ -29,6 +30,7 @@ PLATFORM = "vk"
 
 _bot = None   # type: ignore
 _enabled = False
+_initialized = False
 _group_id = None   # id сообщества, к которому привязан токен
 _fsm: dict[int, dict] = {}   # user_id -> {step, data, ...} — активные диалоги
 _FSM_TTL_SEC = 3600          # незавершённые диалоги живут не дольше часа
@@ -66,9 +68,13 @@ import contextvars as _cv
 
 _ctx_api = _cv.ContextVar("vk_api", default=None)   # api текущего события
 _api_by_tenant: dict[int, object] = {}              # tenant_id -> API
-_client_bots: dict = {}                             # tenant_id -> Bot
+_client_bots: dict[int, VKBot] = {}                 # tenant_id -> лёгкий VK bot
 _client_tasks: dict[int, "object"] = {}             # tenant_id -> asyncio.Task
 _client_tokens: dict[int, str] = {}                 # tenant_id -> vk_token
+_client_modes: dict[int, str] = {}                  # longpoll | callback
+_configured_tenants: set[int] = set()               # есть свой token в БД
+_bot_by_group: dict[int, VKBot] = {}                # group_id -> bot
+_transport = VKTransport()                          # один HTTP pool на все токены
 _vk_polling_active = False
 
 
@@ -83,16 +89,20 @@ def _api():
 
 async def _send(user_id: int, text: str, keyboard: str | None = None,
                 tenant_id: int | None = None) -> None:
-    api = (_api_by_tenant.get(tenant_id) if tenant_id is not None else None)         or _api()
-    if api:
-        await api.messages.send(
-            user_id=user_id, message=text, random_id=0, keyboard=keyboard)
+    api = (_api_by_tenant.get(tenant_id)
+           if tenant_id is not None else None)
+    if api is None and tenant_id not in _configured_tenants:
+        api = _api()
+    if api is None:
+        raise RuntimeError("VK bot для доставки не настроен")
+    await api.messages.send(
+        user_id=user_id, message=text, random_id=0, keyboard=keyboard)
 
 
 def _kb(tid: int, is_full: bool = False, is_admin: bool = False) -> str:
     """Inline-клавиатура под карточкой тренировки.
     Участнику: записаться/отмена. Админу — плюс управление."""
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     signup = "⏳ Встать в очередь" if is_full else "✅ Записаться"
     kb = Keyboard(inline=True)
     kb.add(Callback(signup, payload={"a": "su", "tid": tid}),
@@ -117,7 +127,7 @@ def _kb(tid: int, is_full: bool = False, is_admin: bool = False) -> str:
 
 def _confirm_del_kb(tid: int) -> str:
     """Кнопки подтверждения отмены тренировки: Да / Нет."""
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     kb = Keyboard(inline=True)
     kb.add(Callback("✅ Да, отменить", payload={"a": "deltr_yes", "tid": tid}),
            color=KeyboardButtonColor.NEGATIVE)
@@ -136,7 +146,7 @@ _ctx_vertical = _cv.ContextVar("vk_vertical", default="sport")
 def _menu_kb(is_admin: bool = False, more: bool = False) -> str:
     """Меню снизу. У админа два экрана: основной и «⋯ Ещё».
     Подписи части кнопок зависят от вертикали клуба (см. _ctx_vertical)."""
-    from vkbottle import Keyboard, Text, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Text, KeyboardButtonColor
     from app.core.verticals import vcfg
     vc = vcfg(_ctx_vertical.get())
     kb = Keyboard(inline=False, one_time=False)
@@ -177,7 +187,7 @@ def _menu_kb(is_admin: bool = False, more: bool = False) -> str:
 
 def _cancel_kb() -> str:
     """Кнопка отмены во время пошагового создания."""
-    from vkbottle import Keyboard, Text, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Text, KeyboardButtonColor
     kb = Keyboard(inline=False, one_time=False)
     kb.add(Text("❌ Отмена", payload={"a": "create_cancel"}),
            color=KeyboardButtonColor.NEGATIVE)
@@ -185,7 +195,7 @@ def _cancel_kb() -> str:
 
 
 async def _upsert_vk_user(svc: BookingService, user_id: int) -> str:
-    if not _bot:
+    if _api() is None:
         return f"vk{user_id}"
     try:
         profile = await fetch_vk_profile(_api(), user_id)
@@ -365,7 +375,7 @@ async def _do_cancel(user_id: int, tid: int, group_id=None) -> str:
 
 def _my_kb_vk(tid: int) -> str:
     """Клавиатура карточки в «Моих записях»: отмена и перенос."""
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     kb = Keyboard(inline=True)
     kb.add(Callback("❌ Отменить", payload={"a": "cx", "tid": tid}),
            color=KeyboardButtonColor.NEGATIVE)
@@ -387,7 +397,7 @@ async def _move_pick(user_id: int, from_id: int, group_id=None) -> None:
     if not labels:
         await _send(user_id, "Других слотов для переноса пока нет.")
         return
-    from vkbottle import Keyboard, Callback
+    from app.bots.vk_keyboard import Keyboard, Callback
     kb = Keyboard(inline=True)
     for i, (to_id, label) in enumerate(labels):
         if i:
@@ -427,7 +437,7 @@ async def _do_move(user_id: int, from_id, to_id, group_id=None) -> str:
 
 def _attendance_kb(tid: int, signups: list) -> str:
     """Клавиатура для отметки явки/оплаты: по кнопке на участника."""
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     kb = Keyboard(inline=True)
     for i, s in enumerate(signups[:8]):   # VK-лимит на кнопки
         att = "✅" if s.attended else "⬜"
@@ -545,7 +555,7 @@ _WD_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 def _kb_from(options: list[tuple[str, dict]], add_manual: bool = True,
              per_row: int = 2) -> str:
     """Строит inline-клавиатуру из списка (label, payload). +«Ввести вручную»."""
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     kb = Keyboard(inline=True)
     for i, (label, payload) in enumerate(options):
         kb.add(Callback(label, payload=payload))
@@ -603,7 +613,7 @@ async def _location_options(svc) -> list[tuple[str, dict]]:
 
 def _bcast_confirm_kb() -> str:
     """Кнопки подтверждения рассылки."""
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     kb = Keyboard(inline=True)
     kb.add(Callback("✅ Отправить", payload={"a": "bcast_yes"}),
            color=KeyboardButtonColor.POSITIVE)
@@ -996,7 +1006,7 @@ async def _finalize_create(user_id: int, state: dict) -> None:
     await _send(user_id, "✅ Тренировка создана!", keyboard=_menu_kb(True))
     await _send(user_id, card, keyboard=_kb(tid, full, True))
     if masters:
-        from vkbottle import Keyboard, Callback
+        from app.bots.vk_keyboard import Keyboard, Callback
         kb = Keyboard(inline=True)
         for i, (mid, mname) in enumerate(masters[:6]):
             if i:
@@ -1031,7 +1041,7 @@ def _fmt_date(iso: str) -> str:
 
 def _edit_menu_kb(tid: int) -> str:
     """Меню выбора: что изменить в тренировке."""
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     kb = Keyboard(inline=True)
     kb.add(Callback("📅 Дату", payload={"a": "ed_f", "f": "date", "tid": tid}))
     kb.add(Callback("🕐 Время", payload={"a": "ed_f", "f": "time", "tid": tid}))
@@ -1203,7 +1213,7 @@ async def _rename_pick(user_id: int, group_id=None) -> None:
         await _send(user_id, "Нет участников для переименования.",
                     keyboard=_menu_kb(True))
         return
-    from vkbottle import Keyboard, Callback
+    from app.bots.vk_keyboard import Keyboard, Callback
     kb = Keyboard(inline=True)
     for uid, name in list(seen.items())[:8]:
         cur = aliases.get(uid)
@@ -1250,7 +1260,7 @@ async def _show_schedules(user_id: int, group_id=None) -> None:
         tenant = await _resolve_tenant(session, group_id)
         svc = BookingService(session, tenant.id, tz=tenant.timezone)
         schedules = await svc.repo.list_schedules()
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     kb = Keyboard(inline=True)
     if schedules:
         lines = ["📆 Регулярное расписание:"]
@@ -1423,7 +1433,7 @@ async def _sched_edit_menu(user_id: int, sid: int, gid) -> None:
         if not sch:
             await _send(user_id, "Шаблон не найден."); return
         title = f"{_WD_RU[sch.weekday]} {sch.time_str} — {sch.title}"
-    from vkbottle import Keyboard, Callback, KeyboardButtonColor
+    from app.bots.vk_keyboard import Keyboard, Callback, KeyboardButtonColor
     kb = Keyboard(inline=True)
     kb.add(Callback("📆 День", payload={"a": "sch_ef", "f": "wd", "sid": sid}))
     kb.add(Callback("🕐 Время", payload={"a": "sch_ef", "f": "time", "sid": sid}))
@@ -1662,7 +1672,7 @@ async def _show_stats_vk(user_id: int, group_id=None) -> None:
         for t in past:
             when = svc.format_local(t.start_at)
             lines.append(f"  • {t.title} — {when}")
-    from vkbottle import Keyboard, Callback
+    from app.bots.vk_keyboard import Keyboard, Callback
     kb = Keyboard(inline=True)
     for tr in trainings[:5]:
         kb.add(Callback(f"📄 CSV: {tr.title}"[:35],
@@ -1685,11 +1695,11 @@ async def _export_csv_vk(user_id: int, tid: int, group_id=None) -> str:
     if not csv_text or not tr:
         return "Нет данных для выгрузки."
     try:
-        from vkbottle import DocMessagesUploader
-        uploader = DocMessagesUploader(_api())
-        doc = await uploader.upload(
-            f"training_{tid}.csv", csv_text.encode("utf-8-sig"),
-            peer_id=user_id)
+        doc = await _api().upload_message_document(
+            peer_id=user_id,
+            filename=f"training_{tid}.csv",
+            data=csv_text.encode("utf-8-sig"),
+        )
         await _api().messages.send(peer_id=user_id, random_id=0,
                                      attachment=doc,
                                      message=f"📄 Список: {tr.title}")
@@ -1714,7 +1724,7 @@ async def _pick_training(user_id: int, gid, action: str, title: str) -> None:
         await _send(user_id, "Нет предстоящих тренировок.",
                     keyboard=_menu_kb(True))
         return
-    from vkbottle import Keyboard, Callback
+    from app.bots.vk_keyboard import Keyboard, Callback
     kb = Keyboard(inline=True)
     for tr in trainings[:6]:
         when = tr.start_at.strftime("%d.%m")
@@ -1859,7 +1869,7 @@ async def _publish_to_wall_impl(tenant_id: int, training_id: int) -> None:
     «Написать сообществу» (запись ведётся в личке с ботом).
     Тихо пропускает, если VK не настроен или у клуба нет vk_group_id.
     """
-    if not _bot or not _enabled:
+    if not _enabled or _api() is None:
         return
     async with SessionLocal() as session:
         g = GlobalRepository(session)
@@ -1889,55 +1899,21 @@ async def _publish_to_wall_impl(tenant_id: int, training_id: int) -> None:
 
 
 async def setup() -> None:
-    global _bot, _enabled
-    if _enabled:
+    global _bot, _enabled, _initialized
+    if _initialized:
         return
-    if not settings.vk_token:
-        logger.warning("VK_TOKEN не задан — VK отключён.")
-        return
-    try:
-        from vkbottle import GroupEventType
-        from vkbottle.bot import Bot, Message
-    except ImportError:
-        logger.warning("vkbottle не установлен — VK отключён.")
-        return
-
-    _bot = Bot(token=settings.vk_token)
-    _enabled = True
+    _initialized = True
+    _bot = VKBot(settings.vk_token, _transport) if settings.vk_token else None
 
     # узнаём id своего сообщества (надёжнее, чем искать наугад)
     global _group_id
-    try:
-        groups = await _api().groups.get_by_id()
-        # vkbottle может вернуть список или объект с .groups
-        g0 = groups[0] if isinstance(groups, list) else groups.groups[0]
-        _group_id = g0.id
-        logger.info("VK: сообщество id=%s определено", _group_id)
-    except Exception as e:
-        logger.warning("VK: не удалось определить group_id: %s", e)
-
-    def _attach(b, gid_default):
-        """Вешает обработчики на бота; api бота кладётся в контекст события."""
-        @b.on.message()
-        async def _on_message(message: Message):
-            token = _ctx_api.set(b.api)
-            try:
-                gid = getattr(message, "group_id", None) or gid_default
-                await _handle_text(message.from_id, message.text or "", gid)
-            except Exception as e:
-                logger.warning("VK: ошибка обработки сообщения: %s", e)
-            finally:
-                _ctx_api.reset(token)
-
-        @b.on.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=dict)
-        async def _on_callback(event: dict):
-            token = _ctx_api.set(b.api)
-            try:
-                await _process_callback(event)
-            except Exception as e:
-                logger.warning("VK: ошибка обработки нажатия: %s", e)
-            finally:
-                _ctx_api.reset(token)
+    if _bot is not None:
+        try:
+            _group_id = await _bot.resolve_group_id()
+            _bot_by_group[_group_id] = _bot
+            logger.info("VK: сообщество id=%s определено", _group_id)
+        except Exception as e:
+            logger.warning("VK: не удалось определить group_id: %s", e)
 
     async def _process_callback(event: dict):
         obj = event.get("object", {})
@@ -2208,108 +2184,135 @@ async def setup() -> None:
         except Exception as e:
             logger.warning("VK event answer error: %s", e)
 
-    _attach(_bot, _group_id)
-
     # мультиклиент: поднимаем VK-ботов клубов с собственными токенами
     try:
-        await _load_client_bots(_attach)
+        await _load_client_bots()
     except Exception as e:
         logger.warning("VK: не удалось прочитать клиентские токены: %s", e)
-    globals()["_attach_fn"] = _attach   # для hot-reload
+    globals()["_process_callback_handler"] = _process_callback
+
+    _enabled = _bot is not None or bool(_client_bots)
+    if not _enabled:
+        if _configured_tenants:
+            tasks.register_sender(PLATFORM, _send)
+        else:
+            tasks.unregister_sender(PLATFORM, _send)
+        logger.warning("VK_TOKEN и клиентские VK-токены не заданы — VK отключён.")
+        return
 
     tasks.register_sender(PLATFORM, _send)
-    logger.info("VK готов (кнопки + Long Poll).")
+    logger.info("VK готов без vkbottle (ботов: %d).",
+                (1 if _bot is not None else 0) + len(_client_bots))
 
 
-async def _load_client_bots(attach) -> None:
+async def _load_client_bots() -> None:
     """(Пере)читывает клиентских VK-ботов из базы; поднимает новых,
     гасит убранных. Задачи поллинга создаются, если поллинг уже запущен."""
-    from vkbottle.bot import Bot
     from sqlalchemy import or_, select
     from app.core import bot_tokens
     from app.models.entities import Tenant
     async with SessionLocal() as _s:
         tenants = list((await _s.execute(
             select(Tenant).where(or_(Tenant.vk_token.is_not(None), Tenant.vk_token_enc != "")))).scalars())
-    fresh: dict[int, str] = {}
+    _configured_tenants.clear()
+    _configured_tenants.update(t.id for t in tenants)
+    fresh: dict[int, tuple[str, str]] = {}
     for t in tenants:
         tok = bot_tokens.token_of(t, "vk")
+        if tok and tok == settings.vk_token:
+            _configured_tenants.discard(t.id)
         if tok and tok != settings.vk_token:
-            fresh[t.id] = tok
+            mode = (t.vk_delivery_mode or "longpoll").lower()
+            if mode not in ("longpoll", "callback"):
+                mode = "longpoll"
+            fresh[t.id] = (tok, mode)
     # гасим убранных и сменивших токен (сменившие поднимутся заново ниже)
     for tid in list(_client_bots.keys()):
-        if fresh.get(tid) != _client_tokens.get(tid):
+        current = (_client_tokens.get(tid),
+                   _client_modes.get(tid, "longpoll"))
+        if fresh.get(tid) != current:
             task = _client_tasks.pop(tid, None)
             if task:
                 task.cancel()
-            _client_bots.pop(tid, None)
+            old = _client_bots.pop(tid, None)
+            if old is not None and old.group_id is not None:
+                _bot_by_group.pop(old.group_id, None)
             _api_by_tenant.pop(tid, None)
             _client_tokens.pop(tid, None)
+            _client_modes.pop(tid, None)
             logger.info("VK: клиентский бот клуба id=%s остановлен "
                         "(токен изменён или удалён)", tid)
     # поднимаем новых
-    for tid, tok in fresh.items():
+    for tid, (tok, mode) in fresh.items():
         if tid in _client_bots:
             continue
         try:
-            cb = Bot(token=tok)
-            groups = await cb.api.groups.get_by_id()
-            g0 = groups[0] if isinstance(groups, list) else groups.groups[0]
-            attach(cb, g0.id)
+            cb = VKBot(tok, _transport)
+            group_id = await cb.resolve_group_id()
             _client_bots[tid] = cb
             _api_by_tenant[tid] = cb.api
+            _bot_by_group[group_id] = cb
             _client_tokens[tid] = tok
-            if _vk_polling_active:
+            _client_modes[tid] = mode
+            if _vk_polling_active and mode == "longpoll":
                 _client_tasks[tid] = _spawn_client_poll(tid, cb)
-            logger.info("VK: клиентский бот клуба id=%s (группа %s) поднят",
-                        tid, g0.id)
+            logger.info("VK: клиентский бот клуба id=%s (группа %s, %s) поднят",
+                        tid, group_id, mode)
         except Exception as e:
             logger.warning("VK: клиентский бот клуба id=%s не поднялся: %s",
                            tid, e)
 
 
 async def reload_client_bots() -> None:
+    global _enabled
     """Мультиклиент: применяет VK-токены из базы без рестарта сервиса."""
-    attach = globals().get("_attach_fn")
-    if not _enabled or attach is None:
-        return
-    await _load_client_bots(attach)
+    await _load_client_bots()
+    _enabled = _bot is not None or bool(_client_bots)
+    if _enabled or _configured_tenants:
+        tasks.register_sender(PLATFORM, _send)
+    else:
+        tasks.unregister_sender(PLATFORM, _send)
     logger.info("VK: клиентские боты перечитаны (%d)", len(_client_bots))
 
 
+async def _dispatch_event(bot: VKBot, event: dict) -> None:
+    """Маршрутизирует raw update Long Poll/Callback API в старые обработчики."""
+    token = _ctx_api.set(bot.api)
+    try:
+        event_type = event.get("type")
+        group_id = event.get("group_id") or bot.group_id
+        if event_type == "message_new":
+            obj = event.get("object") or {}
+            message = obj.get("message") if isinstance(obj, dict) else None
+            if not isinstance(message, dict):
+                message = obj if isinstance(obj, dict) else {}
+            user_id = message.get("from_id")
+            if user_id is None:
+                raise ValueError("VK message_new без from_id")
+            await _handle_text(int(user_id), message.get("text") or "", group_id)
+        elif event_type == "message_event":
+            handler = globals().get("_process_callback_handler")
+            if handler is None:
+                raise RuntimeError("VK callback handler не инициализирован")
+            normalized = dict(event)
+            normalized["group_id"] = group_id
+            await handler(normalized)
+    finally:
+        _ctx_api.reset(token)
+
+
 async def _poll_forever(bot) -> None:
-    """
-    Безопасный аналог bot.run_polling() из vkbottle для вызова из УЖЕ
-    работающего event loop (мы всегда внутри loop'а FastAPI/uvicorn).
+    """Читает Long Poll и последовательно передаёт события обработчикам."""
+    if hasattr(bot, "listen"):
+        async for update in bot.listen():
+            try:
+                await _dispatch_event(bot, update)
+            except Exception:
+                logger.exception("VK: ошибка обработки Long Poll события")
+        return
 
-    Проблема оригинального bot.run_polling(): он проверяет свой внутренний
-    флаг loop_wrapper.is_running (не сам event loop!) — при первом вызове
-    флаг всегда False, поэтому метод пытается САМ запустить/остановить
-    event loop через синхронный LoopWrapper.run(). Тот, в свою очередь,
-    видит, что реальный loop уже работает, и падает:
-        RuntimeError: LoopWrapper.run() cannot be called from a running
-        event loop. Use 'await bot.run_polling()' instead.
-    Падение происходит ПОСЛЕ того, как bot.loop_wrapper.add_task(...) уже
-    успел запланировать внутренний поллинг-таск на реальном loop'е (у него
-    свой, отдельный от LoopWrapper, безопасный путь для уже запущенного
-    loop'а) — то есть даже неудачный вызов оставляет позади «осиротевший»
-    поллинг-таск, который никто не отслеживает и не отменяет. Раньше это
-    исключение просто терялось молча (task exception was never retrieved),
-    поэтому проблема была незаметна: спавнился ровно один осиротевший
-    таск при старте и молча работал. После того как run_polling() стал
-    попадать под supervise() (авто-ретрай), КАЖДЫЙ повторный вызов при
-    падении добавлял ЕЩЁ один осиротевший поллинг-таск поверх предыдущих —
-    отсюда дублирующиеся ответы (несколько параллельных Long Poll на один
-    и тот же бот).
-
-    Решение: не используем bot.run_polling()/LoopWrapper вообще, а
-    напрямую воспроизводим то же самое (низкоуровневый bot.polling.listen()
-    + диспетчеризация через bot.router.route — именно это делает
-    run_polling() внутри), но без обращения к LoopWrapper. Так ошибка
-    вообще не возникает, а не просто прячется, и повторные попытки
-    supervise() безопасны и идемпотентны (каждая создаёт ровно один новый
-    поллинг, не оставляя дублей от прежних попыток).
-    """
+    # Совместимость тестовых/внешних адаптеров старого интерфейса. Runtime
+    # VKBot сюда не попадает и vkbottle не импортируется.
     import asyncio as _aio
     polling = bot.polling
     async for event in polling.listen():
@@ -2330,26 +2333,57 @@ def _spawn_client_poll(tid: int, bot):
 
 async def run_polling() -> None:
     global _vk_polling_active
-    if _bot:
-        _vk_polling_active = True
-        n = 1 + len(_client_bots)
-        logger.info("VK: запускаю Long Poll (ботов: %d)…", n)
-        for tid, b in _client_bots.items():
-            _client_tasks[tid] = _spawn_client_poll(tid, b)
-        try:
+    _vk_polling_active = True
+    longpoll_bots = {
+        tid: bot for tid, bot in _client_bots.items()
+        if _client_modes.get(tid, "longpoll") == "longpoll"
+    }
+    n = (1 if _bot else 0) + len(longpoll_bots)
+    logger.info("VK: координатор Long Poll запущен (активных ботов: %d)", n)
+    for tid, b in longpoll_bots.items():
+        _client_tasks[tid] = _spawn_client_poll(tid, b)
+    try:
+        if _bot is not None:
             await _poll_forever(_bot)
-        finally:
-            _vk_polling_active = False
-            for t in _client_tasks.values():
-                t.cancel()
+        else:
+            # Спит без сетевых запросов. _load_client_bots сам создаёт
+            # клиентский task при hot-reload, потому что active=True.
+            import asyncio as _aio
+            await _aio.Event().wait()
+    finally:
+        _vk_polling_active = False
+        for t in _client_tasks.values():
+            t.cancel()
+
+
+def has_bots() -> bool:
+    return _bot is not None or bool(_client_bots)
+
+
+def has_polling_bots() -> bool:
+    return _bot is not None or any(
+        mode == "longpoll" for mode in _client_modes.values()
+    )
 
 
 async def feed_callback_event(body: dict) -> None:
     """Обработка события VK Callback API (webhook)."""
     if not _enabled:
-        return
-    t = body.get("type")
-    if t == "message_new":
-        obj = body.get("object", {}).get("message", {})
-        await _handle_text(obj.get("from_id"), obj.get("text") or "",
-                           body.get("group_id"))
+        raise RuntimeError("VK не настроен")
+    group_id = body.get("group_id")
+    try:
+        group_id = int(group_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("VK callback без корректного group_id") from exc
+    bot = _bot_by_group.get(group_id)
+    if bot is None:
+        raise ValueError("Неизвестное VK-сообщество")
+    await _dispatch_event(bot, body)
+
+
+async def shutdown() -> None:
+    """Закрывает общий HTTP pool и клиентские фоновые задачи."""
+    for task in list(_client_tasks.values()):
+        task.cancel()
+    _client_tasks.clear()
+    await _transport.close()

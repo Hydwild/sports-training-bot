@@ -31,9 +31,22 @@
     <p><label>Токен Telegram-бота (от @BotFather)<br>
       <input name="tg_token" placeholder="123456:ABC..."
              style="width:100%;padding:8px"></label></p>
+    <p><label>Режим Telegram<br>
+      <select name="tg_delivery_mode" style="padding:8px">
+        <option value="webhook" selected>Webhook — рекомендуется</option>
+        <option value="polling">Polling — резервный режим</option>
+      </select></label></p>
     <p><label>Токен сообщества ВКонтакте<br>
       <input name="vk_token" placeholder="vk1.a...."
              style="width:100%;padding:8px"></label></p>
+    <p><label>Режим ВКонтакте<br>
+      <select name="vk_delivery_mode" style="padding:8px">
+        <option value="callback" selected>Callback API — рекомендуется</option>
+        <option value="longpoll">Long Poll — резервный режим</option>
+      </select></label></p>
+    <p class="muted">Для webhook нужны PUBLIC_BASE_URL и
+      WEBHOOK_MASTER_SECRET. Панель сама зарегистрирует адреса у Telegram/VK;
+      секреты в форме и базе не показываются.</p>
 
     <h3>Тренер клиента</h3>
     <p class="muted">Telegram ID тренера — бот сразу узнает его как

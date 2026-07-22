@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     tg_token: str = ""
     # Секретный токен Telegram webhook (X-Telegram-Bot-Api-Secret-Token)
     tg_webhook_secret: str = ""
+    # Master secret только для клиентских webhook. Из него выводятся разные
+    # TG/VK secret для каждого tenant и версии bot token.
+    webhook_master_secret: str = ""
     vk_token: str = ""
     vk_confirmation: str = ""   # строка подтверждения VK Callback API
     vk_secret: str = ""         # секрет VK Callback API
@@ -106,6 +109,10 @@ class Settings(BaseSettings):
     # polling | webhook — режим Telegram
     tg_mode: str = "polling"
     run_vk_polling: bool = False
+
+    # Адаптивная проверка пустой очереди исходящих уведомлений.
+    outbox_idle_min_seconds: float = 10.0
+    outbox_idle_max_seconds: float = 30.0
 
     # --- Админка ---
     tg_bot_username: str = ""        # username бота для Telegram Login Widget
@@ -160,6 +167,11 @@ class Settings(BaseSettings):
                 "(например, `openssl rand -base64 32`)")
         if self.tg_mode == "webhook" and not self.tg_webhook_secret:
             problems.append("TG_MODE=webhook, но TG_WEBHOOK_SECRET не задан")
+        if self.webhook_master_secret and len(self.webhook_master_secret) < 32:
+            problems.append("WEBHOOK_MASTER_SECRET короче 32 символов")
+        if self.outbox_idle_min_seconds <= 0 or \
+                self.outbox_idle_max_seconds < self.outbox_idle_min_seconds:
+            problems.append("некорректны OUTBOX_IDLE_MIN/MAX_SECONDS")
         if problems:
             raise RuntimeError(
                 "Небезопасная конфигурация, старт остановлен:\n  - "

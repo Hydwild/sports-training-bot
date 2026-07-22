@@ -41,6 +41,37 @@
              placeholder="новый токен, чтобы заменить"
              style="width:100%;padding:8px"></label></p>
 
+    <h3>Получение сообщений</h3>
+    <p class="muted">Webhook почти не расходует CPU в простое. Переключение
+       выполняется через API Telegram/VK и применяется только после их
+       успешного ответа; необработанные сообщения при этом не удаляются.</p>
+    <p>Telegram: <b>{{ t.tg_delivery_mode or 'polling' }}</b>
+      {% if (t.tg_delivery_mode or 'polling') == 'polling' %}
+      <button class="btn sm" type="submit"
+              formaction="/admin/platform/{{ t.id }}/delivery"
+              formmethod="post" name="transition" value="tg:webhook">
+        Перевести на webhook</button>
+      {% else %}
+      <button class="btn sm" type="submit"
+              formaction="/admin/platform/{{ t.id }}/delivery"
+              formmethod="post" name="transition" value="tg:polling">
+        Вернуть polling</button>
+      {% endif %}
+    </p>
+    <p>ВКонтакте: <b>{{ t.vk_delivery_mode or 'longpoll' }}</b>
+      {% if (t.vk_delivery_mode or 'longpoll') == 'longpoll' %}
+      <button class="btn sm" type="submit"
+              formaction="/admin/platform/{{ t.id }}/delivery"
+              formmethod="post" name="transition" value="vk:callback">
+        Перевести на Callback API</button>
+      {% else %}
+      <button class="btn sm" type="submit"
+              formaction="/admin/platform/{{ t.id }}/delivery"
+              formmethod="post" name="transition" value="vk:longpoll">
+        Вернуть Long Poll</button>
+      {% endif %}
+    </p>
+
     <p class="muted">Отвязать бота (токен будет удалён):
       <button class="btn sm" type="submit" formaction="/admin/platform/{{ t.id }}/tokens/clear"
               formmethod="post" name="kind" value="tg">Отвязать Telegram</button>

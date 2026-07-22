@@ -96,9 +96,11 @@ def test_vk_send_routes_by_tenant():
 
     old_bot = vk._bot
     old_map = dict(vk._api_by_tenant)
+    old_configured = set(vk._configured_tenants)
     try:
         vk._bot = FakeBot("default")
         vk._api_by_tenant.clear()
+        vk._configured_tenants.clear()
         vk._api_by_tenant[42] = FakeApi("client42")
 
         async def run():
@@ -113,6 +115,8 @@ def test_vk_send_routes_by_tenant():
         vk._bot = old_bot
         vk._api_by_tenant.clear()
         vk._api_by_tenant.update(old_map)
+        vk._configured_tenants.clear()
+        vk._configured_tenants.update(old_configured)
 
 
 def test_billing_suspend_and_web():

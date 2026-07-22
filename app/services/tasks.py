@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 
 from app.db.engine import SessionLocal
@@ -24,19 +25,63 @@ logger = logging.getLogger("tasks")
 # platform -> async функция (user_id, text) -> None
 Sender = Callable[[int, str], Awaitable[None]]
 _senders: dict[str, Sender] = {}
+_outbox_wakeup = asyncio.Event()
 
 
 def register_sender(platform: str, sender: Sender) -> None:
     _senders[platform] = sender
 
 
+def unregister_sender(platform: str, sender: Sender | None = None) -> None:
+    if sender is None or _senders.get(platform) is sender:
+        _senders.pop(platform, None)
+
+
+def notify_outbox_committed() -> None:
+    """Будит доставщик только после commit транзакции с новым Outbox."""
+    _outbox_wakeup.set()
+
+
+@dataclass(frozen=True)
+class DeliveryResult:
+    claimed: int = 0
+    sent: int = 0
+    failed: int = 0
+    revived: int = 0
+    buried: int = 0
+
+
 async def deliver_outbox_loop() -> None:
+    from app.core.config import settings
+
+    idle = settings.outbox_idle_min_seconds
+    last_requeue = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
     while True:
         try:
-            await _deliver_once()
+            _outbox_wakeup.clear()
+            now = dt.datetime.now(dt.timezone.utc)
+            requeue_stale = (now - last_requeue).total_seconds() >= 60
+            result = await _deliver_once(requeue_stale=requeue_stale)
+            if requeue_stale:
+                last_requeue = now
+            if result.claimed:
+                # После работы сразу проверяем остаток; в idle уходим только
+                # после подтверждения, что готовых сообщений больше нет.
+                idle = settings.outbox_idle_min_seconds
+                continue
+            delay = idle
+            idle = min(settings.outbox_idle_max_seconds, max(
+                settings.outbox_idle_min_seconds, idle * 2,
+            ))
+            try:
+                await asyncio.wait_for(_outbox_wakeup.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Ошибка доставки outbox")
-        await asyncio.sleep(2)
+            await asyncio.sleep(2)
 
 
 async def supervise(name: str, coro_factory: Callable[[], Awaitable[None]],
@@ -97,12 +142,15 @@ PENDING_AGE_ALERT_MIN = 30
 # дубль напоминания, чем молча потерянное уведомление.
 
 
-async def _deliver_once() -> None:
+async def _deliver_once(*, requeue_stale: bool = True) -> DeliveryResult:
+    claimed_count = sent_count = failed_count = buried_count = revived_count = 0
     async with SessionLocal() as session:
         g = GlobalRepository(session)
         # сначала подбираем то, что зависло в processing после перезапуска
-        revived = await g.requeue_stale_outbox(STALE_CLAIM_MINUTES)
+        revived = (await g.requeue_stale_outbox(STALE_CLAIM_MINUTES)
+                   if requeue_stale else 0)
         if revived:
+            revived_count += revived
             logger.warning("Вернули в очередь %d зависших сообщений "
                            "(процесс прервали посреди отправки)", revived)
             await session.commit()
@@ -114,6 +162,7 @@ async def _deliver_once() -> None:
         buried = await g.dead_letter_undeliverable(
             list(_senders), "нет канала доставки для этой платформы")
         if buried:
+            buried_count += buried
             logger.warning("Похоронили %d сообщений платформ без канала "
                            "доставки (подключённые: %s)", buried,
                            ", ".join(sorted(_senders)) or "нет")
@@ -125,6 +174,7 @@ async def _deliver_once() -> None:
             # когда-нибудь будет работать несколько одновременно) не увидел
             # эти же записи как ещё не отправленные и не продублировал их
             pending = await g.claim_pending_outbox(platform, limit=25)
+            claimed_count += len(pending)
             await session.commit()
             for item in pending:
                 try:
@@ -134,7 +184,9 @@ async def _deliver_once() -> None:
                     except TypeError:
                         await sender(item.user_id, item.text)
                     await g.mark_outbox_sent(item.id)
+                    sent_count += 1
                 except Exception as e:
+                    failed_count += 1
                     attempts = (item.attempts or 0) + 1
                     reason = f"{type(e).__name__}: {e}"
                     if attempts >= MAX_OUTBOX_ATTEMPTS:
@@ -151,6 +203,13 @@ async def _deliver_once() -> None:
                             MAX_OUTBOX_ATTEMPTS, reason)
                         await g.record_outbox_failure(item.id, attempts, reason)
             await session.commit()
+    return DeliveryResult(
+        claimed=claimed_count,
+        sent=sent_count,
+        failed=failed_count,
+        revived=revived_count,
+        buried=buried_count,
+    )
 
 
 async def scheduler_loop() -> None:

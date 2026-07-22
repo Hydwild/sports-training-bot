@@ -289,23 +289,41 @@ class TokensPatch(BaseModel):
     vk_token: str | None = None
 
 
+class DeliveryModePatch(BaseModel):
+    mode: str
+
+
 @router.patch("/tenants/{tenant_id}/tokens",
               dependencies=[Depends(require_admin)])
 async def set_tenant_tokens(tenant_id: int, body: TokensPatch,
                             session: AsyncSession = Depends(get_session)):
     """Мультиклиент: задаёт клубу собственные токены ботов.
-    После смены токенов нужен перезапуск сервиса (боты стартуют при запуске)."""
+    Реестры обновляются без рестарта; webhook-токен меняют только после
+    возврата в polling/Long Poll, чтобы внешний секрет не устарел."""
     tenant = await _ensure_tenant(session, tenant_id)
     if body.tg_token is not None:
         val = body.tg_token.strip()
         if val and not re.fullmatch(r"\d+:[A-Za-z0-9_-]+", val):
             raise HTTPException(status_code=400,
                                 detail="Неверный формат Telegram-токена")
+        current = _bot_tokens.token_of(tenant, "tg")
+        if current and val != current and tenant.tg_delivery_mode == "webhook":
+            raise HTTPException(
+                status_code=409,
+                detail="Сначала верните Telegram в polling, затем замените токен",
+            )
         # пишем зашифрованным: открытым текстом токен попадал в каждый
         # дамп базы, а дамп уходит в Telegram
         _bot_tokens.set_token(tenant, "tg", val)
     if body.vk_token is not None:
-        _bot_tokens.set_token(tenant, "vk", body.vk_token.strip())
+        val = body.vk_token.strip()
+        current = _bot_tokens.token_of(tenant, "vk")
+        if current and val != current and tenant.vk_delivery_mode == "callback":
+            raise HTTPException(
+                status_code=409,
+                detail="Сначала верните VK в Long Poll, затем замените токен",
+            )
+        _bot_tokens.set_token(tenant, "vk", val)
     await session.commit()
     # hot-reload: пробуем поднять/перечитать ботов без рестарта сервиса
     reloaded = False
@@ -322,6 +340,39 @@ async def set_tenant_tokens(tenant_id: int, body: TokensPatch,
             "Перезапустите сервис, чтобы боты клиента поднялись.")
     return {"ok": True, "tenant_id": tenant_id, "reloaded": reloaded,
             "note": note}
+
+
+@router.put("/tenants/{tenant_id}/delivery/{platform}",
+            dependencies=[Depends(require_admin)])
+async def set_tenant_delivery_mode(
+    tenant_id: int,
+    platform: str,
+    body: DeliveryModePatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Регистрирует/удаляет внешний webhook и только затем меняет режим."""
+    tenant = await _ensure_tenant(session, tenant_id)
+    from app.services.delivery_modes import set_telegram_mode, set_vk_mode
+    try:
+        if platform == "tg":
+            result = await set_telegram_mode(session, tenant, body.mode)
+        elif platform == "vk":
+            result = await set_vk_mode(session, tenant, body.mode)
+        else:
+            raise HTTPException(status_code=404, detail="Неизвестная платформа")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Не удалось переключить %s tenant=%s", platform, tenant_id)
+        raise HTTPException(
+            status_code=502,
+            detail=f"API {platform.upper()} не подтвердил переключение",
+        ) from exc
+    return {"ok": True, "tenant_id": tenant_id, **result}
 
 
 class BillingPatch(BaseModel):

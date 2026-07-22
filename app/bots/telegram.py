@@ -1932,6 +1932,8 @@ async def _refresh_group_card(tenant_id: int, training_id: int) -> None:
 # ─── мультиклиент: боты клубов с собственными токенами ───
 _tenant_bots: dict[int, "Bot"] = {}     # tenant_id -> Bot (из tenants.tg_token)
 _token_tenants: dict[str, int] = {}     # token -> tenant_id (клиентские боты)
+_tenant_modes: dict[int, str] = {}      # polling | webhook
+_configured_tenants: set[int] = set()   # есть свой токен, даже если не прочитан
 
 from contextvars import ContextVar
 _ctx_tenant: ContextVar[int | None] = ContextVar("tg_tenant", default=None)
@@ -1956,13 +1958,18 @@ def _bot_for(tenant_id: int | None):
     """Бот конкретного клуба, либо бот по умолчанию (из env)."""
     if tenant_id is not None and tenant_id in _tenant_bots:
         return _tenant_bots[tenant_id]
+    if tenant_id is not None and tenant_id in _configured_tenants:
+        # Собственный токен есть, но бот не поднялся: нельзя отправлять через
+        # глобального бота — user_id принадлежит другому пространству.
+        return None
     return _bot
 
 
 async def _send(user_id: int, text: str, tenant_id: int | None = None) -> None:
     b = _bot_for(tenant_id)
-    if b:
-        await b.send_message(user_id, text)
+    if b is None:
+        raise RuntimeError("Telegram bot для доставки не настроен")
+    await b.send_message(user_id, text)
 
 
 async def send_document_to_owner(user_id: int, filename: str, data: bytes,
@@ -1996,12 +2003,10 @@ async def send_text_to_owner(user_id: int, text: str) -> bool:
 
 async def setup() -> None:
     global _bot, _dp
-    if not settings.tg_token:
-        logger.warning("TG_TOKEN не задан — Telegram отключён."); return
     if _dp is not None:
         # уже настроен (повторный вызов, напр. в тестах) — не подключаем router снова
         return
-    _bot = Bot(token=settings.tg_token)
+    _bot = Bot(token=settings.tg_token) if settings.tg_token else None
     _dp = Dispatcher()
     _dp.update.outer_middleware(_TenantMiddleware())
     _dp.include_router(router)
@@ -2013,7 +2018,11 @@ async def setup() -> None:
                         len(_tenant_bots))
     except Exception as e:
         logger.warning("Telegram: не удалось поднять клиентских ботов: %s", e)
-    tasks.register_sender(PLATFORM, _send)
+    if _bot is None and not _tenant_bots and not _configured_tenants:
+        tasks.unregister_sender(PLATFORM, _send)
+        logger.warning("TG_TOKEN и клиентские TG-токены не заданы — Telegram отключён.")
+    else:
+        tasks.register_sender(PLATFORM, _send)
     logger.info("Telegram готов (режим: %s)", settings.tg_mode)
 
 
@@ -2032,26 +2041,34 @@ async def _load_client_bots() -> None:
         tenants = list((await _s.execute(select(Tenant).where(or_(
             Tenant.tg_token.is_not(None),
             Tenant.tg_token_enc != "")))).scalars())
-    fresh: dict[int, str] = {}
+    _configured_tenants.clear()
+    _configured_tenants.update(t.id for t in tenants)
+    fresh: dict[int, tuple[str, str]] = {}
     for t in tenants:
         tok = bot_tokens.token_of(t, "tg")
+        if tok and tok == settings.tg_token:
+            _configured_tenants.discard(t.id)
         if tok and tok != settings.tg_token:
-            fresh[t.id] = tok
+            mode = (t.tg_delivery_mode or "polling").lower()
+            fresh[t.id] = (tok, mode if mode in ("polling", "webhook") else "polling")
     # закрываем убранных/сменивших токен
     for tid, b in list(_tenant_bots.items()):
-        if fresh.get(tid) != b.token:
+        current = (b.token, _tenant_modes.get(tid, "polling"))
+        if fresh.get(tid) != current:
             try:
                 await b.session.close()
             except Exception:
                 pass
             _token_tenants.pop(b.token, None)
             _tenant_bots.pop(tid, None)
+            _tenant_modes.pop(tid, None)
     # поднимаем новых
-    for tid, tok in fresh.items():
+    for tid, (tok, mode) in fresh.items():
         if tid not in _tenant_bots:
             try:
                 _tenant_bots[tid] = Bot(token=tok)
                 _token_tenants[tok] = tid
+                _tenant_modes[tid] = mode
             except Exception as e:
                 logger.warning("Telegram: токен клуба id=%s отклонён: %s",
                                tid, e)
@@ -2062,6 +2079,10 @@ async def reload_client_bots() -> None:
     if _dp is None:
         return
     await _load_client_bots()
+    if _bot is not None or _tenant_bots or _configured_tenants:
+        tasks.register_sender(PLATFORM, _send)
+    else:
+        tasks.unregister_sender(PLATFORM, _send)
     if _polling_active and _reload_evt is not None:
         _reload_evt.set()          # перезапустить поллинг с новым набором
     logger.info("Telegram: клиентские боты перечитаны (%d)", len(_tenant_bots))
@@ -2069,7 +2090,7 @@ async def reload_client_bots() -> None:
 
 async def run_polling() -> None:
     global _reload_evt, _polling_active
-    if not (_bot and _dp):
+    if _dp is None:
         return
     import asyncio as _aio
     _reload_evt = _aio.Event()
@@ -2077,7 +2098,18 @@ async def run_polling() -> None:
     try:
         while True:
             _reload_evt.clear()
-            bots = [_bot, *_tenant_bots.values()]
+            bots = []
+            if _bot is not None and settings.tg_mode == "polling":
+                bots.append(_bot)
+            bots.extend(
+                bot for tid, bot in _tenant_bots.items()
+                if _tenant_modes.get(tid, "polling") == "polling"
+            )
+            if not bots:
+                # Координатор остаётся спящим, чтобы hot-reload мог включить
+                # polling без рестарта, если оператор откатит webhook.
+                await _reload_evt.wait()
+                continue
             poll = _aio.create_task(_dp.start_polling(*bots))
             waiter = _aio.create_task(_reload_evt.wait())
             done, _ = await _aio.wait({poll, waiter},
@@ -2101,9 +2133,30 @@ async def run_polling() -> None:
         _polling_active = False
 
 
-async def feed_webhook_update(update: dict) -> None:
-    if _bot and _dp:
-        await _dp.feed_update(_bot, Update.model_validate(update))
+async def feed_webhook_update(update: dict, tenant_id: int | None = None) -> None:
+    if _dp is None:
+        raise RuntimeError("Telegram dispatcher не инициализирован")
+    bot = _tenant_bots.get(tenant_id) if tenant_id is not None else _bot
+    if bot is None:
+        raise ValueError("Telegram bot не найден")
+    if tenant_id is not None and _tenant_modes.get(tenant_id) != "webhook":
+        raise ValueError("Telegram bot tenant не переведён в webhook")
+    await _dp.feed_update(bot, Update.model_validate(update))
+
+
+def has_polling_bots() -> bool:
+    if _bot is not None and settings.tg_mode == "polling":
+        return True
+    return any(mode == "polling" for mode in _tenant_modes.values())
+
+
+async def shutdown() -> None:
+    bots = ([_bot] if _bot is not None else []) + list(_tenant_bots.values())
+    for bot in bots:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
 
 
 # ─────────── Регулярное расписание и напоминание (паритет с ВК) ───────────

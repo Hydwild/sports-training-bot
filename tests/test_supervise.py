@@ -58,7 +58,7 @@ async def test_alerts_owner_after_three_failures_in_a_row(monkeypatch):
     assert alerts[0][0] == "test-persistent"
 
 
-async def test_telegram_run_polling_propagates_crash():
+async def test_telegram_run_polling_propagates_crash(monkeypatch):
     """Регресс: раньше если start_polling падал НЕ из-за reload (реальный
     сбой сети/API), run_polling() тихо возвращался без исключения —
     supervise() не мог понять, что бот упал, и не перезапускал его."""
@@ -70,6 +70,7 @@ async def test_telegram_run_polling_propagates_crash():
 
     old_bot, old_dp = tg._bot, tg._dp
     tg._bot, tg._dp = object(), FakeDispatcher()
+    monkeypatch.setattr(tg.settings, "tg_mode", "polling")
     try:
         with pytest.raises(RuntimeError, match="сеть упала"):
             await tg.run_polling()

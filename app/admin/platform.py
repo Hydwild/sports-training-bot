@@ -22,11 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.admin.routes import _cookie_secure
 from app.api.routes import (
     BillingPatch,
+    DeliveryModePatch,
     TokensPatch,
     _rate_ok,
     client_ip,
     create_tenant as _create_tenant,
     set_tenant_billing as _set_tenant_billing,
+    set_tenant_delivery_mode as _set_tenant_delivery_mode,
     set_tenant_tokens as _set_tenant_tokens,
 )
 from app.api.schemas import TenantCreate
@@ -358,6 +360,8 @@ async def platform_new_submit(request: Request,
                               timezone: str = Form("Europe/Moscow"),
                               tg_token: str = Form(""),
                               vk_token: str = Form(""),
+                              tg_delivery_mode: str = Form("polling"),
+                              vk_delivery_mode: str = Form("longpoll"),
                               admin_tg_id: str = Form(""),
                               is_demo: str = Form(""),
                               vertical: str = Form("sport"),
@@ -383,12 +387,23 @@ async def platform_new_submit(request: Request,
                            vk_token=vk_token.strip() or None),
                 session)
             reload_note = result["note"]
+            transitions = []
+            if tg_token.strip() and tg_delivery_mode == "webhook":
+                transitions.append(("tg", "webhook"))
+            if vk_token.strip() and vk_delivery_mode == "callback":
+                transitions.append(("vk", "callback"))
+            for platform, mode in transitions:
+                await _set_tenant_delivery_mode(
+                    tenant_out.id, platform, DeliveryModePatch(mode=mode), session,
+                )
+            if transitions:
+                reload_note = "Webhook ботов зарегистрированы и включены."
         except HTTPException as e:
             # клуб уже создан — не откатываем, просто показываем ошибку токена,
             # оператор сможет донастроить с дашборда через /api вручную
             return templates.TemplateResponse(request, "platform_new.html",
                 _ctx(request, error=f"Клуб «{name}» создан (id={tenant_out.id}), "
-                                    f"но токен не принят: {e.detail}"),
+                                    f"но бот не подключён полностью: {e.detail}"),
                 status_code=400)
 
     base = settings.public_base_url or str(request.base_url).rstrip("/")
@@ -519,8 +534,46 @@ async def platform_tokens_clear(tenant_id: int, request: Request,
     tenant = await g.get_tenant(tenant_id)
     if not tenant:
         raise HTTPException(status_code=404, detail="Клуб не найден")
+    active_mode = (tenant.tg_delivery_mode if kind == "tg"
+                   else tenant.vk_delivery_mode)
+    webhook_mode = "webhook" if kind == "tg" else "callback"
+    if active_mode == webhook_mode:
+        raise HTTPException(
+            status_code=409,
+            detail="Сначала верните бота в резервный polling/Long Poll режим",
+        )
     bot_tokens.set_token(tenant, kind, "")
     await session.commit()
+    return RedirectResponse(f"/admin/platform/{tenant_id}/edit",
+                            status_code=303)
+
+
+@router.post("/{tenant_id}/delivery", response_class=HTMLResponse)
+async def platform_delivery_submit(
+    tenant_id: int,
+    request: Request,
+    transition: str = Form(...),
+    _auth: None = Depends(require_platform_admin),
+    _csrf: None = Depends(require_csrf(COOKIE)),
+    session: AsyncSession = Depends(get_session),
+):
+    """Осознанно регистрирует/снимает webhook отдельной кнопкой."""
+    try:
+        platform, mode = transition.split(":", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Неверный переход") from exc
+    try:
+        await _set_tenant_delivery_mode(
+            tenant_id, platform, DeliveryModePatch(mode=mode), session,
+        )
+    except HTTPException as exc:
+        tenant = await GlobalRepository(session).get_tenant(tenant_id)
+        return templates.TemplateResponse(request, "platform_edit.html", _ctx(
+            request, t=tenant, saved=False,
+            tg_state=bot_tokens.mask(tenant, "tg") if tenant else "не задан",
+            vk_state=bot_tokens.mask(tenant, "vk") if tenant else "не задан",
+            error=f"Режим не переключён: {exc.detail}",
+        ), status_code=exc.status_code)
     return RedirectResponse(f"/admin/platform/{tenant_id}/edit",
                             status_code=303)
 

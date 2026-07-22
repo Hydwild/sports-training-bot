@@ -72,6 +72,13 @@ class Tenant(Base):
     tg_token_ver: Mapped[str] = mapped_column(String(8), default="")
     vk_token_enc: Mapped[str] = mapped_column(Text, default="")
     vk_token_ver: Mapped[str] = mapped_column(String(8), default="")
+    # Способ получения входящих событий выбирается отдельно для каждого
+    # клиентского бота. Старые строки остаются на polling/longpoll до canary.
+    tg_delivery_mode: Mapped[str] = mapped_column(String(12), default="polling")
+    vk_delivery_mode: Mapped[str] = mapped_column(String(12), default="longpoll")
+    # Строка подтверждения Callback API не даёт доступа к VK API; секрет
+    # событий выводится из WEBHOOK_MASTER_SECRET и токена и в БД не хранится.
+    vk_confirmation_code: Mapped[str] = mapped_column(String(64), default="")
     # --- Настройки уведомлений и поведения ---
     # Напоминание о тренировке: вкл и за сколько минут до начала
     reminder_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -254,6 +261,36 @@ class Outbox(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
+
+
+class InboundEvent(Base):
+    """Надёжный inbox входящих Telegram/VK webhook-событий."""
+    __tablename__ = "inbound_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "platform", "tenant_id", "external_event_id",
+            name="uq_inbound_event_external",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    platform: Mapped[str] = mapped_column(String(8), index=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    external_event_id: Mapped[str] = mapped_column(String(160))
+    payload: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    claimed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    processed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str] = mapped_column(String(500), default="")
 
 
 class Membership(Base):
