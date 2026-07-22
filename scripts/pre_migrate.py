@@ -22,12 +22,22 @@ from app.core.config import settings
 from app.db.pre_migrate import needs_stamp
 
 
+async def _needs_stamp_and_dispose(engine) -> bool:
+    """Проверить legacy-схему и закрыть пул в том же event loop.
+
+    AsyncEngine нельзя сначала использовать в одном ``asyncio.run()``, а
+    затем закрывать в другом: asyncpg хранит Future исходного event loop и
+    на PostgreSQL пишет ``Future attached to a different loop``.
+    """
+    try:
+        return await needs_stamp(engine)
+    finally:
+        await engine.dispose()
+
+
 def main() -> int:
     engine = create_async_engine(settings.database_url)
-    try:
-        stamp_needed = asyncio.run(needs_stamp(engine))
-    finally:
-        asyncio.run(engine.dispose())
+    stamp_needed = asyncio.run(_needs_stamp_and_dispose(engine))
 
     if stamp_needed:
         print("PRE-MIGRATE: схема уже существует, но alembic_version не "

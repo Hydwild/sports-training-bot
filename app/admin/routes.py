@@ -437,12 +437,8 @@ async def builder_generate(request: Request,
 
 def _sqlite_path() -> str | None:
     """Путь к файлу SQLite из DATABASE_URL, либо None (если Postgres)."""
-    url = settings.database_url
-    if not url.startswith("sqlite"):
-        return None
-    # sqlite+aiosqlite:////data/badminton.db -> /data/badminton.db
-    tail = url.split("///")[-1]
-    return "/" + tail if url.count("/") >= 4 and not tail.startswith("/") else tail
+    from app.db.paths import sqlite_file_path
+    return sqlite_file_path(settings.database_url)
 
 
 @router.get("/backup")
