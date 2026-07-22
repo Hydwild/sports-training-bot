@@ -95,8 +95,10 @@ def test_health_reports_no_secrets():
     with TestClient(app) as c:
         body = c.get("/health").json()
         assert set(body) == {"status", "edition", "db", "commit",
-                             "proxy_headers_configured", "keys_ok"}
+                             "proxy_headers_configured", "keys_ok", "rss_mb"}
         assert phones.settings.jwt_secret not in str(body)
+        # rss_mb — только число (или None вне Linux), не строка с путями
+        assert body["rss_mb"] is None or isinstance(body["rss_mb"], (int, float))
 
 
 def test_startup_key_check_is_not_swallowed(monkeypatch, caplog):

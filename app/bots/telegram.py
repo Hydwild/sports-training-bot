@@ -28,7 +28,10 @@ from app.core.features import features
 from app.core.verticals import VERTICALS, vcfg
 from app.db.engine import SessionLocal
 from app.repositories.repo import GlobalRepository
-from app.services import charts, tasks
+from app.services import tasks
+# app.services.charts НЕ импортируем здесь: он тянет matplotlib.pyplot, а это
+# ~45 МБ RSS на всё время жизни процесса ради одной картинки в /stats.
+# Railway считает деньги по средней памяти, поэтому импорт — по месту вызова.
 from app.services.booking import BookingService
 
 logger = logging.getLogger("tg")
@@ -735,6 +738,7 @@ async def cmd_stats(message: Message) -> None:
             lines.append(f"  • {t.title} — {svc.format_local(t.start_at)}")
     await message.answer("\n".join(lines))
     if rows:
+        from app.services import charts    # ленивый: см. импорты вверху файла
         png = charts.attendance_chart_png(rows)
         if png:
             await message.answer_photo(

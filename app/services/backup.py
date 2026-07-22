@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import asyncio
 import datetime as dt
 import gzip
+import io
 import logging
 import os
 
@@ -25,6 +26,31 @@ logger = logging.getLogger("backup")
 # Telegram ограничивает файлы, отправляемые ботом, 50 МБ — оставляем запас
 MAX_TELEGRAM_FILE_MB = 45
 
+# Размер куска при потоковой обработке дампа.
+#
+# Зачем поток. Раньше дамп жил в памяти целиком и не в одном экземпляре:
+# сырой вывод pg_dump, его gzip-копия, ещё одна полная копия при проверке
+# (gzip.decompress) и зашифрованный результат. Пик RSS был порядка размера
+# всей базы, а Python не всегда возвращает освобождённые блоки ОС — процесс
+# так и оставался раздутым до перезапуска. Railway же считает деньги по
+# СРЕДНЕЙ памяти, поэтому суточный бэкап оплачивался все 24 часа.
+_DUMP_CHUNK = 1 << 20      # 1 МиБ
+
+
+def _release_memory() -> None:
+    """Возвращает освобождённую память операционной системе.
+
+    После бэкапа освобождаются десятки/сотни мегабайт, но арены glibc
+    остаются за процессом, и RSS не опускается. gc + malloc_trim отдают их
+    обратно. На musl/Windows функции нет — тогда просто пропускаем."""
+    import gc
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
 
 def _pg_dump_url() -> str:
     """DATABASE_URL для pg_dump: убираем SQLAlchemy-специфичный суффикс
@@ -32,9 +58,29 @@ def _pg_dump_url() -> str:
     return settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
 
 
+async def _drain_stderr(stream, keep: int = 4096) -> bytes:
+    """Вычитывает stderr до конца, оставляя в памяти только начало.
+
+    Читать его обязательно и параллельно со stdout: если pg_dump напишет
+    много предупреждений, он заблокируется на переполненном пайпе, а мы —
+    на чтении stdout, и бэкап зависнет навсегда."""
+    if stream is None:
+        return b""
+    head = b""
+    while True:
+        chunk = await stream.read(_DUMP_CHUNK)
+        if not chunk:
+            return head
+        if len(head) < keep:
+            head += chunk[:keep - len(head)]
+
+
 async def _dump_postgres() -> tuple[bytes, str] | None:
     """pg_dump (обычный SQL, без владельцев/прав — переносимо на любой
-    хостинг) -> gzip. None при ошибке (см. логи)."""
+    хостинг) -> gzip ПОТОКОМ. None при ошибке (см. логи).
+
+    Сырой дамп целиком в память не поднимается: он сжимается по мере
+    чтения, так что пик определяется размером архива, а не базы."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "pg_dump", "--no-owner", "--no-acl", "--dbname", _pg_dump_url(),
@@ -43,15 +89,31 @@ async def _dump_postgres() -> tuple[bytes, str] | None:
     except FileNotFoundError:
         logger.error("pg_dump не найден в образе (нужен пакет postgresql-client)")
         return None
-    stdout, stderr = await proc.communicate()
+
+    err_task = asyncio.ensure_future(_drain_stderr(proc.stderr))
+    buf = io.BytesIO()
+    raw_len = 0
+    try:
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            while True:
+                chunk = await proc.stdout.read(_DUMP_CHUNK)
+                if not chunk:
+                    break
+                raw_len += len(chunk)
+                gz.write(chunk)
+    finally:
+        await proc.wait()
+        stderr = await err_task
+
     if proc.returncode != 0:
         logger.error("pg_dump завершился с ошибкой (%s): %s",
                      proc.returncode, stderr.decode(errors="replace")[:500])
         return None
-    if not stdout:
+    if not raw_len:
         logger.error("pg_dump вернул пустой дамп")
         return None
-    data = gzip.compress(stdout)
+    data = buf.getvalue()
+    buf.close()
     name = f"backup_{dt.date.today().isoformat()}.sql.gz"
     return data, name
 
@@ -81,8 +143,16 @@ def _dump_sqlite_sync() -> tuple[bytes, str] | None:
             src.backup(dst)
         src.close()
         dst.close()
-        with open(tmp, "rb") as f:
-            data = gzip.compress(f.read())
+        # сжимаем потоком: файл базы целиком в память не поднимаем
+        buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz, open(tmp, "rb") as f:
+            while True:
+                chunk = f.read(_DUMP_CHUNK)
+                if not chunk:
+                    break
+                gz.write(chunk)
+        data = buf.getvalue()
+        buf.close()
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
@@ -150,17 +220,40 @@ def verify_dump(data: bytes) -> str:
     Возвращает описание проблемы или пустую строку.
 
     Без неё «успешный» бэкап мог оказаться архивом из нуля таблиц: файл
-    приходит, оператор спокоен, а восстанавливать нечего."""
+    приходит, оператор спокоен, а восстанавливать нечего.
+
+    Распаковываем ПОТОКОМ и держим лишь небольшое окно: полный
+    gzip.decompress поднимал бы в RAM ещё одну копию всей базы рядом с
+    архивом — на этом пике процесс и разрастался."""
+    marker = b"CREATE TABLE"
+    need_marker = not settings.is_sqlite
+    head, tail = b"", b""
+    total = 0
+    found = False
     try:
-        raw = gzip.decompress(data)
-    except OSError as e:
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
+            while True:
+                chunk = gz.read(_DUMP_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if len(head) < 64:
+                    head += chunk[:64 - len(head)]
+                if need_marker and not found and marker in tail + chunk:
+                    found = True
+                # всё, что нужно для вердикта, уже известно — дальше не
+                # распаковываем: это чистая трата памяти и времени
+                if total >= 1024 and (found or not need_marker):
+                    break
+                tail = chunk[-(len(marker) - 1):]
+    except (OSError, EOFError) as e:
         return f"архив не распаковывается ({e})"
-    if len(raw) < 1024:
-        return f"дамп подозрительно мал ({len(raw)} байт)"
+    if total < 1024:
+        return f"дамп подозрительно мал ({total} байт)"
     if settings.is_sqlite:
-        if not raw.startswith(b"SQLite format 3"):
+        if not head.startswith(b"SQLite format 3"):
             return "это не файл базы SQLite"
-    elif b"CREATE TABLE" not in raw:
+    elif not found:
         return "в дампе нет ни одной таблицы"
     return ""
 
@@ -182,7 +275,18 @@ async def send_backup_to_owner() -> BackupResult:
     Делает дамп базы и отправляет владельцу площадки в Telegram файлом.
     Возвращает BackupResult: ok=False означает, что копии за сегодня нет и
     попытку нужно повторить (день не помечается выполненным).
+
+    Память после себя возвращаем ОС явно (см. _release_memory): иначе пик
+    суточного бэкапа оставался бы в RSS до перезапуска и оплачивался все
+    последующие часы.
     """
+    try:
+        return await _send_backup_to_owner()
+    finally:
+        _release_memory()
+
+
+async def _send_backup_to_owner() -> BackupResult:
     owner_id = settings.platform_owner_tg_id
     if not owner_id:
         return BackupResult(False,

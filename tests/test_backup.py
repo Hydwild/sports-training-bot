@@ -112,14 +112,26 @@ async def test_send_failure_reported(monkeypatch):
 
 # ---------- pg_dump: успех/ошибка через мок subprocess ----------
 
+class _FakeStream:
+    """Асинхронный поток поверх bytes: pg_dump читается кусками, а не
+    целиком через communicate() — дамп не должен полностью попадать в RAM."""
+
+    def __init__(self, data: bytes):
+        import io as _io
+        self._buf = _io.BytesIO(data)
+
+    async def read(self, n: int = -1) -> bytes:
+        return self._buf.read(n)
+
+
 class _FakeProcess:
     def __init__(self, stdout: bytes, stderr: bytes, returncode: int):
-        self._stdout = stdout
-        self._stderr = stderr
+        self.stdout = _FakeStream(stdout)
+        self.stderr = _FakeStream(stderr)
         self.returncode = returncode
 
-    async def communicate(self):
-        return self._stdout, self._stderr
+    async def wait(self):
+        return self.returncode
 
 
 async def test_pg_dump_success_gzips_output(monkeypatch):

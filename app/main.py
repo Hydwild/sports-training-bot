@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -274,7 +275,8 @@ async def health(response: Response) -> dict:
     # keys_ok = конфигурация целостна И секреты подтверждены строками БД
     keys_ok = await _keys_ok()
     base = {"edition": settings.edition, "db": db_kind, "commit": sha,
-            "proxy_headers_configured": proxy_ok, "keys_ok": keys_ok}
+            "proxy_headers_configured": proxy_ok, "keys_ok": keys_ok,
+            "rss_mb": _rss_mb()}
     db_ok = True
     try:
         async with engine.connect() as conn:
@@ -286,6 +288,21 @@ async def health(response: Response) -> dict:
         return {"status": "ok", **base}
     response.status_code = 503
     return {"status": "error", **base}
+
+
+def _rss_mb() -> float | None:
+    """Текущая резидентная память процесса, МБ. None — если платформа не
+    отдаёт её дёшево (не Linux).
+
+    Нужна именно в /health: Railway тарифицирует СРЕДНЮЮ память, и без
+    возможности посмотреть RSS прямо в проде любая оптимизация памяти
+    остаётся гаданием. Число безобидное — ни секретов, ни адресов."""
+    try:
+        with open("/proc/self/statm") as f:
+            pages = int(f.read().split()[1])
+        return round(pages * os.sysconf("SC_PAGE_SIZE") / 1048576, 1)
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
 
 
 def _keys_config_ok() -> bool:
