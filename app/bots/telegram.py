@@ -2009,6 +2009,11 @@ async def setup() -> None:
     _bot = Bot(token=settings.tg_token) if settings.tg_token else None
     _dp = Dispatcher()
     _dp.update.outer_middleware(_TenantMiddleware())
+    # Консоль владельца площадки — ПЕРВЫМ роутером: её команды должны
+    # разбираться до клубных обработчиков. Для всех, кроме владельца,
+    # фильтр не совпадает и события уходят дальше как обычно.
+    from app.bots.platform_console import router as _console_router
+    _dp.include_router(_console_router)
     _dp.include_router(router)
     # мультиклиент: поднимаем ботов клубов с собственными токенами
     try:
