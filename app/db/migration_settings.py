@@ -7,8 +7,11 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
+
+logger = logging.getLogger("alembic.env")
 
 # Сколько ждать блокировку таблицы, прежде чем честно упасть.
 #
@@ -23,12 +26,27 @@ import re
 # миграции: долгий бэкфилл данных из-за этого не прервётся.
 DEFAULT_LOCK_TIMEOUT = "10s"
 
-# Значение уходит в текст SET-запроса, поэтому принимаем лишь число с
-# необязательной единицей измерения — всё остальное отбрасываем.
-_LOCK_TIMEOUT_RE = re.compile(r"^\d+(ms|s|min)?$")
+# Единица измерения ОБЯЗАТЕЛЬНА.
+#
+# PostgreSQL трактует число без единицы как МИЛЛИСЕКУНДЫ, поэтому невинное
+# `MIGRATION_LOCK_TIMEOUT=10` означает 10 мс: миграция падала бы почти от
+# любого параллельного обращения к таблице, и деплои стали бы случайно
+# краснеть. Разница между «10» и «10s» — три порядка, а выглядят они
+# одинаково безобидно, поэтому голое число не принимаем вовсе.
+_LOCK_TIMEOUT_RE = re.compile(r"^\d+(ms|s|min)$")
 
 
 def lock_timeout() -> str:
-    """MIGRATION_LOCK_TIMEOUT, если он синтаксически безопасен, иначе дефолт."""
+    """MIGRATION_LOCK_TIMEOUT, если он задан корректно, иначе безопасный
+    дефолт. О подмене сообщаем: молча взять не то, что просил оператор,
+    хуже, чем громко сказать об этом в логе деплоя."""
     raw = (os.getenv("MIGRATION_LOCK_TIMEOUT") or "").strip()
-    return raw if _LOCK_TIMEOUT_RE.match(raw) else DEFAULT_LOCK_TIMEOUT
+    if not raw:
+        return DEFAULT_LOCK_TIMEOUT
+    if _LOCK_TIMEOUT_RE.match(raw):
+        return raw
+    logger.warning(
+        "MIGRATION_LOCK_TIMEOUT=%r игнорируется, беру %s. Нужна явная "
+        "единица измерения (10s, 500ms, 1min): голое число PostgreSQL "
+        "считает миллисекундами.", raw, DEFAULT_LOCK_TIMEOUT)
+    return DEFAULT_LOCK_TIMEOUT

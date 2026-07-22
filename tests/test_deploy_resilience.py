@@ -167,11 +167,35 @@ def test_lock_timeout_is_configurable(monkeypatch):
 @pytest.mark.parametrize("bad", ["10s; DROP TABLE tenants", "', '1", "abc",
                                  "", "10 s", "-5s"])
 def test_lock_timeout_rejects_injection(monkeypatch, bad):
-    """Значение подставляется в текст SET-запроса, поэтому мусор отбрасываем."""
+    """Значение уходит в параметр соединения, поэтому мусор отбрасываем."""
     from app.db.migration_settings import lock_timeout
 
     monkeypatch.setenv("MIGRATION_LOCK_TIMEOUT", bad)
     assert lock_timeout() == "10s"
+
+
+def test_bare_number_is_rejected(monkeypatch, caplog):
+    """Боевая ошибка: в Railway задали `10`, имея в виду 10 секунд.
+
+    PostgreSQL считает голое число МИЛЛИСЕКУНДАМИ — это 10 мс, и миграция
+    падала бы почти от любого параллельного обращения к таблице. Разница в
+    три порядка при неотличимом на вид значении, поэтому берём дефолт и
+    громко пишем об этом в лог деплоя."""
+    from app.db.migration_settings import lock_timeout
+
+    monkeypatch.setenv("MIGRATION_LOCK_TIMEOUT", "10")
+    with caplog.at_level("WARNING"):
+        assert lock_timeout() == "10s"
+    assert "MIGRATION_LOCK_TIMEOUT" in caplog.text
+    assert "миллисекунд" in caplog.text
+
+
+@pytest.mark.parametrize("good", ["10s", "500ms", "1min", "30s"])
+def test_explicit_units_are_accepted(monkeypatch, good):
+    from app.db.migration_settings import lock_timeout
+
+    monkeypatch.setenv("MIGRATION_LOCK_TIMEOUT", good)
+    assert lock_timeout() == good
 
 
 def test_lock_timeout_applied_only_to_postgres():
