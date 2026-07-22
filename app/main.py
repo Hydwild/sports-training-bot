@@ -176,6 +176,10 @@ async def lifespan(app: FastAPI):
     import os as _os
     if _os.getenv("DISABLE_BACKGROUND") != "1":
         from app.services import inbound
+        # Telegram хранит webhook на своей стороне. Сначала сверяем его
+        # с TG_MODE и только потом запускаем polling-координатор. Так
+        # смена режима не требует ручного вызова Bot API.
+        await tg.configure_global_delivery()
         _background.append(asyncio.create_task(tasks.deliver_outbox_loop()))
         _background.append(asyncio.create_task(tasks.scheduler_loop()))
         _background.append(asyncio.create_task(inbound.worker_loop()))

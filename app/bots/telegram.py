@@ -2026,6 +2026,42 @@ async def setup() -> None:
     logger.info("Telegram готов (режим: %s)", settings.tg_mode)
 
 
+async def configure_global_delivery() -> None:
+    """Приводит внешнее состояние Telegram в соответствие с ``TG_MODE``.
+
+    Без этого ``TG_MODE=webhook`` только отключал polling внутри
+    приложения, но не регистрировал URL в Telegram. Обратный переход
+    тоже должен удалять webhook, иначе Telegram отвергнет getUpdates.
+    Вызывается до запуска фоновых задач, поэтому ошибка Telegram API
+    останавливает нерабочий deployment, а не оставляет бота немым.
+    """
+    if _bot is None:
+        return
+
+    if settings.tg_mode == "webhook":
+        url = settings.public_url("/webhook/telegram")
+        if not url.lower().startswith("https://"):
+            raise RuntimeError(
+                "Для Telegram webhook PUBLIC_BASE_URL должен начинаться с https://"
+            )
+        ok = await _bot.set_webhook(
+            url=url,
+            secret_token=settings.tg_webhook_secret,
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=False,
+        )
+        action = "webhook зарегистрирован"
+    elif settings.tg_mode == "polling":
+        ok = await _bot.delete_webhook(drop_pending_updates=False)
+        action = "webhook удалён для polling"
+    else:
+        raise RuntimeError("TG_MODE должен быть polling или webhook")
+
+    if not ok:
+        raise RuntimeError("Telegram API не подтвердил настройку режима")
+    logger.info("Telegram: %s", action)
+
+
 _reload_evt = None
 _polling_active = False
 
