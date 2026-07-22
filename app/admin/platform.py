@@ -695,7 +695,7 @@ async def memory_diagnostics(_auth: None = Depends(require_platform_admin)):
     import threading
     from collections import Counter
 
-    from app.main import _rss_mb
+    from app.main import _rss_mb, error_counters
 
     counts: Counter = Counter()
     for obj in gc.get_objects():
@@ -723,6 +723,9 @@ async def memory_diagnostics(_auth: None = Depends(require_platform_admin)):
         "gc_counts": gc.get_count(),
         "gc_tracked": len(gc.get_objects()),
         "top_objects": dict(counts.most_common(25)),
+        # какой эндпойнт отдаёт 4xx/5xx: график Railway показывает долю,
+        # но не маршрут. Только шаблоны и числа — путей и секретов нет.
+        "error_counts": error_counters(),
         # тяжёлые библиотеки грузятся лениво — видно, поднялись ли они
         "matplotlib_loaded": "matplotlib.pyplot" in sys.modules,
     }

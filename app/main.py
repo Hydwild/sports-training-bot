@@ -259,6 +259,56 @@ _PERMISSIONS_POLICY = (
 )
 
 
+# ---------- Наблюдаемость ошибок ----------
+#
+# График Requests в Railway показывает долю 4xx/5xx, но не говорит, КАКОЙ
+# эндпойнт их отдаёт, а искать это по логам вручную мучительно.
+#
+# Считаем по ШАБЛОНУ маршрута, а не по сырому пути, и это важно дважды:
+#   * сырые пути раздули бы словарь без границ (сканеры дёргают случайные
+#     URL сотнями);
+#   * в пути живут секреты — `/club/{tenant_id}/m/{token}` содержит
+#     одноразовый токен управления. Шаблон значений не содержит вовсе,
+#     поэтому в счётчики и логи ничего личного не попадает.
+_ERROR_COUNTS: dict[str, int] = {}
+_ERROR_COUNTS_MAX = 200          # предел кардинальности
+
+
+def _route_label(request: Request, status: int) -> str:
+    route = request.scope.get("route")
+    template = getattr(route, "path", None) or "<нет маршрута>"
+    return f"{request.method} {template} -> {status}"
+
+
+def _record_error(request: Request, status: int) -> None:
+    key = _route_label(request, status)
+    if key not in _ERROR_COUNTS and len(_ERROR_COUNTS) >= _ERROR_COUNTS_MAX:
+        key = f"(прочее) -> {status}"
+    _ERROR_COUNTS[key] = _ERROR_COUNTS.get(key, 0) + 1
+
+
+def error_counters() -> dict[str, int]:
+    """Ответы 4xx/5xx с момента старта процесса, по убыванию частоты.
+    Только шаблоны маршрутов и числа — ни путей, ни секретов."""
+    return dict(sorted(_ERROR_COUNTS.items(), key=lambda kv: -kv[1]))
+
+
+@app.middleware("http")
+async def _observe_errors(request: Request, call_next):
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Ответ (500) отдаст Starlette — нам важно, чтобы в логе остался
+        # маршрут: без него traceback в Railway не связать с эндпойнтом.
+        _record_error(request, 500)
+        logger.exception("Необработанная ошибка: %s",
+                         _route_label(request, 500))
+        raise
+    if response.status_code >= 400:
+        _record_error(request, response.status_code)
+    return response
+
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     response = await call_next(request)
