@@ -121,3 +121,48 @@ async def test_only_unconnected_platforms_are_buried(maker, connected):
     for platform in ("tg", "vk", "legacy"):
         expected = "pending" if platform in connected else "dead"
         assert st[platform] == expected, f"{platform}: ожидали {expected}"
+
+
+# ---------- «некуда слать» ≠ «сбой доставки» ----------
+
+async def _dead_with_reason(maker, reason: str, n: int = 1) -> None:
+    from app.models.entities import Outbox as _O
+    async with maker() as s:
+        for i in range(n):
+            s.add(_O(tenant_id=1, platform="tg", user_id=900 + i,
+                     text="t", sent=True, status="dead", last_error=reason))
+        await s.commit()
+
+
+async def test_health_separates_no_channel_from_real_failures(maker):
+    """Разовая уборка старой очереди не должна навсегда переводить порог
+    сбоя доставки: иначе алерт кричит каждый день, владелец перестаёт его
+    читать, и настоящий сбой проходит незамеченным."""
+    from app.repositories.repo import NO_CHANNEL_REASON
+
+    await _seed(maker)
+    await _dead_with_reason(maker, NO_CHANNEL_REASON, n=65)
+    await _dead_with_reason(maker, "TelegramForbiddenError: bot was blocked", n=2)
+
+    async with maker() as s:
+        health = await GlobalRepository(s).outbox_health()
+
+    assert health["dead"] == 2, "в сбои доставки попало то, что слать некуда"
+    assert health["dead_no_channel"] == 65
+
+
+async def test_burial_uses_the_shared_reason(maker):
+    """Причина должна совпадать с константой — иначе классификация в сводке
+    молча перестанет работать."""
+    from app.repositories.repo import NO_CHANNEL_REASON
+
+    await _seed(maker)
+    async with maker() as s:
+        g = GlobalRepository(s)
+        assert await g.dead_letter_undeliverable(["tg"]) == 2
+        await s.commit()
+        health = await g.outbox_health()
+
+    assert health["dead_no_channel"] == 2
+    assert health["dead"] == 0
+    assert NO_CHANNEL_REASON      # константа существует и непустая

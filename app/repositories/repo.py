@@ -35,6 +35,12 @@ def _utcnow() -> dt.datetime:
 # пауза перед повтором доставки по номеру попытки, в минутах
 RETRY_DELAYS_MIN = (1, 2, 5, 15)
 
+# Причина, по которой сообщение похоронено из-за отсутствия канала доставки
+# (например, VK без VK_TOKEN). Это НЕ сбой доставки: отправлять было некуда
+# изначально. Константа общая, потому что по ней же такие сообщения
+# отделяются от настоящих провалов в суточной сводке владельцу.
+NO_CHANNEL_REASON = "нет канала доставки для этой платформы"
+
 
 class TenantRepository:
     """Все методы работают только в пределах одного тенанта."""
@@ -987,7 +993,7 @@ class GlobalRepository:
         return list(result.scalars())
 
     async def dead_letter_undeliverable(self, deliverable: list[str],
-                                        reason: str) -> int:
+                                        reason: str = NO_CHANNEL_REASON) -> int:
         """Хоронит pending-сообщения платформ, для которых канала доставки
         нет в принципе (например `web`: у веб-клиента нет мессенджера).
 
@@ -1076,8 +1082,22 @@ class GlobalRepository:
 
     async def outbox_health(self) -> dict[str, int]:
         """Сводка для алерта: сколько недоставленных и как давно ждёт
-        самое старое сообщение в очереди (в минутах)."""
-        dead = await self.count_dead_outbox()
+        самое старое сообщение в очереди (в минутах).
+
+        Недоставленные разделены на два РАЗНЫХ по смыслу вида:
+          * dead — настоящие провалы доставки (бот заблокирован, чат удалён);
+          * dead_no_channel — отправлять было некуда изначально (площадка
+            не подключена). Это история и конфигурация, а не сбой.
+
+        Смешивать их нельзя: разовая уборка старой очереди навсегда
+        перевела бы порог сбоя доставки и алерт кричал бы каждый день, пока
+        владелец не научился бы его игнорировать — а тогда настоящий сбой
+        прошёл бы незамеченным."""
+        no_channel = int((await self.session.execute(
+            select(func.count()).select_from(Outbox).where(
+                Outbox.status == "dead",
+                Outbox.last_error == NO_CHANNEL_REASON))).scalar() or 0)
+        dead = await self.count_dead_outbox() - no_channel
         oldest = (await self.session.execute(
             select(func.min(Outbox.created_at)).where(
                 Outbox.status == "pending"))).scalar()
@@ -1086,7 +1106,8 @@ class GlobalRepository:
             if oldest.tzinfo is None:
                 oldest = oldest.replace(tzinfo=dt.timezone.utc)
             age_min = int((_utcnow() - oldest).total_seconds() // 60)
-        return {"dead": dead, "pending_age_min": max(age_min, 0)}
+        return {"dead": dead, "dead_no_channel": no_channel,
+                "pending_age_min": max(age_min, 0)}
 
     async def count_dead_outbox(self) -> int:
         """Сколько сообщений так и не доставлено — для отчёта владельцу."""

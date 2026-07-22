@@ -159,8 +159,9 @@ async def _deliver_once(*, requeue_stale: bool = True) -> DeliveryResult:
         # только по зарегистрированным senders. Такие строки висели в pending
         # вечно и держали алерт «очередь не разгребается» включённым, скрывая
         # за собой настоящие сбои. Хороним их честно, с причиной.
-        buried = await g.dead_letter_undeliverable(
-            list(_senders), "нет канала доставки для этой платформы")
+        # причина берётся из общей константы: по ней же такие сообщения
+        # отделяются от настоящих сбоев доставки в суточной сводке
+        buried = await g.dead_letter_undeliverable(list(_senders))
         if buried:
             buried_count += buried
             logger.warning("Похоронили %d сообщений платформ без канала "
@@ -539,6 +540,7 @@ async def _daily_maintenance(last_day: list) -> None:
         from app.repositories.repo import GlobalRepository
         health = await GlobalRepository(session).outbox_health()
         dead_count = health["dead"]
+        no_channel_count = health["dead_no_channel"]
         pending_age = health["pending_age_min"]
 
         # SaaS: клубы с истекающей (≤3 дня) или уже истёкшей оплатой
@@ -601,6 +603,17 @@ async def _daily_maintenance(last_day: list) -> None:
             lines.append(f"⚠️ Это больше порога ({DEAD_LETTER_ALERT}) — "
                          "похоже на общий сбой доставки, а не на "
                          "единичные блокировки.")
+    # Сообщения, которые слать было НЕКУДА (площадка не подключена), к
+    # сбоям доставки не относятся и порог не двигают — иначе разовая уборка
+    # старой очереди заставила бы алерт кричать каждый день, и владелец
+    # перестал бы его читать. Показываем отдельной строкой, без тревоги.
+    if no_channel_count:
+        if lines:
+            lines.append("")
+        lines.append(f"🗄 Снято с очереди как недоставляемое: "
+                     f"{no_channel_count}. Это сообщения площадок, которые "
+                     "не подключены (например, VK без токена) — отправлять "
+                     "их было некуда. Сбоем доставки не считается.")
     if pending_age >= PENDING_AGE_ALERT_MIN:
         # очередь не разгребается: доставка встала, а не «иногда не доходит»
         if lines:
