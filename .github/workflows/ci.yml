@@ -115,44 +115,38 @@ jobs:
       - name: Тесты на живом PostgreSQL
         run: python -m pytest -q -m pg tests/test_pg_concurrency.py
 
-      # Клиент PostgreSQL на раннере — версии 16, а сервер здесь 18 (и на
-      # проде Railway тоже 18). pg_dump 16 ОТКАЗЫВАЕТСЯ снимать дамп с более
-      # новой версии сервера — тот же класс несовместимости, что уже ловили
-      # с Railway. Поэтому ставим клиент ровно той версии, что и сервер, из
-      # официального репозитория PostgreSQL (как в Dockerfile).
-      - name: Установка postgresql-client-18
-        run: |
-          sudo install -d /usr/share/postgresql-common/pgdg
-          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-            https://www.postgresql.org/media/keys/ACCC4CF8.asc
-          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-client-18
-
-      # backup -> restore на настоящей базе: снимаем дамп, восстанавливаем
-      # во ВТОРУЮ базу, проверяем. Ровно то, что делает restore_drill.
+      # backup -> restore на настоящей базе. Клиент pg_dump на раннере —
+      # версии 16, а сервер 18 (и на проде Railway тоже 18): pg_dump 16
+      # отказывается снимать дамп с более новой версии. Чтобы клиент был
+      # РОВНО версии сервера и без возни с apt/путями — гоняем pg-утилиты
+      # прямо из образа postgres:18 (--network host, чтобы дотянуться до
+      # сервиса на localhost:5432). Причину падения выносим в аннотацию.
       - name: Проверка backup → restore
-        env:
-          PGPASSWORD: postgres
         run: |
-          set -e
-          # именно клиент 18, а не первый в PATH (там может остаться 16)
-          PGBIN="/usr/lib/postgresql/18/bin"
-          "$PGBIN/pg_dump" --version
-          "$PGBIN/createdb" -h localhost -U postgres -p 5432 restore_target
-          "$PGBIN/pg_dump" --no-owner --no-acl \
-            --dbname "postgresql://postgres:postgres@localhost:5432/ci" \
-            > /tmp/ci_dump.sql
-          test -s /tmp/ci_dump.sql
-          grep -q "CREATE TABLE" /tmp/ci_dump.sql
-          "$PGBIN/psql" -v ON_ERROR_STOP=1 \
-            "postgresql://postgres:postgres@localhost:5432/restore_target" \
-            < /tmp/ci_dump.sql
-          # восстановленная база отвечает на запрос к критической таблице
-          "$PGBIN/psql" -v ON_ERROR_STOP=1 -tAqc "SELECT count(*) FROM tenants;" \
-            "postgresql://postgres:postgres@localhost:5432/restore_target"
-          "$PGBIN/dropdb" -h localhost -U postgres -p 5432 restore_target
+          set +e
+          # -i: подключить stdin (нужно для psql < dump.sql)
+          PG='docker run --rm -i --network host -e PGPASSWORD=postgres postgres:18'
+          DUMP="postgresql://postgres:postgres@localhost:5432/ci"
+          TARGET="postgresql://postgres:postgres@localhost:5432/restore_target"
+          {
+            set -e
+            $PG pg_dump --version
+            $PG createdb "$TARGET"
+            # дамп забираем на раннер, чтобы проверить содержимое
+            $PG pg_dump --no-owner --no-acl --dbname "$DUMP" > /tmp/ci_dump.sql
+            test -s /tmp/ci_dump.sql
+            grep -q "CREATE TABLE" /tmp/ci_dump.sql
+            # и восстанавливаем во ВТОРУЮ базу из stdin
+            $PG psql -v ON_ERROR_STOP=1 "$TARGET" < /tmp/ci_dump.sql
+            $PG psql -v ON_ERROR_STOP=1 -tAqc "SELECT count(*) FROM tenants;" "$TARGET"
+            $PG dropdb "$TARGET"
+          } > restore.log 2>&1
+          code=$?
+          cat restore.log
+          if [ $code -ne 0 ]; then
+            echo "::error title=backup→restore::$(tail -c 1500 restore.log | tr '\n' ' ')"
+          fi
+          exit $code
           dropdb -h localhost -U postgres -p 5432 restore_target
 
   image:
