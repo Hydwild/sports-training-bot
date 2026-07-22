@@ -179,7 +179,12 @@ async def lifespan(app: FastAPI):
         # Telegram хранит webhook на своей стороне. Сначала сверяем его
         # с TG_MODE и только потом запускаем polling-координатор. Так
         # смена режима не требует ручного вызова Bot API.
-        await tg.configure_global_delivery()
+        if not await tg.configure_global_delivery():
+            # Telegram сейчас недоступен: старт не валим (иначе чужой сбой
+            # решает, поднимется ли сервис), но и немым бот не оставляем —
+            # дотягиваем режим доставки в фоне.
+            _background.append(asyncio.create_task(
+                tg.sync_global_delivery_loop()))
         _background.append(asyncio.create_task(tasks.deliver_outbox_loop()))
         _background.append(asyncio.create_task(tasks.scheduler_loop()))
         _background.append(asyncio.create_task(inbound.worker_loop()))
@@ -318,7 +323,12 @@ async def health(response: Response) -> dict:
     keys_ok = await _keys_ok()
     base = {"edition": settings.edition, "db": db_kind, "commit": sha,
             "proxy_headers_configured": proxy_ok, "keys_ok": keys_ok,
-            "rss_mb": _rss_mb()}
+            "rss_mb": _rss_mb(),
+            # Диагностика, НЕ влияющая на статус: false означает, что режим
+            # доставки Telegram ещё не применён и дотягивается в фоне. Если
+            # завязать на это 503, недоступность Telegram снова начала бы
+            # валить деплой — ровно то, от чего мы уходим.
+            "tg_delivery_synced": _tg_delivery_synced()}
     db_ok = True
     try:
         async with engine.connect() as conn:
@@ -330,6 +340,16 @@ async def health(response: Response) -> dict:
         return {"status": "ok", **base}
     response.status_code = 503
     return {"status": "error", **base}
+
+
+def _tg_delivery_synced() -> bool:
+    """Применён ли режим доставки Telegram (webhook зарегистрирован либо
+    снят для polling). Импорт ленивый: в Lite ботов может не быть."""
+    try:
+        from app.bots import telegram as _tg
+        return _tg.global_delivery_synced()
+    except Exception:      # noqa: BLE001 — диагностика не должна ронять /health
+        return False
 
 
 def _rss_mb() -> float | None:

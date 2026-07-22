@@ -2026,40 +2026,96 @@ async def setup() -> None:
     logger.info("Telegram готов (режим: %s)", settings.tg_mode)
 
 
-async def configure_global_delivery() -> None:
+_global_delivery_synced = False
+
+
+def global_delivery_synced() -> bool:
+    """Приведено ли внешнее состояние Telegram в соответствие с TG_MODE.
+    Безопасный булев признак для /health — без токенов и URL."""
+    return _global_delivery_synced
+
+
+async def configure_global_delivery() -> bool:
     """Приводит внешнее состояние Telegram в соответствие с ``TG_MODE``.
 
     Без этого ``TG_MODE=webhook`` только отключал polling внутри
     приложения, но не регистрировал URL в Telegram. Обратный переход
     тоже должен удалять webhook, иначе Telegram отвергнет getUpdates.
-    Вызывается до запуска фоновых задач, поэтому ошибка Telegram API
-    останавливает нерабочий deployment, а не оставляет бота немым.
-    """
-    if _bot is None:
-        return
 
+    Ошибку САМОГО Telegram (сеть, 429, 5xx) наружу НЕ бросаем, и это
+    принципиально: иначе доступность стороннего API определяет, поднимется
+    ли наш сервис. Хуже того, при перезапуске в crash-loop мы дёргали бы
+    setWebhook по кругу, ловили 429 и уже не могли подняться сами —
+    отказ становился самоподдерживающимся. Такие ошибки логируем, возвращаем
+    False и дотягиваем в фоне (см. sync_global_delivery_loop).
+
+    Ошибки КОНФИГУРАЦИИ (неизвестный TG_MODE, не-https PUBLIC_BASE_URL для
+    webhook) по-прежнему валят старт: они детерминированы, сами не пройдут
+    и означают заведомо неработающий режим доставки.
+    """
+    global _global_delivery_synced
+    if _bot is None:
+        _global_delivery_synced = True     # бота нет — приводить нечего
+        return True
+
+    # 1) конфигурация: проверяем ДО обращения к сети
     if settings.tg_mode == "webhook":
         url = settings.public_url("/webhook/telegram")
         if not url.lower().startswith("https://"):
             raise RuntimeError(
                 "Для Telegram webhook PUBLIC_BASE_URL должен начинаться с https://"
             )
-        ok = await _bot.set_webhook(
-            url=url,
-            secret_token=settings.tg_webhook_secret,
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=False,
-        )
-        action = "webhook зарегистрирован"
-    elif settings.tg_mode == "polling":
-        ok = await _bot.delete_webhook(drop_pending_updates=False)
-        action = "webhook удалён для polling"
-    else:
+    elif settings.tg_mode != "polling":
         raise RuntimeError("TG_MODE должен быть polling или webhook")
 
+    # 2) сам вызов Bot API: сюда падают только внешние сбои
+    try:
+        if settings.tg_mode == "webhook":
+            ok = await _bot.set_webhook(
+                url=url,
+                secret_token=settings.tg_webhook_secret,
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=False,
+            )
+            action = "webhook зарегистрирован"
+        else:
+            ok = await _bot.delete_webhook(drop_pending_updates=False)
+            action = "webhook удалён для polling"
+    except Exception as e:                  # noqa: BLE001 — деплой не валим
+        logger.error("Telegram: режим доставки не применён (%s: %s) — "
+                     "повторим в фоне", type(e).__name__, e)
+        _global_delivery_synced = False
+        return False
+
     if not ok:
-        raise RuntimeError("Telegram API не подтвердил настройку режима")
+        logger.error("Telegram: API не подтвердил настройку режима — "
+                     "повторим в фоне")
+        _global_delivery_synced = False
+        return False
+    _global_delivery_synced = True
     logger.info("Telegram: %s", action)
+    return True
+
+
+async def sync_global_delivery_loop(delay: float = 30.0,
+                                    max_delay: float = 600.0) -> None:
+    """Дотягивает регистрацию режима, если на старте Telegram был недоступен.
+
+    Работает, пока не получится: без этого приложение осталось бы поднятым,
+    но немым (webhook не зарегистрирован либо не снят перед polling)."""
+    import asyncio as _aio
+    while not _global_delivery_synced:
+        await _aio.sleep(delay)
+        try:
+            if await configure_global_delivery():
+                logger.info("Telegram: режим доставки применён повторной "
+                            "попыткой")
+                return
+        except RuntimeError as e:
+            # конфигурационная ошибка сама не пройдёт — не долбим Telegram
+            logger.error("Telegram: режим доставки не настроить: %s", e)
+            return
+        delay = min(delay * 2, max_delay)
 
 
 _reload_evt = None

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy import pool
 
 from app.core.config import settings
+from app.db.migration_settings import lock_timeout
 from app.models.entities import Base
 
 config = context.config
@@ -19,6 +20,10 @@ target_metadata = Base.metadata
 
 
 def do_run_migrations(connection) -> None:
+    if connection.dialect.name == "postgresql":
+        # SQLite блокировок уровня строк/таблиц в этом смысле не имеет —
+        # там параметр не поддерживается и не нужен.
+        connection.exec_driver_sql(f"SET lock_timeout = '{lock_timeout()}'")
     context.configure(connection=connection, target_metadata=target_metadata,
                       compare_type=True)
     with context.begin_transaction():
