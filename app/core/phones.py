@@ -42,55 +42,53 @@ import logging
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.core.config import settings
+from app.core.keyring import (
+    KeyConfigError,
+    Source,
+    build_registry,
+    parse_keyring,
+    parse_versions,
+)
 
 logger = logging.getLogger("app")
 
 KEY_JWT = "jwt"   # исторический ключ, выведенный из JWT_SECRET
 KEY_V1 = "v1"     # выделенный ключ из PHONE_ENC_KEY (обратная совместимость)
 
+# наружу переэкспортируем — на них ловят вызывающие
+__all__ = ["KeyUnavailable", "KeyConfigError"]
+
 
 class KeyUnavailable(RuntimeError):
-    """Ключ нужной версии не задан. Осознанно НЕ молчим: подставить другой
-    ключ значит либо не найти клиента, либо создать его дубль."""
+    """Ключ нужной версии недоступен ИЛИ его секрет не проходит проверку по
+    данным. Осознанно НЕ молчим: подставить другой ключ значит либо не найти
+    клиента, либо создать его дубль."""
 
 
-def _parse_keyring(raw: str | None) -> dict[str, str]:
-    """{версия: секрет} из строки `ver:secret,ver:secret`."""
-    out: dict[str, str] = {}
-    for chunk in (raw or "").split(","):
-        chunk = chunk.strip()
-        if not chunk or ":" not in chunk:
-            continue
-        ver, secret = chunk.split(":", 1)
-        ver, secret = ver.strip(), secret.strip()
-        if ver and secret:
-            out[ver] = secret
-    return out
+# для обратной совместимости с прежними вызовами внутри модуля/тестов
+_parse_keyring = parse_keyring
+_parse_versions = parse_versions
 
 
-def _parse_versions(raw: str | None) -> list[str]:
-    return [v.strip() for v in (raw or "").split(",") if v.strip()]
+def _sources() -> list[Source]:
+    """Источники версий ключей телефонов, от неявных к явным.
+
+    jwt/v1 — значения по умолчанию (их явные keyring перекрывают без
+    конфликта, это механизм ротации). PHONE_KEYRING/PHONE_KEYS — явные."""
+    srcs = [Source("JWT_SECRET→jwt", {KEY_JWT: settings.jwt_secret},
+                   implicit=True)]
+    penc = (settings.phone_enc_key or "").strip()
+    if penc:
+        srcs.append(Source("PHONE_ENC_KEY→v1", {KEY_V1: penc}, implicit=True))
+    srcs.append(Source("PHONE_KEYRING", parse_keyring(settings.phone_keyring)))
+    srcs.append(Source("PHONE_KEYS", parse_keyring(settings.phone_keys)))
+    return srcs
 
 
 def _configured_keys() -> dict[str, str]:
-    """Все доступные версии ключей телефонов {версия: секрет}.
-
-    Источники (поздний перекрывает ранний):
-      jwt  — всегда выводится из JWT_SECRET (историческая совместимость);
-      v1   — из PHONE_ENC_KEY, если задан (прежняя схема);
-      PHONE_KEYS    — явные неизменяемые версии `v1:secret,v2:secret`;
-      PHONE_KEYRING — прежняя связка, оставлена для совместимости.
-
-    jwt присутствует всегда, поэтому база, созданная старой схемой (все
-    строки key_ver='jwt'), читается без какой-либо новой конфигурации —
-    это и обеспечивает безопасный деплой без смены секретов."""
-    keys: dict[str, str] = {KEY_JWT: settings.jwt_secret}
-    penc = (settings.phone_enc_key or "").strip()
-    if penc:
-        keys[KEY_V1] = penc
-    for src in (settings.phone_keyring, settings.phone_keys):
-        keys.update(_parse_keyring(src))
-    return keys
+    """{версия: секрет} — строгий реестр. Бросает KeyConfigError при
+    конфликте секретов одной версии или недопустимой метке."""
+    return build_registry("phone", _sources())
 
 
 def active_key_ver() -> str:
@@ -102,19 +100,37 @@ def active_key_ver() -> str:
     return KEY_V1 if (settings.phone_enc_key or "").strip() else KEY_JWT
 
 
+def assert_config_valid() -> None:
+    """Проверка конфигурации ключей БЕЗ обращения к базе: конфликты меток и
+    существование активной версии. Бросает KeyConfigError."""
+    keys = _configured_keys()   # ловит конфликты/метки
+    active = active_key_ver()
+    from app.core.keyring import VERSION_RE
+    if not VERSION_RE.match(active):
+        raise KeyConfigError(
+            f"phone: активная версия {active!r} недопустима (до 8 "
+            "латинских букв/цифр)")
+    if active not in keys:
+        raise KeyConfigError(
+            f"phone: активная версия {active!r} отсутствует в реестре ключей")
+
+
 def _secret_for(key_ver: str) -> str:
     """Секрет конкретной версии. Никогда не подменяет версию другой."""
     keys = _configured_keys()
     if key_ver in keys:
         return keys[key_ver]
-    raise KeyUnavailable(f"ключ телефонов версии {key_ver!r} не задан")
+    raise KeyUnavailable(f"ключ телефонов версии {key_ver!r} недоступен")
 
 
 def read_versions() -> list[str]:
     """Версии, которые проверяем при поиске клиента: активная, затем
-    объявленные legacy, затем историческая jwt."""
+    объявленные операторам legacy, затем историческая jwt.
+
+    Это КОНФИГУРАЦИОННЫЙ список. Реально используемые версии из БД —
+    отдельный источник истины (см. db_used_versions в репозитории)."""
     vers = [active_key_ver()]
-    for ver in _parse_versions(settings.phone_legacy_versions):
+    for ver in parse_versions(settings.phone_legacy_versions):
         if ver not in vers:
             vers.append(ver)
     if KEY_JWT not in vers:
@@ -128,11 +144,12 @@ def known_key_versions() -> list[str]:
 
 
 def missing_read_versions() -> list[str]:
-    """Из ожидаемых при поиске версий — те, чьего ключа сейчас нет.
+    """Из ОБЪЯВЛЕННЫХ при поиске версий — те, чьего ключа сейчас нет.
 
-    Если список не пуст, создавать нового клиента НЕЛЬЗЯ: под нечитаемым
-    индексом этот телефон мог быть уже зарегистрирован, и мы бы завели
-    дубль (у него — свои записи, оценки и ссылка управления)."""
+    Это только про конфигурацию (PHONE_LEGACY_VERSIONS). Версии, реально
+    присутствующие в БД, проверяются отдельно — см. verify_row_secret и
+    репозиторий: отсутствие версии в PHONE_LEGACY_VERSIONS не даёт
+    проигнорировать версию, которая реально есть в данных."""
     keys = _configured_keys()
     return [v for v in read_versions() if v not in keys]
 
@@ -201,3 +218,35 @@ def decrypt(token: str, key_ver: str = KEY_JWT) -> str:
         return Fernet(_fernet_key(secret)).decrypt(token.encode()).decode()
     except (InvalidToken, ValueError, TypeError):
         return ""
+
+
+def verify_row_secret(key_ver: str, index_ver: str, phone_enc: str,
+                      phone_index_stored: str) -> None:
+    """Доказывает, что настроенные секреты версий key_ver/index_ver — ПРАВИЛЬНЫЕ
+    для этой строки: расшифровывает телефон ключом key_ver и заново считает
+    индекс ключом index_ver, сверяя с сохранённым.
+
+    Именно так ловится подменённый секрет под формально существующей версией
+    (например jwt после ротации JWT_SECRET без сохранения старого ключа):
+    расшифровка даст мусор/пусто, а индекс не совпадёт. Бросает
+    KeyUnavailable без раскрытия секретов и телефонов."""
+    # секреты должны существовать (иначе версия недоступна вовсе)
+    try:
+        enc_secret = _secret_for(key_ver)
+        _secret_for(index_ver)
+    except KeyUnavailable:
+        raise
+    try:
+        digits = Fernet(_fernet_key(enc_secret)).decrypt(
+            phone_enc.encode()).decode()
+    except (InvalidToken, ValueError, TypeError):
+        raise KeyUnavailable(
+            f"секрет ключа телефонов версии {key_ver!r} не расшифровывает "
+            "существующие данные — вероятно, ключ подменён") from None
+    if not digits.isdigit():
+        raise KeyUnavailable(
+            f"ключ телефонов версии {key_ver!r} даёт неверную расшифровку")
+    if phone_index(digits, index_ver) != phone_index_stored:
+        raise KeyUnavailable(
+            f"секрет ключа телефонов версии {index_ver!r} не воспроизводит "
+            "сохранённый индекс — вероятно, ключ подменён")

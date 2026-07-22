@@ -166,6 +166,38 @@ class Settings(BaseSettings):
                 + "\n  - ".join(problems)
                 + "\n(в локальной отладке выставьте ADMIN_DEV_LOGIN=true)")
 
+    @property
+    def in_proxy_env(self) -> bool:
+        """Признак, что приложение развёрнуто ЗА обратным прокси, где адрес
+        соединения — это прокси, а реальный клиент в X-Forwarded-For.
+        Определяем по маркерам платформы, а не гадаем: Railway и Render
+        выставляют собственные переменные окружения."""
+        import os
+        markers = ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID",
+                   "RAILWAY_SERVICE_ID", "RENDER", "RENDER_SERVICE_ID")
+        return any(os.environ.get(m) for m in markers)
+
+    @property
+    def proxy_headers_configured(self) -> bool:
+        """Задан ли доверенный список прокси (uvicorn --forwarded-allow-ips).
+        Безопасный boolean для /health — без раскрытия самих адресов."""
+        return bool((self.trusted_proxies or "").strip())
+
+    def assert_proxy_config(self) -> None:
+        """Fail-fast: в явной proxy-среде (Railway/Render) без TRUSTED_PROXIES
+        все посетители за прокси делят один адрес, и общий rate limit снова
+        становится общим на всех — это ровно тот боевой дефект, что уже
+        чинили. В dev-режиме не мешаем."""
+        if self.admin_dev_login:
+            return
+        if self.in_proxy_env and not self.proxy_headers_configured:
+            raise RuntimeError(
+                "Приложение развёрнуто за обратным прокси (Railway/Render), "
+                "но TRUSTED_PROXIES не задан. Без него X-Forwarded-For не "
+                "применяется, и все посетители за прокси делят один адрес и "
+                "общий rate limit. Задайте TRUSTED_PROXIES=* (только если "
+                "прямой доступ к контейнеру закрыт) и перезапустите.")
+
 
 @lru_cache
 def get_settings() -> Settings:

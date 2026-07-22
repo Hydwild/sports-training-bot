@@ -154,7 +154,6 @@ jobs:
             echo "::error title=backup→restore::$(tail -c 1500 restore.log | tr '\n' ' ')"
           fi
           exit $code
-          dropdb -h localhost -U postgres -p 5432 restore_target
 
   image:
     name: Образ и smoke-тест

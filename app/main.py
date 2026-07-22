@@ -100,6 +100,14 @@ async def _scrub_legacy_photo_urls(conn) -> None:
 async def lifespan(app: FastAPI):
     # не даём стартовать с небезопасными дефолтами (JWT/webhook-секреты)
     settings.assert_production_secrets()
+    # прокси-заголовки: за прокси без доверенного списка все посетители
+    # делят один адрес и общий лимит — в проде это боевой дефект
+    settings.assert_proxy_config()
+    # конфигурация ключей: конфликт неизменяемых версий или отсутствующая
+    # активная версия — фейл на старте (fail-fast), а не молчаливая потеря
+    from app.core import bot_tokens, phones
+    phones.assert_config_valid()
+    bot_tokens.assert_config_valid()
     # таблицы (dev). В проде — alembic upgrade head.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -109,6 +117,23 @@ async def lifespan(app: FastAPI):
         await _scrub_legacy_photo_urls(conn)
     logger.info("Таблицы готовы. БД: %s",
                 "SQLite" if settings.is_sqlite else "PostgreSQL")
+
+    # readiness ключей телефонов по РЕАЛЬНЫМ данным: громкий лог без секретов,
+    # если какая-то используемая версия недоступна или её секрет подменён.
+    # Жёсткий отказ — на границе создания клиента (fail-closed там, где
+    # рождается дубль), чтобы не гасить здоровые клубы целиком.
+    try:
+        from app.db.engine import SessionLocal
+        from app.repositories.repo import GlobalRepository
+        async with SessionLocal() as _s:
+            bad = await GlobalRepository(_s).verify_web_keys()
+        if bad:
+            logger.error("КЛЮЧИ ТЕЛЕФОНОВ: не читаются версии %s — новые "
+                         "веб-клиенты для затронутых клубов создаваться не "
+                         "будут (503). Проверьте PHONE_KEYS/PHONE_KEYRING.",
+                         bad)
+    except Exception as e:              # noqa: BLE001 — старт не валим на этом
+        logger.error("КЛЮЧИ ТЕЛЕФОНОВ: проверка не выполнена: %s", e)
 
     # подключаем ботов (регистрируют senders и, при polling, поллинг)
     from app.bots import telegram as tg
@@ -245,16 +270,32 @@ async def health(response: Response) -> dict:
     from app.core.version import commit_sha
     db_kind = "sqlite" if settings.is_sqlite else "postgres"
     sha = commit_sha()   # какой код реально развёрнут
+    # только безопасные диагностические булевы — без адресов и значений
+    proxy_ok = settings.proxy_headers_configured
+    keys_ok = _keys_config_ok()
+    base = {"edition": settings.edition, "db": db_kind, "commit": sha,
+            "proxy_headers_configured": proxy_ok, "keys_ok": keys_ok}
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        return {"status": "ok", "edition": settings.edition, "db": db_kind,
-                "commit": sha}
+        return {"status": "ok", **base}
     except Exception as e:
         logger.error("Health check: БД недоступна: %s", e)
         response.status_code = 503
-        return {"status": "error", "edition": settings.edition, "db": db_kind,
-                "commit": sha}
+        return {"status": "error", **base}
+
+
+def _keys_config_ok() -> bool:
+    """Дешёвая проверка КОНФИГУРАЦИИ ключей для /health (без скана БД):
+    нет конфликта неизменяемых версий и активная версия доступна. Полная
+    сверка по данным делается на старте и на границе создания клиента."""
+    from app.core import bot_tokens, phones
+    try:
+        phones.assert_config_valid()
+        bot_tokens.assert_config_valid()
+        return True
+    except Exception:
+        return False
 
 
 # ---------- Telegram webhook ----------

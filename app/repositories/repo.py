@@ -477,15 +477,12 @@ class TenantRepository:
             if name and row.name != name:
                 row.name = name[:200]
             return row.id
-        # СОЗДАНИЕ. Если ключ какой-то ожидаемой версии сейчас недоступен,
-        # поиск выше мог пропустить строку под её индексом — тогда мы бы
-        # завели дубль. Найти существующего клиента можно (ищем по тому, что
-        # доступно), а вот создавать нового — нельзя.
-        missing = phones.missing_read_versions()
-        if missing:
-            raise phones.KeyUnavailable(
-                "нельзя завести веб-клиента: недоступны ключи телефонов "
-                f"версий {missing}; под ними мог быть уже записан этот номер")
+        # СОЗДАНИЕ. Прежде чем заводить нового клиента, докажем, что мы
+        # действительно можем прочитать ВСЕ версии, которые реально есть в
+        # данных этого клуба — иначе под нечитаемым индексом мог быть уже
+        # записан этот номер, и мы бы завели дубль. Источник истины — БД,
+        # а не только PHONE_LEGACY_VERSIONS.
+        await self.assert_web_keys_usable()
         enc, key_ver = phones.encrypt(phone)
         row = WebCustomer(tenant_id=self.tenant_id,
                           phone_index=phones.phone_index(phone),
@@ -518,6 +515,47 @@ class TenantRepository:
         """id по телефону без создания."""
         row = await self._find_web_customer(phone)
         return row.id if row is not None else None
+
+    async def assert_web_keys_usable(self) -> None:
+        """Fail-closed проверка ключей телефонов по РЕАЛЬНЫМ данным клуба.
+
+        Читает используемые пары (key_ver, index_ver) и на образце каждой
+        доказывает, что настроенный секрет правильный: расшифровывает телефон
+        и воспроизводит индекс. Ловит и «версия из БД без ключа», и
+        «подменённый секрет под существующей версией» (jwt после ротации
+        JWT_SECRET без сохранения старого ключа). Бросает KeyUnavailable.
+        Конфигурационные ошибки (конфликт меток, нет active) — KeyConfigError."""
+        from app.core import phones
+        from app.models.entities import WebCustomer
+
+        # 1) конфигурация целостна (конфликты/активная версия)
+        phones.assert_config_valid()
+
+        # 2) активная версия (ею будем шифровать) доступна
+        active = phones.active_key_ver()
+        phones._secret_for(active)
+
+        # 3) оператор мог объявить legacy, которых нет ключа
+        missing = phones.missing_read_versions()
+        if missing:
+            raise phones.KeyUnavailable(
+                f"недоступны ключи телефонов объявленных версий {missing}")
+
+        # 4) БД — источник истины: проверяем ОДИН образец на каждую пару
+        pairs = (await self.session.execute(
+            select(WebCustomer.key_ver, WebCustomer.index_ver)
+            .where(WebCustomer.tenant_id == self.tenant_id)
+            .distinct())).all()
+        for key_ver, index_ver in pairs:
+            sample = (await self.session.execute(
+                select(WebCustomer.phone_enc, WebCustomer.phone_index)
+                .where(WebCustomer.tenant_id == self.tenant_id,
+                       WebCustomer.key_ver == key_ver,
+                       WebCustomer.index_ver == index_ver)
+                .limit(1))).first()
+            if sample is None:
+                continue
+            phones.verify_row_secret(key_ver, index_ver, sample[0], sample[1])
 
     async def web_phones_map(self) -> dict[int, str]:
         """{user_id: расшифрованный телефон} по клубу — для карточки тренера,
@@ -626,12 +664,10 @@ class TenantRepository:
         return res.rowcount or 0
 
     async def revoke_manage_tokens(self, platform: str, user_id: int) -> None:
-        """Отзывает ссылки И гасит активные сессии человека: удаление данных
-        должно закрывать оба пути доступа."""
-        from sqlalchemy import delete
-
-        from app.models.entities import ManageSession
-
+        """Отзывает ССЫЛКИ управления (не сессии). Выпуск новой ссылки
+        отзывает прежние неиспользованные, но НЕ должен гасить уже открытую
+        cookie-сессию — иначе обычная запись на тренировку неожиданно
+        завершала бы активную сессию пользователя."""
         await self.session.execute(
             update(ManageToken)
             .where(ManageToken.tenant_id == self.tenant_id,
@@ -639,6 +675,13 @@ class TenantRepository:
                    ManageToken.user_id == user_id)
             .values(revoked=True)
             .execution_options(synchronize_session=False))
+
+    async def revoke_manage_sessions(self, platform: str, user_id: int) -> None:
+        """Гасит активные cookie-сессии человека. Отдельно от ссылок:
+        нужно для удаления данных и явного «завершить все сеансы»."""
+        from sqlalchemy import delete
+
+        from app.models.entities import ManageSession
         await self.session.execute(
             delete(ManageSession).where(
                 ManageSession.tenant_id == self.tenant_id,
@@ -677,9 +720,20 @@ class TenantRepository:
                                     *([model.platform == platform]
                                       if hasattr(model, "platform") else [])))
             removed[model.__tablename__] = res.rowcount or 0
+        # удаление данных закрывает ОБА пути доступа: и ссылки, и сессии
         await self.revoke_manage_tokens(platform, user_id)
+        await self.revoke_manage_sessions(platform, user_id)
         await self.session.flush()
         return removed
+
+    async def customer_exists(self, user_id: int) -> bool:
+        """Есть ли веб-клиент с таким id в этом клубе — для админского
+        перевыпуска ссылки (публично это не раскрывается)."""
+        from app.models.entities import WebCustomer
+        stmt = select(WebCustomer.id).where(
+            WebCustomer.tenant_id == self.tenant_id,
+            WebCustomer.id == user_id)
+        return (await self.session.execute(stmt)).first() is not None
 
     # ---------- Рейтинг мастеров ----------
 
@@ -1087,6 +1141,34 @@ class GlobalRepository:
         else:
             self.session.add(PlatformState(key=key, value=value[:300]))
         await self.session.flush()
+
+    async def verify_web_keys(self) -> list[str]:
+        """Платформенная readiness-проверка ключей телефонов по реальным
+        данным. Возвращает список версий, которые не читаются (нет ключа или
+        секрет подменён). Пусто — всё в порядке. Секретов не раскрывает."""
+        from app.core import phones
+        from app.models.entities import WebCustomer
+
+        bad: list[str] = []
+        pairs = (await self.session.execute(
+            select(WebCustomer.key_ver, WebCustomer.index_ver)
+            .distinct())).all()
+        for key_ver, index_ver in pairs:
+            sample = (await self.session.execute(
+                select(WebCustomer.phone_enc, WebCustomer.phone_index)
+                .where(WebCustomer.key_ver == key_ver,
+                       WebCustomer.index_ver == index_ver)
+                .limit(1))).first()
+            if sample is None:
+                continue
+            try:
+                phones.verify_row_secret(key_ver, index_ver,
+                                         sample[0], sample[1])
+            except phones.KeyUnavailable:
+                for v in (key_ver, index_ver):
+                    if v not in bad:
+                        bad.append(v)
+        return bad
 
     async def demo_tenant_id(self) -> int | None:
         """Клуб-витрина (Tenant.is_demo), на который можно спокойно послать

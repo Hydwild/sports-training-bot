@@ -1453,8 +1453,10 @@ async def _manage_session(request: Request, session, tenant_id: int):
             if cookie else None)
     if sess is None:
         raise HTTPException(status_code=404,
-                            detail="Сессия истекла — откройте свою "
-                                   "персональную ссылку заново")
+                            detail="Сессия истекла. Прежняя ссылка "
+                                   "одноразовая и повторно не сработает — "
+                                   "попросите у клуба новую персональную "
+                                   "ссылку.")
     _platform, uid = sess
     return tenant, svc, uid
 

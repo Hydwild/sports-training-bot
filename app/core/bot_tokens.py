@@ -22,6 +22,13 @@ import logging
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.core.config import settings
+from app.core.keyring import (
+    KeyConfigError,
+    Source,
+    VERSION_RE,
+    build_registry,
+    parse_keyring,
+)
 from app.core.phones import KeyUnavailable, _fernet_key
 
 logger = logging.getLogger("app")
@@ -30,25 +37,26 @@ KEY_V1 = "v1"          # ключ из BOT_TOKEN_ENC_KEY
 KEY_LEGACY = ""        # пустая версия = значение ещё лежит открытым текстом
 
 
-def _configured_keys() -> dict[str, str]:
-    """Все доступные версии ключей токенов {версия: секрет}.
-
-    Источники (поздний перекрывает ранний):
-      v1 — из BOT_TOKEN_ENC_KEY (прежняя схема);
-      BOT_TOKEN_KEYS    — явные неизменяемые версии `v1:secret,v2:secret`;
-      BOT_TOKEN_KEYRING — прежняя связка, оставлена для совместимости.
-    В отличие от телефонов, историческая версия из JWT здесь не выводится:
-    токены до шифрования лежали ОТКРЫТЫМ текстом (версия пустая), а не под
-    ключом из JWT."""
-    from app.core.phones import _parse_keyring
-
-    keys: dict[str, str] = {}
+def _sources() -> list[Source]:
+    """Источники версий ключей токенов, от неявных к явным. В отличие от
+    телефонов, историческая версия из JWT здесь не выводится: токены до
+    шифрования лежали ОТКРЫТЫМ текстом (версия пустая), а не под ключом
+    из JWT."""
+    srcs: list[Source] = []
     penc = (settings.bot_token_enc_key or "").strip()
     if penc:
-        keys[KEY_V1] = penc
-    for src in (settings.bot_token_keyring, settings.bot_token_keys):
-        keys.update(_parse_keyring(src))
-    return keys
+        srcs.append(Source("BOT_TOKEN_ENC_KEY→v1", {KEY_V1: penc},
+                           implicit=True))
+    srcs.append(Source("BOT_TOKEN_KEYRING",
+                       parse_keyring(settings.bot_token_keyring)))
+    srcs.append(Source("BOT_TOKEN_KEYS", parse_keyring(settings.bot_token_keys)))
+    return srcs
+
+
+def _configured_keys() -> dict[str, str]:
+    """{версия: секрет} — строгий реестр. Бросает KeyConfigError при
+    конфликте секретов одной версии или недопустимой метке."""
+    return build_registry("bot_token", _sources())
 
 
 def key_configured() -> bool:
@@ -60,11 +68,27 @@ def active_key_ver() -> str:
     return explicit or KEY_V1
 
 
+def assert_config_valid() -> None:
+    """Конфликты меток и существование активной версии — БЕЗ обращения к БД.
+    Проверяется только если хоть один ключ токенов задан (без ключей
+    шифрование выключено и проверять нечего)."""
+    keys = _configured_keys()
+    if not keys:
+        return
+    active = active_key_ver()
+    if not VERSION_RE.match(active):
+        raise KeyConfigError(
+            f"bot_token: активная версия {active!r} недопустима")
+    if active not in keys:
+        raise KeyConfigError(
+            f"bot_token: активная версия {active!r} отсутствует в реестре")
+
+
 def _secret_for(key_ver: str) -> str:
     keys = _configured_keys()
     if key_ver in keys:
         return keys[key_ver]
-    raise KeyUnavailable(f"ключ токенов версии {key_ver!r} не задан")
+    raise KeyUnavailable(f"ключ токенов версии {key_ver!r} недоступен")
 
 
 def encrypt(token: str) -> tuple[str, str]:

@@ -165,6 +165,9 @@ async def training_page(training_id: int, request: Request,
             "platform": s.platform, "status": s.status,
             "attended": s.attended, "paid": s.paid,
             "is_guest": s.is_guest, "confirmed": s.confirmed,
+            # для веб-записи — суррогатный id клиента: по нему админ может
+            # выдать новую ссылку управления (телефон вводить не нужно)
+            "web_user_id": s.user_id if s.platform == "web" else None,
         }
 
     ctx = {"request": request, "role": claims["role"],
@@ -547,3 +550,55 @@ async def masters_toggle(master_id: int,
     await repo.set_master_active(master_id, not m.active)
     await session.commit()
     return RedirectResponse("/admin/masters", status_code=303)
+
+
+# ---------- Перевыпуск ссылки управления клиенту ----------
+#
+# Ссылка одноразовая, а cookie-сессия живёт часы. После истечения сессии
+# использованная ссылка навсегда возвращает 404, и раньше новую можно было
+# получить только новой записью через сайт. Здесь администратор клуба может
+# выдать новую ссылку — ПОСЛЕ того как сам сверил клиента по процедуре клуба.
+
+import logging as _logging
+
+_admin_logger = _logging.getLogger("app")
+
+
+@router.post("/manage-link", response_class=HTMLResponse)
+async def issue_manage_link_admin(request: Request,
+                                  web_user_id: int = Form(...),
+                                  claims: dict = Depends(require_role("coach")),
+                                  _csrf: None = Depends(require_csrf()),
+                                  session: AsyncSession = Depends(get_session)):
+    """Выдать новую ссылку управления существующему веб-клиенту ЭТОГО клуба.
+
+    Доступ — только авторизованному тренеру/владельцу своего tenant, с CSRF.
+    Ссылка показывается ТОЛЬКО в этом ответе (no-store), в БД лежит лишь её
+    SHA-256, в лог/аудит попадает факт выпуска БЕЗ токена. Выпуск отзывает
+    прежние неиспользованные ссылки, но НЕ гасит уже активную сессию."""
+    from app.api.routes import _issue_manage_link
+    from app.repositories.repo import TenantRepository
+
+    tenant_id = claims["tenant_id"]
+    repo = TenantRepository(session, tenant_id)
+    # tenant isolation: клиент должен принадлежать этому клубу
+    if not await repo.customer_exists(web_user_id):
+        raise HTTPException(status_code=404, detail="Клиент не найден в клубе")
+
+    svc = BookingService(session, tenant_id)
+    link = await _issue_manage_link(svc, tenant_id, web_user_id)
+    await session.commit()
+    # аудит БЕЗ самого токена
+    _admin_logger.warning(
+        "Оператор tenant=%s выдал новую ссылку управления клиенту uid=%s",
+        tenant_id, web_user_id)
+
+    ctx = {"request": request, "role": claims["role"],
+           "link": link, "web_user_id": web_user_id}
+    ctx.update(await _brand(session, tenant_id))
+    resp = templates.TemplateResponse(request, "manage_link_issued.html", ctx)
+    # ссылка не должна оседать в кешах и промежуточных прокси
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
