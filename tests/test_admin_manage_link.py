@@ -27,6 +27,12 @@ def _login(c, tg_id, tid):
     c.post("/admin/auth/dev", data={"tg_user_id": tg_id})
 
 
+def _login_role(c, tg_id, tid, role):
+    c.post(f"/api/tenants/{tid}/members", headers=H,
+           json={"tg_user_id": tg_id, "role": role, "name": role})
+    c.post("/admin/auth/dev", data={"tg_user_id": tg_id})
+
+
 def _csrf(text):
     return re.search(r'name="csrf" value="([^"]+)"', text).group(1)
 
@@ -66,7 +72,8 @@ def test_admin_can_issue_link_and_it_works_once():
                    data={"csrf": _csrf(page.text), "web_user_id": uid})
         assert r.status_code == 200
         assert "no-store" in r.headers["cache-control"]
-        new_link = re.search(r'value="(/club/\d+/m/[\w-]+)"', r.text).group(1)
+        new_link = re.search(r'value="(https?://[^"]+/club/\d+/m/[\w-]+)"',
+                             r.text).group(1)
 
         c.cookies.clear()
         first = c.get(new_link)                 # обмен на сессию
@@ -138,8 +145,9 @@ def test_issued_link_is_not_logged_or_stored_plaintext(caplog):
         with caplog.at_level("INFO"):
             r = c.post("/admin/manage-link",
                        data={"csrf": _csrf(page.text), "web_user_id": uid})
-        new_link = re.search(r'value="(/club/\d+/m/([\w-]+))"', r.text)
-        token = new_link.group(2)
+        new_link = re.search(r'value="https?://[^"]+/club/\d+/m/([\w-]+)"',
+                             r.text)
+        token = new_link.group(1)
         # токен не в логах
         assert token not in caplog.text
         # в БД — только SHA-256
@@ -156,6 +164,93 @@ def test_issued_link_is_not_logged_or_stored_plaintext(caplog):
         hs = asyncio.run(hashes())
         assert token not in hs
         assert all(len(h) == 64 for h in hs)
+
+
+def test_issued_link_is_absolute_url():
+    """Ссылку администратор копирует и отправляет клиенту — относительный
+    '/club/...' вне браузера админки не открывается."""
+    with TestClient(app) as c:
+        tid, tr, _l, uid = _club_signup(c, phone="79220008888")
+        _login(c, 7005, tid)
+        page = c.get(f"/admin/trainings/{tr}")
+        r = c.post("/admin/manage-link",
+                   data={"csrf": _csrf(page.text), "web_user_id": uid})
+        assert r.status_code == 200
+        link = re.search(r'value="([^"]+/m/[\w-]+)"', r.text).group(1)
+        assert link.startswith("http://testserver/club/")
+        # относительной формы в ответе не остаётся
+        assert 'value="/club/' not in r.text
+        # и она действительно рабочая
+        c.cookies.clear()
+        assert c.get(link).status_code == 200
+
+
+def test_link_base_comes_from_config_not_request_host():
+    """База берётся из PUBLIC_BASE_URL, а не из заголовка Host, который
+    задаёт клиент: иначе подделанный Host увёл бы ссылку на чужой домен."""
+    with TestClient(app) as c:
+        tid, tr, _l, uid = _club_signup(c, phone="79220013333")
+        _login(c, 7010, tid)
+        page = c.get(f"/admin/trainings/{tr}")
+        r = c.post("/admin/manage-link",
+                   data={"csrf": _csrf(page.text), "web_user_id": uid},
+                   headers={"Host": "evil.example.com"})
+        assert r.status_code == 200
+        link = re.search(r'value="([^"]+/m/[\w-]+)"', r.text).group(1)
+        assert "evil.example.com" not in link
+        assert link.startswith("http://testserver/club/")
+
+
+def test_no_public_base_url_fails_without_revoking_old_link(monkeypatch):
+    """Без PUBLIC_BASE_URL абсолютную ссылку не построить. Тогда НЕ сохраняем
+    ничего: прежняя ссылка клиента остаётся рабочей, а не оказывается
+    отозванной ради ссылки, которую мы не смогли показать."""
+    from app.core.config import settings as st
+
+    with TestClient(app) as c:
+        tid, tr, link, uid = _club_signup(c, phone="79220009999")
+        _login(c, 7006, tid)
+        page = c.get(f"/admin/trainings/{tr}")
+        monkeypatch.setattr(st, "public_base_url", "")
+        r = c.post("/admin/manage-link",
+                   data={"csrf": _csrf(page.text), "web_user_id": uid})
+        assert r.status_code == 500
+        assert "PUBLIC_BASE_URL" in r.text
+        monkeypatch.undo()
+        # прежняя (неиспользованная) ссылка клиента не отозвана
+        c.cookies.clear()
+        assert c.get(link).status_code == 200
+
+
+def test_assistant_does_not_see_manage_link_button():
+    """Кнопка — ровно под ту же роль, что требует эндпойнт (coach). Иначе
+    ассистент видит кнопку, жмёт и получает 403."""
+    with TestClient(app) as c:
+        tid, tr, _l, _uid = _club_signup(c, phone="79220010000")
+        _login_role(c, 7007, tid, "assistant")
+        page = c.get(f"/admin/trainings/{tr}")
+        assert page.status_code == 200
+        assert "/admin/manage-link" not in page.text
+        # прочие действия ассистента на месте — скрыта именно эта кнопка
+        assert "toggle_attend" in page.text
+
+
+def test_assistant_cannot_issue_link():
+    with TestClient(app) as c:
+        tid, tr, _l, uid = _club_signup(c, phone="79220011111")
+        _login_role(c, 7008, tid, "assistant")
+        page = c.get(f"/admin/trainings/{tr}")
+        r = c.post("/admin/manage-link",
+                   data={"csrf": _csrf(page.text), "web_user_id": uid})
+        assert r.status_code == 403
+
+
+def test_coach_sees_manage_link_button():
+    with TestClient(app) as c:
+        tid, tr, _l, _uid = _club_signup(c, phone="79220012222")
+        _login_role(c, 7009, tid, "coach")
+        page = c.get(f"/admin/trainings/{tr}")
+        assert "/admin/manage-link" in page.text
 
 
 def test_forget_ends_links_and_sessions():

@@ -96,7 +96,7 @@
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <button class="btn sm" type="submit">оплата</button>
         </form>
-        {% if s.web_user_id %}
+        {% if can_issue_link and s.web_user_id %}
         <form method="post" action="/admin/manage-link" style="display:inline"
               title="Сначала сверьте личность клиента по процедуре клуба">
           <input type="hidden" name="csrf" value="{{ csrf }}">

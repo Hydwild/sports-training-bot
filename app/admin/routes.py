@@ -150,6 +150,11 @@ async def training_page(training_id: int, request: Request,
     queue = await svc.repo.get_signups(training_id, "queue")
     summary = await svc.training_attendance(training_id)
     can_edit = ROLE_LEVEL.get(claims["role"], 0) >= ROLE_LEVEL["assistant"]
+    # Кнопка «ссылка управления» — ровно под ту же роль, что требует сам
+    # эндпойнт POST /admin/manage-link (coach). Иначе ассистент видит кнопку,
+    # жмёт её и получает 403: право проверяется на сервере, но UI обещает
+    # действие, которого у него нет.
+    can_issue_link = ROLE_LEVEL.get(claims["role"], 0) >= ROLE_LEVEL["coach"]
 
     def _signup_ctx(s):
         from app.bots.user_info import profile_link as pl
@@ -175,6 +180,7 @@ async def training_page(training_id: int, request: Request,
                  "location": t.location},
            "signups": [_signup_ctx(s) for s in active + queue],
            "summary": summary, "can_edit": can_edit,
+           "can_issue_link": can_issue_link,
            "csrf": csrf_for_request(request)}
     ctx.update(await _brand(session, tenant_id))
     return templates.TemplateResponse(request, "training.html", ctx)
@@ -575,7 +581,11 @@ async def issue_manage_link_admin(request: Request,
     Доступ — только авторизованному тренеру/владельцу своего tenant, с CSRF.
     Ссылка показывается ТОЛЬКО в этом ответе (no-store), в БД лежит лишь её
     SHA-256, в лог/аудит попадает факт выпуска БЕЗ токена. Выпуск отзывает
-    прежние неиспользованные ссылки, но НЕ гасит уже активную сессию."""
+    прежние неиспользованные ссылки, но НЕ гасит уже активную сессию.
+
+    Ссылку отдаём ПОЛНЫМ URL через PUBLIC_BASE_URL: администратор её копирует
+    и отправляет клиенту, а относительный '/club/...' вне браузера админки не
+    открывается."""
     from app.api.routes import _issue_manage_link
     from app.repositories.repo import TenantRepository
 
@@ -587,6 +597,13 @@ async def issue_manage_link_admin(request: Request,
 
     svc = BookingService(session, tenant_id)
     link = await _issue_manage_link(svc, tenant_id, web_user_id)
+    # Абсолютный URL строим ДО commit: если PUBLIC_BASE_URL не настроен,
+    # ничего не сохраняем — прежние ссылки клиента остаются в силе, а не
+    # оказываются отозванными ради ссылки, которую мы не смогли показать.
+    try:
+        link = settings.public_url(link)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     await session.commit()
     # аудит БЕЗ самого токена
     _admin_logger.warning(

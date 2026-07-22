@@ -118,22 +118,20 @@ async def lifespan(app: FastAPI):
     logger.info("Таблицы готовы. БД: %s",
                 "SQLite" if settings.is_sqlite else "PostgreSQL")
 
-    # readiness ключей телефонов по РЕАЛЬНЫМ данным: громкий лог без секретов,
-    # если какая-то используемая версия недоступна или её секрет подменён.
-    # Жёсткий отказ — на границе создания клиента (fail-closed там, где
-    # рождается дубль), чтобы не гасить здоровые клубы целиком.
-    try:
-        from app.db.engine import SessionLocal
-        from app.repositories.repo import GlobalRepository
-        async with SessionLocal() as _s:
-            bad = await GlobalRepository(_s).verify_web_keys()
-        if bad:
-            logger.error("КЛЮЧИ ТЕЛЕФОНОВ: не читаются версии %s — новые "
-                         "веб-клиенты для затронутых клубов создаваться не "
-                         "будут (503). Проверьте PHONE_KEYS/PHONE_KEYRING.",
-                         bad)
-    except Exception as e:              # noqa: BLE001 — старт не валим на этом
-        logger.error("КЛЮЧИ ТЕЛЕФОНОВ: проверка не выполнена: %s", e)
+    # readiness ключей телефонов по РЕАЛЬНЫМ данным. Результат НЕ проглатываем:
+    # он влияет на /health (keys_ok=false → 503), а не только пишется в лог.
+    # Жёсткий отказ на создании клиента остаётся отдельно (fail-closed там, где
+    # рождается дубль), чтобы не гасить здоровые клубы целиком. Старт при этом
+    # не валим: контейнер поднимется, но /health честно покажет нездоровье.
+    bad = await _verify_keys_db()
+    if bad:
+        logger.error("КЛЮЧИ ТЕЛЕФОНОВ: не читаются версии %s — /health вернёт "
+                     "keys_ok=false (503), новые веб-клиенты для затронутых "
+                     "клубов создаваться не будут. Проверьте PHONE_KEYS/"
+                     "PHONE_KEYRING.", bad)
+    elif bad is None:
+        logger.error("КЛЮЧИ ТЕЛЕФОНОВ: сверка по данным не выполнена — "
+                     "/health вернёт keys_ok=false до успешной сверки.")
 
     # подключаем ботов (регистрируют senders и, при polling, поллинг)
     from app.bots import telegram as tg
@@ -262,9 +260,10 @@ if settings.is_pro:
 
 @app.get("/health")
 async def health(response: Response) -> dict:
-    """Проверяет реальную доступность БД (SELECT 1), а не только что процесс
-    жив — платформа (Railway) должна видеть падение соединения с базой как
-    нездоровый контейнер, а не как постоянный 'ok'."""
+    """Проверяет реальную доступность БД (SELECT 1) и читаемость ключей
+    телефонов по РЕАЛЬНЫМ строкам БД — платформа (Railway) должна видеть и
+    падение базы, и подменённый ключ как нездоровый контейнер, а не как
+    постоянный 'ok'."""
     from sqlalchemy import text
 
     from app.core.version import commit_sha
@@ -272,23 +271,26 @@ async def health(response: Response) -> dict:
     sha = commit_sha()   # какой код реально развёрнут
     # только безопасные диагностические булевы — без адресов и значений
     proxy_ok = settings.proxy_headers_configured
-    keys_ok = _keys_config_ok()
+    # keys_ok = конфигурация целостна И секреты подтверждены строками БД
+    keys_ok = await _keys_ok()
     base = {"edition": settings.edition, "db": db_kind, "commit": sha,
             "proxy_headers_configured": proxy_ok, "keys_ok": keys_ok}
+    db_ok = True
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        return {"status": "ok", **base}
     except Exception as e:
         logger.error("Health check: БД недоступна: %s", e)
-        response.status_code = 503
-        return {"status": "error", **base}
+        db_ok = False
+    if db_ok and keys_ok:
+        return {"status": "ok", **base}
+    response.status_code = 503
+    return {"status": "error", **base}
 
 
 def _keys_config_ok() -> bool:
-    """Дешёвая проверка КОНФИГУРАЦИИ ключей для /health (без скана БД):
-    нет конфликта неизменяемых версий и активная версия доступна. Полная
-    сверка по данным делается на старте и на границе создания клиента."""
+    """Дешёвая проверка КОНФИГУРАЦИИ ключей (без скана БД): нет конфликта
+    неизменяемых версий и активная версия доступна."""
     from app.core import bot_tokens, phones
     try:
         phones.assert_config_valid()
@@ -296,6 +298,31 @@ def _keys_config_ok() -> bool:
         return True
     except Exception:
         return False
+
+
+async def _verify_keys_db() -> list[str] | None:
+    """Сверка ключей телефонов по РЕАЛЬНЫМ строкам БД. Возвращает список
+    нечитаемых версий (пусто — всё читается), либо None, если саму сверку
+    выполнить не удалось (например, БД недоступна). None трактуется вызовом
+    как «не ок»: неизвестность здесь не безопаснее ошибки."""
+    try:
+        from app.db.engine import SessionLocal
+        from app.repositories.repo import GlobalRepository
+        async with SessionLocal() as s:
+            return await GlobalRepository(s).verify_web_keys()
+    except Exception as e:              # noqa: BLE001 — не валим вызывающего
+        logger.error("КЛЮЧИ ТЕЛЕФОНОВ: сверка по данным не выполнена: %s", e)
+        return None
+
+
+async def _keys_ok() -> bool:
+    """keys_ok для /health: конфигурация ключей целостна И их секреты
+    подтверждены реальными строками БД. Дешёвый config-чек отсекает заведомо
+    сломанную конфигурацию до обращения к базе; затем сверяем данные —
+    подменённый ключ под существующей версией даёт False (и 503)."""
+    if not _keys_config_ok():
+        return False
+    return await _verify_keys_db() == []   # None/непустой список → не ок
 
 
 # ---------- Telegram webhook ----------

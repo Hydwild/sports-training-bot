@@ -166,6 +166,29 @@ class Settings(BaseSettings):
                 + "\n  - ".join(problems)
                 + "\n(в локальной отладке выставьте ADMIN_DEV_LOGIN=true)")
 
+    def public_url(self, path: str) -> str:
+        """Абсолютный публичный URL для пути вида '/club/1/m/xyz'.
+
+        Нужен там, где ссылку КОПИРУЮТ и отправляют вовне — например
+        администратор выдаёт клиенту ссылку управления: относительный
+        '/club/...' в переписке/мессенджере не откроется.
+
+        «Безопасно» — значит берём только заранее заданный владельцем
+        PUBLIC_BASE_URL и только схему http(s); host из запроса (заголовок
+        Host, который клиент контролирует) не подставляем. Пустой или иной
+        схемы base — ошибка конфигурации, а не молчаливый относительный путь:
+        лучше явно попросить владельца задать PUBLIC_BASE_URL, чем выдать
+        клиенту нерабочую ссылку."""
+        base = (self.public_base_url or "").strip().rstrip("/")
+        if not base or not re.match(r"^https?://", base, re.IGNORECASE):
+            raise RuntimeError(
+                "PUBLIC_BASE_URL не задан или не http(s) — не могу построить "
+                "абсолютную ссылку. Задайте PUBLIC_BASE_URL (например "
+                "https://bot.example.com) и повторите.")
+        if not path.startswith("/"):
+            path = "/" + path
+        return base + path
+
     @property
     def in_proxy_env(self) -> bool:
         """Признак, что приложение развёрнуто ЗА обратным прокси, где адрес

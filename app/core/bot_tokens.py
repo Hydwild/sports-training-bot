@@ -27,7 +27,7 @@ from app.core.keyring import (
     Source,
     VERSION_RE,
     build_registry,
-    parse_keyring,
+    parse_keyring_pairs,
 )
 from app.core.phones import KeyUnavailable, _fernet_key
 
@@ -45,11 +45,12 @@ def _sources() -> list[Source]:
     srcs: list[Source] = []
     penc = (settings.bot_token_enc_key or "").strip()
     if penc:
-        srcs.append(Source("BOT_TOKEN_ENC_KEY→v1", {KEY_V1: penc},
-                           implicit=True))
+        # НЕ overridable: v1 неизменяема, конфликт с BOT_TOKEN_KEYS = ошибка
+        srcs.append(Source("BOT_TOKEN_ENC_KEY→v1", {KEY_V1: penc}))
     srcs.append(Source("BOT_TOKEN_KEYRING",
-                       parse_keyring(settings.bot_token_keyring)))
-    srcs.append(Source("BOT_TOKEN_KEYS", parse_keyring(settings.bot_token_keys)))
+                       parse_keyring_pairs(settings.bot_token_keyring)))
+    srcs.append(Source("BOT_TOKEN_KEYS",
+                       parse_keyring_pairs(settings.bot_token_keys)))
     return srcs
 
 

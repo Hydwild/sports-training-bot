@@ -60,11 +60,37 @@ def test_missing_key_is_explicit(monkeypatch):
 
 
 def test_keyring_reads_previous_key(monkeypatch):
+    """Прежний ключ читается через реестр — но под СВОЕЙ версией.
+
+    Замена ключа = НОВАЯ версия: старый секрет остаётся под v1, новый
+    получает v2 и становится активным."""
     enc, ver = bot_tokens.encrypt(TOKEN)
+    old = bot_tokens.settings.bot_token_enc_key
+    monkeypatch.setattr(bot_tokens.settings, "bot_token_enc_key", "")
+    monkeypatch.setattr(bot_tokens.settings, "bot_token_keys",
+                        f"v1:{old},v2:новый-ключ")
+    monkeypatch.setattr(bot_tokens.settings, "bot_token_active_key_version", "v2")
+    bot_tokens.assert_config_valid()
+    # прежний токен по-прежнему читается ключом своей версии
+    assert bot_tokens.decrypt(enc, ver) == TOKEN
+    # новые шифруются уже новым ключом
+    enc2, ver2 = bot_tokens.encrypt(TOKEN)
+    assert ver2 == "v2"
+    assert bot_tokens.decrypt(enc2, ver2) == TOKEN
+
+
+def test_redefining_v1_with_another_secret_rejected(monkeypatch):
+    """Прежний приём «старый ключ в keyring под v1, новый в ENC_KEY» делал
+    версию v1 неоднозначной: два секрета на один ярлык, под которым уже
+    зашифрованы строки. Теперь это ошибка конфигурации, а не тихий выбор
+    одного из секретов."""
+    from app.core.keyring import KeyConfigError
+
     old = bot_tokens.settings.bot_token_enc_key
     monkeypatch.setattr(bot_tokens.settings, "bot_token_enc_key", "новый-ключ")
     monkeypatch.setattr(bot_tokens.settings, "bot_token_keyring", f"v1:{old}")
-    assert bot_tokens.decrypt(enc, ver) == TOKEN
+    with pytest.raises(KeyConfigError):
+        bot_tokens.assert_config_valid()
 
 
 # ---------- хранение и показ ----------

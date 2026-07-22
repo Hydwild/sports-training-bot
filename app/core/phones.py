@@ -47,6 +47,7 @@ from app.core.keyring import (
     Source,
     build_registry,
     parse_keyring,
+    parse_keyring_pairs,
     parse_versions,
 )
 
@@ -71,17 +72,22 @@ _parse_versions = parse_versions
 
 
 def _sources() -> list[Source]:
-    """Источники версий ключей телефонов, от неявных к явным.
+    """Источники версий ключей телефонов.
 
-    jwt/v1 — значения по умолчанию (их явные keyring перекрывают без
-    конфликта, это механизм ротации). PHONE_KEYRING/PHONE_KEYS — явные."""
+    Единственный перекрываемый источник — JWT_SECRET→jwt: старое значение
+    JWT кладут в keyring под меткой jwt при ротации, и оно СОЗНАТЕЛЬНО
+    перекрывает выведенное из нового секрета. PHONE_ENC_KEY→v1 таким НЕ
+    является: если та же версия v1 задана в PHONE_KEYS другим секретом —
+    это конфликт (версии неизменяемы), а не ротация. PHONE_KEYRING/PHONE_KEYS
+    читаем парами, чтобы поймать и дубли внутри одной переменной."""
     srcs = [Source("JWT_SECRET→jwt", {KEY_JWT: settings.jwt_secret},
-                   implicit=True)]
+                   overridable=True)]
     penc = (settings.phone_enc_key or "").strip()
     if penc:
-        srcs.append(Source("PHONE_ENC_KEY→v1", {KEY_V1: penc}, implicit=True))
-    srcs.append(Source("PHONE_KEYRING", parse_keyring(settings.phone_keyring)))
-    srcs.append(Source("PHONE_KEYS", parse_keyring(settings.phone_keys)))
+        srcs.append(Source("PHONE_ENC_KEY→v1", {KEY_V1: penc}))
+    srcs.append(Source("PHONE_KEYRING",
+                       parse_keyring_pairs(settings.phone_keyring)))
+    srcs.append(Source("PHONE_KEYS", parse_keyring_pairs(settings.phone_keys)))
     return srcs
 
 
