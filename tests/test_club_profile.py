@@ -133,7 +133,8 @@ def _visited(c, tid, master_id, phone, name="Клиент"):
             await s.commit()
 
     asyncio.run(complete_visit())
-    c.get(link)                              # обмен ссылки на cookie-сессию
+    # ссылку НЕ открываем здесь: она одноразовая, а сессию тест открывает
+    # для нужного клиента прямо перед его оценкой (c.get(link))
     return tr, link
 
 
@@ -256,7 +257,8 @@ def test_second_rating_replaces_the_first():
         m = c.post(f"/api/tenants/{tid}/masters", headers=H,
                    json={"name": "Мастер Ева"}).json()
         _mk_training(c, tid, title="Слот", master_id=m["id"])
-        _visited(c, tid, m["id"], "79110000009", "Тот же")
+        _tr, link = _visited(c, tid, m["id"], "79110000009", "Тот же")
+        c.get(link)                              # одна сессия на обе оценки
 
         c.post(f"/club/{tid}/rate", data={
             "consent": "1", "master_id": m["id"], "rating": "2",
@@ -394,8 +396,9 @@ def test_master_review_admin_delete():
         m = c.post(f"/api/tenants/{tid}/masters", headers=H,
                    json={"name": "Мастер"}).json()
         _mk_training(c, tid, title="Слот", master_id=m["id"])
-        _visited(c, tid, m["id"], "79110000004", "Спамер")
-        c.post(f"/club/{tid}/rate", data={"consent": "1", 
+        _tr, link = _visited(c, tid, m["id"], "79110000004", "Спамер")
+        c.get(link)                              # подтверждённая сессия
+        c.post(f"/club/{tid}/rate", data={"consent": "1",
             "master_id": m["id"], "rating": "1", "name": "Спамер", "text": "спам"})
         assert "★ 1.0" in c.get(f"/club/{tid}").text
 

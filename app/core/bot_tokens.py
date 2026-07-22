@@ -30,39 +30,41 @@ KEY_V1 = "v1"          # ключ из BOT_TOKEN_ENC_KEY
 KEY_LEGACY = ""        # пустая версия = значение ещё лежит открытым текстом
 
 
-def _keyring() -> dict[str, str]:
-    raw = (settings.bot_token_keyring or "").strip()
-    out: dict[str, str] = {}
-    for chunk in raw.split(","):
-        chunk = chunk.strip()
-        if not chunk or ":" not in chunk:
-            continue
-        ver, secret = chunk.split(":", 1)
-        if ver.strip() and secret.strip():
-            out[ver.strip()] = secret.strip()
-    return out
+def _configured_keys() -> dict[str, str]:
+    """Все доступные версии ключей токенов {версия: секрет}.
+
+    Источники (поздний перекрывает ранний):
+      v1 — из BOT_TOKEN_ENC_KEY (прежняя схема);
+      BOT_TOKEN_KEYS    — явные неизменяемые версии `v1:secret,v2:secret`;
+      BOT_TOKEN_KEYRING — прежняя связка, оставлена для совместимости.
+    В отличие от телефонов, историческая версия из JWT здесь не выводится:
+    токены до шифрования лежали ОТКРЫТЫМ текстом (версия пустая), а не под
+    ключом из JWT."""
+    from app.core.phones import _parse_keyring
+
+    keys: dict[str, str] = {}
+    penc = (settings.bot_token_enc_key or "").strip()
+    if penc:
+        keys[KEY_V1] = penc
+    for src in (settings.bot_token_keyring, settings.bot_token_keys):
+        keys.update(_parse_keyring(src))
+    return keys
 
 
 def key_configured() -> bool:
-    return bool((settings.bot_token_enc_key or "").strip())
+    return bool(_configured_keys())
 
 
 def active_key_ver() -> str:
-    return KEY_V1
+    explicit = (settings.bot_token_active_key_version or "").strip()
+    return explicit or KEY_V1
 
 
 def _secret_for(key_ver: str) -> str:
-    ring = _keyring()
-    if key_ver in ring:
-        return ring[key_ver]
-    if key_ver == KEY_V1:
-        secret = (settings.bot_token_enc_key or "").strip()
-        if not secret:
-            raise KeyUnavailable(
-                "BOT_TOKEN_ENC_KEY не задан — токены ботов зашифровать "
-                "или прочитать нечем")
-        return secret
-    raise KeyUnavailable(f"Неизвестная версия ключа токенов: {key_ver!r}")
+    keys = _configured_keys()
+    if key_ver in keys:
+        return keys[key_ver]
+    raise KeyUnavailable(f"ключ токенов версии {key_ver!r} не задан")
 
 
 def encrypt(token: str) -> tuple[str, str]:

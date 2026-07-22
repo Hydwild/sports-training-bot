@@ -455,9 +455,14 @@ async def _daily_maintenance(last_day: list) -> None:
                & (Outbox.created_at < cutoff))))
         await session.commit()
 
-        # отработавшие окна лимита и истёкшие ссылки управления
+        # отработавшие окна лимита
         from app.api.rate_limit import purge_old_buckets
         await purge_old_buckets(session)
+        # истёкшие короткие сессии управления по всем клубам
+        from sqlalchemy import delete as _delete
+        from app.models.entities import ManageSession
+        await session.execute(_delete(ManageSession).where(
+            ManageSession.expires_at < dt.datetime.now(dt.timezone.utc)))
         await session.commit()
 
         from app.repositories.repo import GlobalRepository

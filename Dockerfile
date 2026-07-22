@@ -4,6 +4,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
+# SHA собираемого коммита — отдаётся в /health, чтобы видеть, какой код в
+# проде. Передаётся при сборке: docker build --build-arg GIT_SHA=$(git rev-parse HEAD)
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA}
+
 WORKDIR /code
 
 # системные зависимости: gcc/libpq-dev — сборка asyncpg/matplotlib;

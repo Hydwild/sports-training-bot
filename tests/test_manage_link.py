@@ -65,10 +65,38 @@ def test_token_exchanged_for_cookie_and_url_cleaned():
         assert "HttpOnly" in cookie                  # недоступна из JS
         assert "samesite=lax" in cookie.lower()      # не уходит с чужих сайтов
         assert f"Path=/club/{tid}" in cookie         # не уходит в другой клуб
+        # В cookie — секрет КОРОТКОЙ сессии, а НЕ долгоживущий токен ссылки:
+        # утечка cookie не даёт токен из адреса, и наоборот.
+        import re as _re
+        cookie_val = _re.search(rf"manage_{tid}=([^;]+)", cookie).group(1)
+        assert cookie_val != token
         # страница с персональными данными не должна оседать в кешах
         page = c.get(f"/club/{tid}/manage")
         assert "no-store" in page.headers["cache-control"]
         assert page.headers["referrer-policy"] == "no-referrer"
+
+
+def test_link_is_single_use():
+    """Пересланная или подсмотренная ссылка после первого визита
+    бесполезна: второй обмен уже не срабатывает."""
+    with TestClient(app) as c:
+        tid, _tr, link = _signup(c, phone="79130002121")
+        first = c.get(link)
+        assert first.status_code == 200        # обменялась на сессию
+
+        c.cookies.clear()                      # как будто это другой браузер
+        second = c.get(link)
+        assert second.status_code == 404, "ссылка сработала повторно"
+
+
+def test_used_link_kills_nothing_of_active_session():
+    """После обмена активная сессия работает, даже что ссылка уже
+    использована."""
+    with TestClient(app) as c:
+        tid, _tr, link = _signup(c, phone="79130002323")
+        c.get(link)                            # сессия установлена
+        # ссылка использована, но сессия жива
+        assert c.get(f"/club/{tid}/manage").status_code == 200
 
 
 def test_manage_pages_need_session():

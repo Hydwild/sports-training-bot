@@ -1,6 +1,8 @@
 """REST API: управление тенантами и тренировками (защищено токеном админа)."""
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel
 import re
 from fastapi import APIRouter, Depends, Header, HTTPException, Form, Request
@@ -24,6 +26,8 @@ from app.core.verticals import vcfg as _vcfg
 from app.db.engine import get_session
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
+
+logger = logging.getLogger("app")
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -1097,7 +1101,18 @@ async def public_signup(tenant_id: int,
     svc = BookingService(session, tenant_id, tz=tenant.timezone)
     # телефон больше не идентификатор: он хранится зашифрованным в
     # web_customers, а в записи попадает только суррогатный id
-    uid = await svc.repo.web_customer_id(digits, name)
+    from app.core.phones import KeyUnavailable
+    try:
+        uid = await svc.repo.web_customer_id(digits, name)
+    except KeyUnavailable:
+        # ключ шифрования телефонов недоступен — записать нельзя, но это
+        # проблема конфигурации сервера, а не посетителя: не пугаем его
+        # деталями и не роняем 500
+        logger.error("Запись невозможна: недоступен ключ телефонов")
+        raise HTTPException(
+            status_code=503,
+            detail="Онлайн-запись временно недоступна, запишитесь по "
+                   "телефону клуба") from None
     await svc.repo.upsert_subscriber("web", uid, name)
     # Согласие пишем ДО sign_up: он коммитит транзакцию сам, и запись
     # согласия после него ушла бы отдельной. Сейчас обе строки попадают в
@@ -1184,18 +1199,16 @@ async def public_rate_master(tenant_id: int,
     if len(name) < 2 or not (1 <= rating <= 5):
         raise HTTPException(status_code=400, detail="Некорректные данные")
 
-    token = request.cookies.get(_manage_cookie(tenant_id), "")
-    if not token:
+    cookie = request.cookies.get(_manage_cookie(tenant_id), "")
+    svc = BookingService(session, tenant_id, tz=tenant.timezone)
+    sess = (await svc.repo.resolve_manage_session(_manage_hash(cookie))
+            if cookie else None)
+    if sess is None:
         # без подтверждённой сессии оценку не принимаем и не намекаем,
         # существует ли такой клиент
         return RedirectResponse(f"/club/{tenant_id}?rated=nosession",
                                 status_code=303)
-    svc = BookingService(session, tenant_id, tz=tenant.timezone)
-    row = await svc.repo.resolve_manage_token(_manage_hash(token))
-    if row is None:
-        return RedirectResponse(f"/club/{tenant_id}?rated=nosession",
-                                status_code=303)
-    uid = row.user_id
+    _platform, uid = sess
 
     if await svc.repo.get_master(master_id) is None:
         raise HTTPException(status_code=404, detail="Мастер не найден")
@@ -1349,19 +1362,6 @@ async def club_qr(tenant_id: int, request: Request,
     return StreamingResponse(buf, media_type="image/png")
 
 
-async def _manage_owner(session, tenant_id: int, token: str):
-    """(tenant, svc, uid) по ссылке управления или 404. Неверный токен и
-    несуществующий клуб отвечают одинаково — по ответу нельзя перебирать
-    действующие ссылки."""
-    tenant = await _ensure_tenant(session, tenant_id)
-    svc = BookingService(session, tenant_id, tz=tenant.timezone)
-    row = await svc.repo.resolve_manage_token(_manage_hash(token))
-    if row is None:
-        raise HTTPException(status_code=404,
-                            detail="Ссылка недействительна или устарела")
-    return tenant, svc, row.user_id
-
-
 def _manage_page(tenant, tenant_id: int, rows, svc,
                  notice: str = "") -> str:
     import html as _h
@@ -1406,19 +1406,34 @@ def _manage_page(tenant, tenant_id: int, rows, svc,
 @public_router.get("/club/{tenant_id}/m/{token}", response_class=HTMLResponse)
 async def public_manage_enter(tenant_id: int, token: str,
                               session: AsyncSession = Depends(get_session)):
-    """Вход по персональной ссылке: обмениваем токен на сессию и уводим на
-    URL без токена.
+    """Вход по персональной ссылке: обмениваем ОДНОРАЗОВУЮ ссылку на короткую
+    сессию и уводим на URL без токена.
 
-    Токен в адресе живёт дольше самого визита: он остаётся в истории
-    браузера, в заголовке Referer при переходе на внешний сайт и в
-    access-логах любого прокси. Поэтому дальше человек работает по чистому
-    адресу, а доступ подтверждает cookie — недоступная скриптам страницы."""
+    Токен ссылки в адресе живёт дольше визита: он остаётся в истории
+    браузера, в Referer при переходе на внешний сайт и в access-логах любого
+    прокси. Поэтому: (1) сама ссылка одноразовая — второй переход по ней уже
+    не сработает (пересланная/утёкшая ссылка бесполезна); (2) в cookie
+    кладётся НЕ она, а отдельный секрет короткой сессии; дальше человек
+    работает по чистому адресу."""
     from fastapi.responses import RedirectResponse
 
-    tenant, svc, uid = await _manage_owner(session, tenant_id, token)
+    tenant = await _ensure_tenant(session, tenant_id)
+    svc = BookingService(session, tenant_id, tz=tenant.timezone)
+
+    session_token, session_hash = _new_manage_token()   # секрет сессии
+    uid = await svc.repo.consume_manage_token(
+        _manage_hash(token), session_hash,
+        session_ttl_min=MANAGE_SESSION_MAX_AGE // 60)
+    await session.commit()
+    if uid is None:
+        # ссылка недействительна, истекла или УЖЕ использована
+        raise HTTPException(status_code=404,
+                            detail="Ссылка недействительна или уже открыта. "
+                                   "Попросите у клуба новую.")
+
     resp = RedirectResponse(f"/club/{tenant_id}/manage", status_code=303)
     resp.set_cookie(
-        _manage_cookie(tenant_id), token,
+        _manage_cookie(tenant_id), session_token,
         httponly=True,                       # недоступна из JavaScript
         secure=not settings.admin_dev_login,  # по HTTP только в отладке
         samesite="lax",
@@ -1430,12 +1445,18 @@ async def public_manage_enter(tenant_id: int, token: str,
 
 
 async def _manage_session(request: Request, session, tenant_id: int):
-    """(tenant, svc, uid) по cookie-сессии или 404."""
-    token = request.cookies.get(_manage_cookie(tenant_id), "")
-    if not token:
+    """(tenant, svc, uid) по короткой cookie-сессии или 404."""
+    tenant = await _ensure_tenant(session, tenant_id)
+    svc = BookingService(session, tenant_id, tz=tenant.timezone)
+    cookie = request.cookies.get(_manage_cookie(tenant_id), "")
+    sess = (await svc.repo.resolve_manage_session(_manage_hash(cookie))
+            if cookie else None)
+    if sess is None:
         raise HTTPException(status_code=404,
-                            detail="Откройте свою персональную ссылку заново")
-    return await _manage_owner(session, tenant_id, token)
+                            detail="Сессия истекла — откройте свою "
+                                   "персональную ссылку заново")
+    _platform, uid = sess
+    return tenant, svc, uid
 
 
 @public_router.get("/club/{tenant_id}/manage", response_class=HTMLResponse)

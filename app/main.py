@@ -241,15 +241,20 @@ async def health(response: Response) -> dict:
     жив — платформа (Railway) должна видеть падение соединения с базой как
     нездоровый контейнер, а не как постоянный 'ok'."""
     from sqlalchemy import text
+
+    from app.core.version import commit_sha
     db_kind = "sqlite" if settings.is_sqlite else "postgres"
+    sha = commit_sha()   # какой код реально развёрнут
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        return {"status": "ok", "edition": settings.edition, "db": db_kind}
+        return {"status": "ok", "edition": settings.edition, "db": db_kind,
+                "commit": sha}
     except Exception as e:
         logger.error("Health check: БД недоступна: %s", e)
         response.status_code = 503
-        return {"status": "error", "edition": settings.edition, "db": db_kind}
+        return {"status": "error", "edition": settings.edition, "db": db_kind,
+                "commit": sha}
 
 
 # ---------- Telegram webhook ----------

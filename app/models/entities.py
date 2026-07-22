@@ -499,6 +499,28 @@ class ManageToken(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # ссылка одноразовая: первый переход по ней проставляет used_at и меняет
+    # её на короткую сессию. Повторный переход (пересланная/утёкшая ссылка,
+    # предпросмотр в мессенджере после визита) уже не сработает.
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)
+
+
+class ManageSession(Base):
+    """Короткая сессия управления записями, на которую обменивается
+    одноразовая ссылка. В cookie лежит НЕ manage-токен (он в адресе и живёт
+    долго), а отдельный случайный секрет этой сессии — тоже только его
+    SHA-256. Живёт часы, а не месяцы, и удаляется при удалении данных."""
+    __tablename__ = "manage_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    platform: Mapped[str] = mapped_column(String(8), default="web")
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow)

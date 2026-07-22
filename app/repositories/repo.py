@@ -477,6 +477,15 @@ class TenantRepository:
             if name and row.name != name:
                 row.name = name[:200]
             return row.id
+        # СОЗДАНИЕ. Если ключ какой-то ожидаемой версии сейчас недоступен,
+        # поиск выше мог пропустить строку под её индексом — тогда мы бы
+        # завели дубль. Найти существующего клиента можно (ищем по тому, что
+        # доступно), а вот создавать нового — нельзя.
+        missing = phones.missing_read_versions()
+        if missing:
+            raise phones.KeyUnavailable(
+                "нельзя завести веб-клиента: недоступны ключи телефонов "
+                f"версий {missing}; под ними мог быть уже записан этот номер")
         enc, key_ver = phones.encrypt(phone)
         row = WebCustomer(tenant_id=self.tenant_id,
                           phone_index=phones.phone_index(phone),
@@ -553,13 +562,56 @@ class TenantRepository:
         return t
 
     async def resolve_manage_token(self, token_hash: str) -> ManageToken | None:
-        """Действующая (не отозванная, не истёкшая) ссылка или None."""
+        """Действующая (не отозванная, не истёкшая, НЕ использованная) ссылка
+        или None."""
         stmt = select(ManageToken).where(
             ManageToken.tenant_id == self.tenant_id,
             ManageToken.token_hash == token_hash,
             ManageToken.revoked.is_(False),
+            ManageToken.used_at.is_(None),
             ManageToken.expires_at > _utcnow())
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def consume_manage_token(self, token_hash: str,
+                                   session_hash: str,
+                                   session_ttl_min: int = 120):
+        """Обменивает одноразовую ссылку на короткую сессию — атомарно.
+
+        Возвращает (user_id) при успехе или None, если ссылка недействительна
+        или уже использована. Пометка used_at ставится тем же UPDATE с
+        условием used_at IS NULL: даже при двух одновременных переходах по
+        ссылке ровно один получит строку (rowcount==1), второй — ничего."""
+        now = _utcnow()
+        res = await self.session.execute(
+            update(ManageToken)
+            .where(ManageToken.tenant_id == self.tenant_id,
+                   ManageToken.token_hash == token_hash,
+                   ManageToken.revoked.is_(False),
+                   ManageToken.used_at.is_(None),
+                   ManageToken.expires_at > now)
+            .values(used_at=now)
+            .returning(ManageToken.platform, ManageToken.user_id))
+        row = res.first()
+        if row is None:
+            return None
+        platform, user_id = row
+        from app.models.entities import ManageSession
+        self.session.add(ManageSession(
+            tenant_id=self.tenant_id, platform=platform, user_id=user_id,
+            token_hash=session_hash,
+            expires_at=now + dt.timedelta(minutes=session_ttl_min)))
+        await self.session.flush()
+        return user_id
+
+    async def resolve_manage_session(self, session_hash: str):
+        """(platform, user_id) действующей сессии или None."""
+        from app.models.entities import ManageSession
+        stmt = select(ManageSession).where(
+            ManageSession.tenant_id == self.tenant_id,
+            ManageSession.token_hash == session_hash,
+            ManageSession.expires_at > _utcnow())
+        row = (await self.session.execute(stmt)).scalar_one_or_none()
+        return (row.platform, row.user_id) if row else None
 
     async def purge_expired_manage_tokens(self) -> int:
         """Удаляет истёкшие и отозванные ссылки: держать их вечно незачем,
@@ -574,6 +626,12 @@ class TenantRepository:
         return res.rowcount or 0
 
     async def revoke_manage_tokens(self, platform: str, user_id: int) -> None:
+        """Отзывает ссылки И гасит активные сессии человека: удаление данных
+        должно закрывать оба пути доступа."""
+        from sqlalchemy import delete
+
+        from app.models.entities import ManageSession
+
         await self.session.execute(
             update(ManageToken)
             .where(ManageToken.tenant_id == self.tenant_id,
@@ -581,6 +639,21 @@ class TenantRepository:
                    ManageToken.user_id == user_id)
             .values(revoked=True)
             .execution_options(synchronize_session=False))
+        await self.session.execute(
+            delete(ManageSession).where(
+                ManageSession.tenant_id == self.tenant_id,
+                ManageSession.platform == platform,
+                ManageSession.user_id == user_id))
+
+    async def purge_expired_manage_sessions(self) -> int:
+        from sqlalchemy import delete
+
+        from app.models.entities import ManageSession
+        res = await self.session.execute(
+            delete(ManageSession).where(
+                ManageSession.tenant_id == self.tenant_id,
+                ManageSession.expires_at < _utcnow()))
+        return res.rowcount or 0
 
     async def forget_user(self, platform: str, user_id: int) -> dict[str, int]:
         """Удаляет персональные данные человека в этом клубе: записи,

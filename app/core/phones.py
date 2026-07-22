@@ -45,8 +45,8 @@ from app.core.config import settings
 
 logger = logging.getLogger("app")
 
-KEY_JWT = "jwt"   # ключ выведен из JWT_SECRET (исторический)
-KEY_V1 = "v1"     # выделенный ключ из PHONE_ENC_KEY
+KEY_JWT = "jwt"   # исторический ключ, выведенный из JWT_SECRET
+KEY_V1 = "v1"     # выделенный ключ из PHONE_ENC_KEY (обратная совместимость)
 
 
 class KeyUnavailable(RuntimeError):
@@ -54,11 +54,10 @@ class KeyUnavailable(RuntimeError):
     ключ значит либо не найти клиента, либо создать его дубль."""
 
 
-def _keyring() -> dict[str, str]:
-    """{версия: секрет} из PHONE_KEYRING. Формат `ver:secret,ver:secret`."""
-    raw = (settings.phone_keyring or "").strip()
+def _parse_keyring(raw: str | None) -> dict[str, str]:
+    """{версия: секрет} из строки `ver:secret,ver:secret`."""
     out: dict[str, str] = {}
-    for chunk in raw.split(","):
+    for chunk in (raw or "").split(","):
         chunk = chunk.strip()
         if not chunk or ":" not in chunk:
             continue
@@ -69,39 +68,73 @@ def _keyring() -> dict[str, str]:
     return out
 
 
+def _parse_versions(raw: str | None) -> list[str]:
+    return [v.strip() for v in (raw or "").split(",") if v.strip()]
+
+
+def _configured_keys() -> dict[str, str]:
+    """Все доступные версии ключей телефонов {версия: секрет}.
+
+    Источники (поздний перекрывает ранний):
+      jwt  — всегда выводится из JWT_SECRET (историческая совместимость);
+      v1   — из PHONE_ENC_KEY, если задан (прежняя схема);
+      PHONE_KEYS    — явные неизменяемые версии `v1:secret,v2:secret`;
+      PHONE_KEYRING — прежняя связка, оставлена для совместимости.
+
+    jwt присутствует всегда, поэтому база, созданная старой схемой (все
+    строки key_ver='jwt'), читается без какой-либо новой конфигурации —
+    это и обеспечивает безопасный деплой без смены секретов."""
+    keys: dict[str, str] = {KEY_JWT: settings.jwt_secret}
+    penc = (settings.phone_enc_key or "").strip()
+    if penc:
+        keys[KEY_V1] = penc
+    for src in (settings.phone_keyring, settings.phone_keys):
+        keys.update(_parse_keyring(src))
+    return keys
+
+
 def active_key_ver() -> str:
     """Версия, которой шифруются и индексируются НОВЫЕ записи."""
+    explicit = (settings.phone_active_key_version or "").strip()
+    if explicit:
+        return explicit
+    # обратная совместимость: v1 при заданном PHONE_ENC_KEY, иначе jwt
     return KEY_V1 if (settings.phone_enc_key or "").strip() else KEY_JWT
 
 
 def _secret_for(key_ver: str) -> str:
     """Секрет конкретной версии. Никогда не подменяет версию другой."""
-    ring = _keyring()
-    if key_ver in ring:
-        return ring[key_ver]
-    if key_ver == KEY_V1:
-        secret = (settings.phone_enc_key or "").strip()
-        if not secret:
-            raise KeyUnavailable(
-                "Нужен ключ версии v1 (PHONE_ENC_KEY), но он не задан")
-        return secret
-    if key_ver == KEY_JWT:
-        # исторический ключ. Пока JWT не ротировали, он совпадает с текущим
-        # секретом; после ротации прежнее значение обязано лежать в
-        # PHONE_KEYRING, иначе старые номера не прочитать
-        return settings.jwt_secret
-    raise KeyUnavailable(f"Неизвестная версия ключа телефонов: {key_ver!r}")
+    keys = _configured_keys()
+    if key_ver in keys:
+        return keys[key_ver]
+    raise KeyUnavailable(f"ключ телефонов версии {key_ver!r} не задан")
 
 
-def known_key_versions() -> list[str]:
-    """Версии, которыми сейчас можно читать: активная плюс связка."""
+def read_versions() -> list[str]:
+    """Версии, которые проверяем при поиске клиента: активная, затем
+    объявленные legacy, затем историческая jwt."""
     vers = [active_key_ver()]
-    for ver in _keyring():
+    for ver in _parse_versions(settings.phone_legacy_versions):
         if ver not in vers:
             vers.append(ver)
     if KEY_JWT not in vers:
-        vers.append(KEY_JWT)      # исторические строки читаются всегда
+        vers.append(KEY_JWT)
     return vers
+
+
+def known_key_versions() -> list[str]:
+    """Совместимый псевдоним read_versions() (использовался ранее)."""
+    return read_versions()
+
+
+def missing_read_versions() -> list[str]:
+    """Из ожидаемых при поиске версий — те, чьего ключа сейчас нет.
+
+    Если список не пуст, создавать нового клиента НЕЛЬЗЯ: под нечитаемым
+    индексом этот телефон мог быть уже зарегистрирован, и мы бы завели
+    дубль (у него — свои записи, оценки и ссылка управления)."""
+    keys = _configured_keys()
+    return [v for v in read_versions() if v not in keys]
 
 
 def _fernet_key(secret: str) -> bytes:

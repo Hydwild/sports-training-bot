@@ -115,6 +115,21 @@ jobs:
       - name: Тесты на живом PostgreSQL
         run: python -m pytest -q -m pg tests/test_pg_concurrency.py
 
+      # Клиент PostgreSQL на раннере — версии 16, а сервер здесь 18 (и на
+      # проде Railway тоже 18). pg_dump 16 ОТКАЗЫВАЕТСЯ снимать дамп с более
+      # новой версии сервера — тот же класс несовместимости, что уже ловили
+      # с Railway. Поэтому ставим клиент ровно той версии, что и сервер, из
+      # официального репозитория PostgreSQL (как в Dockerfile).
+      - name: Установка postgresql-client-18
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-18
+
       # backup -> restore на настоящей базе: снимаем дамп, восстанавливаем
       # во ВТОРУЮ базу, проверяем. Ровно то, что делает restore_drill.
       - name: Проверка backup → restore
@@ -122,18 +137,22 @@ jobs:
           PGPASSWORD: postgres
         run: |
           set -e
-          createdb -h localhost -U postgres -p 5432 restore_target
-          pg_dump --no-owner --no-acl \
+          # именно клиент 18, а не первый в PATH (там может остаться 16)
+          PGBIN="/usr/lib/postgresql/18/bin"
+          "$PGBIN/pg_dump" --version
+          "$PGBIN/createdb" -h localhost -U postgres -p 5432 restore_target
+          "$PGBIN/pg_dump" --no-owner --no-acl \
             --dbname "postgresql://postgres:postgres@localhost:5432/ci" \
             > /tmp/ci_dump.sql
           test -s /tmp/ci_dump.sql
           grep -q "CREATE TABLE" /tmp/ci_dump.sql
-          psql -v ON_ERROR_STOP=1 \
+          "$PGBIN/psql" -v ON_ERROR_STOP=1 \
             "postgresql://postgres:postgres@localhost:5432/restore_target" \
             < /tmp/ci_dump.sql
           # восстановленная база отвечает на запрос к критической таблице
-          psql -v ON_ERROR_STOP=1 -tAqc "SELECT count(*) FROM tenants;" \
+          "$PGBIN/psql" -v ON_ERROR_STOP=1 -tAqc "SELECT count(*) FROM tenants;" \
             "postgresql://postgres:postgres@localhost:5432/restore_target"
+          "$PGBIN/dropdb" -h localhost -U postgres -p 5432 restore_target
           dropdb -h localhost -U postgres -p 5432 restore_target
 
   image:
@@ -159,7 +178,7 @@ jobs:
       # Dockerfile или отсутствующий системный пакет иначе всплывают уже
       # на проде (так однажды и случилось с pg_dump).
       - name: Сборка образа
-        run: docker build -t booking-bot:ci .
+        run: docker build --build-arg GIT_SHA="${GITHUB_SHA}" -t booking-bot:ci .
 
       # ---- Lite / SQLite ----
       - name: Lite (SQLite) — запуск
