@@ -183,12 +183,13 @@ jobs:
       # ---- Lite / SQLite ----
       - name: Lite (SQLite) — запуск
         run: |
+          # Smoke не ходит во внешний Telegram API: авторегистрация
+          # webhook с фиктивным токеном правильно завершила бы startup ошибкой.
           docker run -d --name smoke_lite -p 8000:8000 \
             -e EDITION=lite \
             -e DATABASE_URL=sqlite+aiosqlite:////data/smoke.db \
             -e ADMIN_API_TOKEN=ci-token \
             -e JWT_SECRET=ci-secret-ci-secret-ci-secret \
-            -e TG_TOKEN=123456:CITOKEN \
             -e TG_MODE=webhook -e TG_WEBHOOK_SECRET=ci-webhook-secret \
             -e RUN_VK_POLLING=false \
             booking-bot:ci
@@ -199,6 +200,8 @@ jobs:
       # ---- Pro / PostgreSQL: тот же start.sh, миграции, edition=pro ----
       - name: Pro (PostgreSQL) — запуск
         run: |
+          # Вызов Bot API покрыт тестом configure_global_delivery;
+          # здесь проверяем сам образ, миграции и HTTP readiness.
           docker run -d --name smoke_pro -p 8001:8000 \
             --add-host=host.docker.internal:host-gateway \
             -e EDITION=pro \
@@ -206,7 +209,6 @@ jobs:
             -e ADMIN_API_TOKEN=ci-token \
             -e JWT_SECRET=ci-secret-ci-secret-ci-secret \
             -e BOT_TOKEN_ENC_KEY=ci-bot-key -e BACKUP_ENC_KEY=ci-backup-key \
-            -e TG_TOKEN=123456:CITOKEN \
             -e TG_MODE=webhook -e TG_WEBHOOK_SECRET=ci-webhook-secret \
             -e RUN_VK_POLLING=false \
             booking-bot:ci
