@@ -122,27 +122,34 @@ jobs:
       # прямо из образа postgres:18 (--network host, чтобы дотянуться до
       # сервиса на localhost:5432). Причину падения выносим в аннотацию.
       - name: Проверка backup → restore
+        shell: bash
         run: |
           set +e
-          # -i: подключить stdin (нужно для psql < dump.sql)
+          # -i: подключить stdin (нужно для psql < dump.sql). CREATE/DROP
+          # DATABASE делаем через psql к существующей ci — так надёжнее, чем
+          # createdb/dropdb с полным URI (он трактует dbname неоднозначно).
           PG='docker run --rm -i --network host -e PGPASSWORD=postgres postgres:18'
-          DUMP="postgresql://postgres:postgres@localhost:5432/ci"
+          CI="postgresql://postgres:postgres@localhost:5432/ci"
           TARGET="postgresql://postgres:postgres@localhost:5432/restore_target"
           {
             set -e
             $PG pg_dump --version
-            $PG createdb "$TARGET"
-            # дамп забираем на раннер, чтобы проверить содержимое
-            $PG pg_dump --no-owner --no-acl --dbname "$DUMP" > /tmp/ci_dump.sql
+            $PG psql -v ON_ERROR_STOP=1 "$CI" -c "DROP DATABASE IF EXISTS restore_target;"
+            $PG psql -v ON_ERROR_STOP=1 "$CI" -c "CREATE DATABASE restore_target;"
+            $PG pg_dump --no-owner --no-acl --dbname "$CI" > /tmp/ci_dump.sql
             test -s /tmp/ci_dump.sql
             grep -q "CREATE TABLE" /tmp/ci_dump.sql
-            # и восстанавливаем во ВТОРУЮ базу из stdin
             $PG psql -v ON_ERROR_STOP=1 "$TARGET" < /tmp/ci_dump.sql
             $PG psql -v ON_ERROR_STOP=1 -tAqc "SELECT count(*) FROM tenants;" "$TARGET"
-            $PG dropdb "$TARGET"
+            $PG psql -v ON_ERROR_STOP=1 "$CI" -c "DROP DATABASE restore_target;"
           } > restore.log 2>&1
           code=$?
           cat restore.log
+          # лог в сводку прогона — виден без входа в GitHub
+          {
+            echo "### backup → restore (код $code)";
+            echo '```'; tail -c 3000 restore.log; echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
           if [ $code -ne 0 ]; then
             echo "::error title=backup→restore::$(tail -c 1500 restore.log | tr '\n' ' ')"
           fi
