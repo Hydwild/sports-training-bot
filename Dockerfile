@@ -10,9 +10,12 @@ ENV PYTHONUNBUFFERED=1 \
     MALLOC_TRIM_THRESHOLD_=131072
 
 # SHA собираемого коммита — отдаётся в /health, чтобы видеть, какой код в
-# проде. Передаётся при сборке: docker build --build-arg GIT_SHA=$(git rev-parse HEAD)
+# проде. Локально передаётся через GIT_SHA, Railway при GitHub-деплое
+# автоматически подставляет RAILWAY_GIT_COMMIT_SHA.
 ARG GIT_SHA=""
+ARG RAILWAY_GIT_COMMIT_SHA=""
 ENV GIT_SHA=${GIT_SHA}
+ENV RAILWAY_GIT_COMMIT_SHA=${RAILWAY_GIT_COMMIT_SHA}
 
 WORKDIR /code
 
@@ -38,8 +41,13 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-# Каталог для данных (SQLite-файл, логи)
-RUN mkdir -p /data && chmod +x start.sh
+# Каталог для данных (SQLite-файл, логи). sed — второй рубеж защиты: даже
+# если архив/ручная загрузка обойдёт .gitattributes, CRLF не сломает запуск.
+# Синтаксис скрипта проверяем уже при сборке образа, до деплоя.
+RUN mkdir -p /data \
+    && sed -i 's/\r$//' start.sh \
+    && chmod +x start.sh \
+    && /bin/sh -n start.sh
 
 EXPOSE 8000
 

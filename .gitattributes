@@ -1,0 +1,6 @@
+* text=auto
+
+# Shell-скрипты исполняются в Linux-контейнере. Жёстко храним LF, чтобы
+# Windows checkout не превращал shebang/команды в строки с CRLF.
+*.sh text eol=lf
+

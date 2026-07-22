@@ -119,11 +119,8 @@ async def _dump_postgres() -> tuple[bytes, str] | None:
 
 
 def _sqlite_path() -> str | None:
-    url = settings.database_url
-    if not url.startswith("sqlite"):
-        return None
-    tail = url.split("///")[-1]
-    return "/" + tail if url.count("/") >= 4 and not tail.startswith("/") else tail
+    from app.db.paths import sqlite_file_path
+    return sqlite_file_path(settings.database_url)
 
 
 def _dump_sqlite_sync() -> tuple[bytes, str] | None:
