@@ -108,6 +108,13 @@
              placeholder="+7 900 000-00-00" style="width:100%;padding:8px"></label></p>
 
     <h3>Демо</h3>
+    <p><label>Своя ссылка на страницу записи (необязательно)<br>
+      <input name="site_url" placeholder="https://ваш-сайт.ру/zapis"
+             value="{{ t.site_url or '' }}" style="width:100%;padding:8px">
+      <span class="muted">Пусто — используется наша страница. Если задать,
+        именно этот адрес уйдёт в QR-код, в кнопку бота и в список клиентов.
+        Только https.</span></label></p>
+
     <p><label><input type="checkbox" name="is_demo" value="1"
        {% if t.is_demo %}checked{% endif %}>
        Это демо-клуб (любой написавший боту может выбрать роль «тренер» или

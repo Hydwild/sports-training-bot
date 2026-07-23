@@ -256,26 +256,25 @@ class NewMaster(StatesGroup):
     specialty = State()
 
 
-def _site_row(tenant_id: int, vertical: str | None = None) -> list | None:
-    """Ряд с кнопкой-ссылкой на публичную страницу записи.
+def _site_row(url: str | None, vertical: str | None = None) -> list | None:
+    """Ряд с кнопкой-ссылкой на страницу записи клуба.
 
-    None, если PUBLIC_BASE_URL не настроен: Telegram принимает в кнопке
-    только абсолютный http(s)-адрес, а подставлять host из запроса нельзя —
-    его задаёт клиент."""
-    try:
-        url = settings.public_url(f"/club/{tenant_id}")
-    except RuntimeError:
+    Адрес приходит готовым (club_site_url_or_none): у клуба может быть свой
+    сайт. None — ссылки нет вовсе: Telegram принимает в кнопке только
+    абсолютный http(s)-адрес, а подставлять host из запроса нельзя, его
+    задаёт клиент."""
+    if not url:
         return None
     label = vcfg(vertical).get("web_eyebrow") or "Страница записи"
     return [InlineKeyboardButton(text=f"🌐 {label}", url=url)]
 
 
-def _site_kb(tenant_id: int, vertical: str | None = None):
-    row = _site_row(tenant_id, vertical)
+def _site_kb(url: str | None, vertical: str | None = None):
+    row = _site_row(url, vertical)
     return InlineKeyboardMarkup(inline_keyboard=[row]) if row else None
 
 
-async def _offer_site(message: Message, tenant_id: int,
+async def _offer_site(message: Message, url: str | None,
                       vertical: str | None = None,
                       as_coach: bool = False) -> None:
     """Предлагает открыть публичную страницу записи.
@@ -283,9 +282,9 @@ async def _offer_site(message: Message, tenant_id: int,
     Бот показывает продукт со стороны клуба, а половина ценности — в том,
     как всё выглядит у КЛИЕНТА в браузере: витрина, фото, мастера, выбор
     времени. Без явной ссылки эту часть демо просто не находят."""
-    kb = _site_kb(tenant_id, vertical)
+    kb = _site_kb(url, vertical)
     if kb is None:
-        return          # PUBLIC_BASE_URL не настроен — молча пропускаем
+        return          # адреса нет — лучше промолчать, чем дать битую кнопку
     text = ("🌐 А так ваш клуб видят клиенты в браузере. Там же можно "
             "записаться — попробуйте, запись сразу появится у вас в боте."
             if as_coach else
@@ -294,25 +293,29 @@ async def _offer_site(message: Message, tenant_id: int,
     await message.answer(text, reply_markup=kb)
 
 
-def _demo_role_kb(tenant_id: int | None = None,
+def _demo_role_kb(site_url: str | None = None,
                   vertical: str | None = None) -> InlineKeyboardMarkup:
+    # Роли называем словами вертикали: салону «Я тренер» ничего не говорит.
+    # callback_data при этом НЕ трогаем — по ней матчится обработчик.
+    vc = vcfg(vertical)
     rows = [[
-        InlineKeyboardButton(text="🎓 Я тренер", callback_data="demo:coach"),
-        InlineKeyboardButton(text="🙋 Я участник", callback_data="demo:participant"),
+        InlineKeyboardButton(text=f"🎓 Я {vc['master_word']}",
+                             callback_data="demo:coach"),
+        InlineKeyboardButton(text=f"🙋 Я {vc['client_word']}",
+                             callback_data="demo:participant"),
     ]]
     # смотреть витрину можно и не выбирая роль: часть посетителей пришла
     # оценить именно страницу записи, а не бота
-    if tenant_id is not None:
-        site = _site_row(tenant_id, vertical)
-        if site:
-            rows.append(site)
+    site = _site_row(site_url, vertical)
+    if site:
+        rows.append(site)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     needs_role_pick = False
-    demo_tid, demo_vert = None, "sport"
+    demo_site, demo_vert = None, "sport"
     async with SessionLocal() as session:
         tid, is_admin = await _resolve_tenant(session, message.chat.id, message.from_user.id)
         if tid is None:
@@ -330,21 +333,24 @@ async def cmd_start(message: Message) -> None:
             if tenant and tenant.is_demo and not is_admin:
                 existing = await svc.repo.get_membership(message.from_user.id)
                 needs_role_pick = existing is None
-                demo_tid = tid
+                from app.core.club_url import club_site_url_or_none
+                demo_site = club_site_url_or_none(tenant)
                 demo_vert = getattr(tenant, "vertical", None) or "sport"
             await session.commit()
         except Exception as e:
             logger.warning("Не удалось обновить профиль при /start: %s", e)
 
     if needs_role_pick:
+        _vc = vcfg(demo_vert)
         await message.answer(
             "🧪 <b>Демо-версия бота</b>\n\n"
-            "Здесь можно попробовать бота и как тренер, и как участник — "
-            "выберите роль. Демо-клуб каждую ночь обновляется заново, "
+            f"Здесь можно попробовать бота и как {_vc['master_word']}, "
+            f"и как {_vc['client_word']} — выберите роль. "
+            f"{_vc['demo_org']} каждую ночь обновляется заново, "
             "так что можно нажимать что угодно.\n\n"
             "Ниже — ссылка на страницу записи: так это увидят ваши клиенты "
             "в браузере, записаться можно прямо там.",
-            reply_markup=_demo_role_kb(demo_tid, demo_vert), parse_mode="HTML")
+            reply_markup=_demo_role_kb(demo_site, demo_vert), parse_mode="HTML")
         return
     custom, vert = None, "sport"
     try:
@@ -384,27 +390,31 @@ async def cb_demo_role(query: CallbackQuery) -> None:
         if not (tenant and tenant.is_demo):
             await query.answer(); return
         vert = getattr(tenant, "vertical", None) or "sport"
+        from app.core.club_url import club_site_url_or_none
+        site = club_site_url_or_none(tenant)
         if as_coach:
             svc = BookingService(session, tid)
             await svc.repo.upsert_membership(query.from_user.id, "coach", _name(query))
             await session.commit()
+    # Ответы тоже словами вертикали. «Меню:» без склонения — иначе на каждую
+    # вертикаль пришлось бы держать падежную форму («меню преподавателя»).
+    vc = vcfg(vert)
     if as_coach:
-        await query.answer("Вы — тренер демо-клуба ✅")
+        await query.answer(f"Вы — {vc['master_word']} ✅")
         await query.message.edit_text(
-            "🎓 <b>Вы тренер демо-клуба.</b>\nСоздавайте тренировки, "
-            "отмечайте явку и оплату — всё как у настоящего клуба.",
-            parse_mode="HTML")
-        await query.message.answer("👇 Меню тренера:",
+            f"🎓 <b>Вы {vc['master_word']} — это {vc['demo_org'].lower()}.</b>\n"
+            f"{vc['demo_coach_hint']}", parse_mode="HTML")
+        await query.message.answer("👇 Меню:",
                                    reply_markup=_menu(True, vertical=vert))
-        await _offer_site(query.message, tid, vert, as_coach=True)
+        await _offer_site(query.message, site, vert, as_coach=True)
     else:
-        await query.answer("Вы участник демо-клуба ✅")
+        await query.answer(f"Вы {vc['client_word']} ✅")
         await query.message.edit_text(
-            "🙋 <b>Вы участник демо-клуба.</b>\nЗаписывайтесь на тренировки и "
-            "смотрите статистику — как обычный клиент клуба.", parse_mode="HTML")
-        await query.message.answer("👇 Меню участника:",
+            f"🙋 <b>Вы {vc['client_word']} — это {vc['demo_org'].lower()}.</b>\n"
+            f"{vc['demo_client_hint']}", parse_mode="HTML")
+        await query.message.answer("👇 Меню:",
                                    reply_markup=_menu(False, vertical=vert))
-        await _offer_site(query.message, tid, vert, as_coach=False)
+        await _offer_site(query.message, site, vert, as_coach=False)
 
 
 @router.message(F.text.in_(_BTN_LIST_ALL))
@@ -740,8 +750,9 @@ async def cmd_site(message: Message) -> None:
             await message.answer("Этот чат не привязан к клубу.")
             return
         tenant = await GlobalRepository(session).get_tenant(tid)
+    from app.core.club_url import club_site_url_or_none
     vert = getattr(tenant, "vertical", None) if tenant else None
-    kb = _site_kb(tid, vert)
+    kb = _site_kb(club_site_url_or_none(tenant) if tenant else None, vert)
     if kb is None:
         await message.answer(
             "Публичный адрес не настроен — попросите администратора "

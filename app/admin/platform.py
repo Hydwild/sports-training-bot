@@ -35,6 +35,7 @@ from app.api.schemas import TenantCreate
 import logging
 
 from app.core import bot_tokens
+from app.core.club_url import club_site_url_or_none, validate_site_url
 from app.core.config import settings, tenant_suspended
 from app.core.security import NotAuthenticated, csrf_for_request, require_csrf
 from app.db.engine import get_session
@@ -158,7 +159,7 @@ async def _dashboard_rows(request: Request, session: AsyncSession) -> list[dict]
             "has_vk": bot_tokens.has_token(t, "vk"),
             "admin_tg_id": t.admin_tg_id,
             "status_text": status[0], "status_tag": status[1],
-            "public_url": f"{base}/club/{t.id}",
+            "public_url": club_site_url_or_none(t) or f"{base}/club/{t.id}",
             "edit_url": f"/admin/platform/{t.id}/edit",
         })
     return rows
@@ -477,6 +478,7 @@ async def platform_edit_submit(tenant_id: int, request: Request,
                                active_submitted: str = Form(""),
                                vertical: str = Form("sport"),
                                cover_url: str = Form(""),
+                               site_url: str = Form(""),
                                about: str = Form(""),
                                address: str = Form(""),
                                contact_phone: str = Form(""),
@@ -523,6 +525,17 @@ async def platform_edit_submit(tenant_id: int, request: Request,
                  tg_state=bot_tokens.mask(tenant, "tg"),
                  vk_state=bot_tokens.mask(tenant, "vk"),
                  error=f"Фото-обложка: {e}"),
+            status_code=400)
+    # свой адрес страницы записи: уходит в QR-код и кнопку бота, поэтому
+    # только https и только внешний хост (см. app/core/club_url.py)
+    try:
+        tenant.site_url = validate_site_url(site_url)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "platform_edit.html",
+            _ctx(request, t=tenant, saved=False,
+                 tg_state=bot_tokens.mask(tenant, "tg"),
+                 vk_state=bot_tokens.mask(tenant, "vk"),
+                 error=f"Ссылка на сайт: {e}"),
             status_code=400)
     tenant.about = about.strip()[:2000] or None
     tenant.address = address.strip()[:300] or None

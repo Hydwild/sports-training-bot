@@ -1403,9 +1403,16 @@ async def club_qr(tenant_id: int, request: Request,
     import io
     import qrcode
     from fastapi.responses import StreamingResponse
-    await _ensure_tenant(session, tenant_id)
-    base = (settings.public_base_url or str(request.base_url).rstrip("/"))
-    url = f"{base}/club/{tenant_id}"
+    from app.core.club_url import club_site_url
+
+    tenant = await _ensure_tenant(session, tenant_id)
+    # QR печатают и вешают в зале: если у клуба свой сайт, код обязан вести
+    # туда, иначе распечатанный QR ведёт не туда, куда клиент рассчитывает.
+    try:
+        url = club_site_url(tenant)
+    except RuntimeError:
+        base = (settings.public_base_url or str(request.base_url).rstrip("/"))
+        url = f"{base}/club/{tenant_id}"
     img = qrcode.make(url)
     buf = io.BytesIO()
     img.save(buf, format="PNG")

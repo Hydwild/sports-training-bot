@@ -201,3 +201,45 @@ async def test_real_clubs_are_untouched_by_demo_reset(db):
     async with db() as s:
         assert (await s.execute(select(Training))).first() is None
         assert (await s.execute(select(Master))).first() is None
+
+
+# ---------- слова ролей по вертикали ----------
+
+@pytest.mark.parametrize("vertical,coach,client,org", [
+    ("sport", "тренер", "участник", "Демо-клуб"),
+    ("beauty", "мастер", "клиент", "Демо-салон"),
+    ("tutor", "преподаватель", "ученик", "Демо-центр"),
+])
+def test_demo_roles_speak_the_vertical(vertical, coach, client, org):
+    """Боевой недочёт: демо салона и репетитора предлагали выбрать роль
+    «тренер / участник» — слова из спорта."""
+    from app.bots.telegram import _demo_role_kb
+
+    v = vcfg(vertical)
+    assert v["master_word"] == coach and v["client_word"] == client
+    assert v["demo_org"] == org
+
+    labels = [b.text for row in _demo_role_kb(None, vertical).inline_keyboard
+              for b in row]
+    assert any(coach in label for label in labels), labels
+    assert any(client in label for label in labels), labels
+
+
+def test_role_callbacks_stay_stable():
+    """Подписи меняются по вертикали, а callback_data — нет: по ней
+    матчится обработчик, и её смена сломала бы выбор роли."""
+    from app.bots.telegram import _demo_role_kb
+
+    for vertical in SCENARIOS:
+        data = [b.callback_data
+                for row in _demo_role_kb(None, vertical).inline_keyboard
+                for b in row if b.callback_data]
+        assert data == ["demo:coach", "demo:participant"], vertical
+
+
+def test_demo_hints_are_not_about_trainings_for_services():
+    """Салону нельзя предлагать «создавайте тренировки»."""
+    for vertical in ("beauty", "tutor"):
+        v = vcfg(vertical)
+        assert "тренировк" not in v["demo_coach_hint"].lower()
+        assert "тренировк" not in v["demo_client_hint"].lower()

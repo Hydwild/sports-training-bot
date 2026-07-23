@@ -28,8 +28,8 @@ def _labels(kb) -> list[str]:
     return [b.text for row in kb.inline_keyboard for b in row]
 
 
-def test_site_button_points_to_the_club_page():
-    kb = tg._site_kb(7, "sport")
+def test_site_button_points_to_the_given_url():
+    kb = tg._site_kb("https://neomeal.example/club/7", "sport")
     assert _urls(kb) == ["https://neomeal.example/club/7"]
 
 
@@ -40,26 +40,22 @@ def test_site_button_points_to_the_club_page():
 ])
 def test_button_label_matches_the_vertical(vertical, expected):
     """Салону не нужна кнопка «Запись на тренировки»."""
-    assert any(expected in label for label in _labels(tg._site_kb(1, vertical)))
+    kb = tg._site_kb("https://neomeal.example/club/1", vertical)
+    assert any(expected in label for label in _labels(kb))
 
 
-def test_no_button_without_public_base_url(monkeypatch):
+def test_no_button_without_url():
     """Без адреса кнопку не рисуем: Telegram отвергает относительный URL,
     а host из запроса подставлять нельзя — его задаёт клиент."""
-    monkeypatch.setattr(settings, "public_base_url", "")
-    assert tg._site_kb(1, "sport") is None
-    assert tg._site_row(1, "sport") is None
-
-
-def test_no_button_for_non_https_base(monkeypatch):
-    monkeypatch.setattr(settings, "public_base_url", "не-адрес")
-    assert tg._site_kb(1, "sport") is None
+    assert tg._site_kb(None, "sport") is None
+    assert tg._site_row(None, "sport") is None
+    assert tg._site_kb("", "sport") is None
 
 
 # ---------- демо: выбор роли ----------
 
 def test_demo_role_keyboard_offers_the_site():
-    kb = tg._demo_role_kb(3, "beauty")
+    kb = tg._demo_role_kb("https://neomeal.example/club/3", "beauty")
     data = [b.callback_data for row in kb.inline_keyboard for b in row
             if b.callback_data]
     assert "demo:coach" in data and "demo:participant" in data
@@ -67,10 +63,9 @@ def test_demo_role_keyboard_offers_the_site():
     assert _urls(kb) == ["https://neomeal.example/club/3"]
 
 
-def test_demo_role_keyboard_survives_missing_base_url(monkeypatch):
+def test_demo_role_keyboard_survives_missing_url():
     """Без адреса выбор роли обязан работать по-прежнему."""
-    monkeypatch.setattr(settings, "public_base_url", "")
-    kb = tg._demo_role_kb(3, "beauty")
+    kb = tg._demo_role_kb(None, "beauty")
     data = [b.callback_data for row in kb.inline_keyboard for b in row
             if b.callback_data]
     assert "demo:coach" in data
@@ -94,7 +89,8 @@ class _Msg:
 
 async def test_offer_site_is_worded_for_the_coach():
     m = _Msg()
-    await tg._offer_site(m, 5, "sport", as_coach=True)
+    await tg._offer_site(m, "https://neomeal.example/club/5", "sport",
+                         as_coach=True)
     text, kb = m.sent[0]
     assert "клиенты" in text
     assert _urls(kb) == ["https://neomeal.example/club/5"]
@@ -102,15 +98,15 @@ async def test_offer_site_is_worded_for_the_coach():
 
 async def test_offer_site_is_worded_for_the_participant():
     m = _Msg()
-    await tg._offer_site(m, 5, "beauty", as_coach=False)
+    await tg._offer_site(m, "https://neomeal.example/club/5", "beauty",
+                         as_coach=False)
     text, kb = m.sent[0]
     assert "Записаться" in text
     assert _urls(kb) == ["https://neomeal.example/club/5"]
 
 
-async def test_offer_site_stays_silent_without_base_url(monkeypatch):
+async def test_offer_site_stays_silent_without_url():
     """Лучше промолчать, чем прислать нерабочую кнопку."""
-    monkeypatch.setattr(settings, "public_base_url", "")
     m = _Msg()
-    await tg._offer_site(m, 5, "sport", as_coach=False)
+    await tg._offer_site(m, None, "sport", as_coach=False)
     assert m.sent == []

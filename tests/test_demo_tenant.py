@@ -163,7 +163,7 @@ async def test_cb_demo_coach_creates_membership_and_shows_admin_menu():
     async with SessionLocal() as s:
         m = await TenantRepository(s, tid).get_membership(4001)
         assert m is not None and m.role == "coach"
-    assert any("тренер демо-клуба" in t for t in query.message.edits)
+    assert any("Вы тренер" in t for t in query.message.edits)
     # меню тренера + приглашение открыть витрину (второе появляется только
     # при настроенном PUBLIC_BASE_URL — см. test_bot_site_link)
     assert query.message.sent
@@ -178,4 +178,4 @@ async def test_cb_demo_participant_does_not_create_membership():
     async with SessionLocal() as s:
         m = await TenantRepository(s, tid).get_membership(4002)
         assert m is None
-    assert any("участник демо-клуба" in t for t in query.message.edits)
+    assert any("Вы участник" in t for t in query.message.edits)

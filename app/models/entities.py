@@ -104,6 +104,10 @@ class Tenant(Base):
     last_digest_date: Mapped[str] = mapped_column(String(10), default="")
     # --- Витрина на публичной странице записи (/club/{id}) ---
     cover_url: Mapped[str | None] = mapped_column(String(500))   # фото-обложка
+    # Свой адрес страницы записи. Пусто — используется наша /club/<id>.
+    # Нужен клиентам с собственным сайтом или доменом: именно эта ссылка
+    # уходит в QR-код, в кнопку бота и в панель (см. app/core/club_url.py).
+    site_url: Mapped[str | None] = mapped_column(String(500))
     about: Mapped[str | None] = mapped_column(String(2000))      # описание
     address: Mapped[str | None] = mapped_column(String(300))
     contact_phone: Mapped[str | None] = mapped_column(String(32))
