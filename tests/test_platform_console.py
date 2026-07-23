@@ -229,3 +229,95 @@ async def test_logs_empty_is_reported(db, monkeypatch, tmp_path):
     await pc.cmd_logs(m)
     assert not m.documents
     assert "пуст" in m.last
+
+
+# ---------- почему бот клуба молчит ----------
+
+class _Info:
+    def __init__(self, url, pending=0, err=None):
+        self.url, self.pending_update_count, self.last_error_message = \
+            url, pending, err
+
+
+class _Bot:
+    """Заглушка Bot API: отдаёт заранее заданный getWebhookInfo."""
+    def __init__(self, info):
+        self._info = info
+        self.session = type("S", (), {"close": _noop})()
+
+    async def get_webhook_info(self):
+        return self._info
+
+
+async def _noop():
+    return None
+
+
+def _webhook_tenant(tid=7, name="Клуб вебхук"):
+    t = Tenant(name=name)
+    t.id = tid
+    t.tg_delivery_mode = "webhook"
+    return t
+
+
+def _expected_url(tenant_id: int) -> str:
+    """Адрес, который ДОЛЖЕН быть прописан в Telegram. Берём из тех же
+    настроек, что и код: тест не должен зависеть от того, какой
+    PUBLIC_BASE_URL достался прогону."""
+    return pc.settings.public_url(f"/webhook/telegram/{tenant_id}")
+
+
+def _patch(monkeypatch, tenants, info):
+    monkeypatch.setattr("app.core.bot_tokens.token_of", lambda t, k: "111:AAA")
+
+    class _G:
+        def __init__(self, _s): pass
+        async def list_tenants(self): return tenants
+
+    monkeypatch.setattr("app.repositories.repo.GlobalRepository", _G)
+    monkeypatch.setattr("aiogram.Bot", lambda token: _Bot(info))
+
+
+async def test_webhook_mismatch_is_reported(db, monkeypatch):
+    """Смена домена — самый коварный случай: бот молчит, а в логах пусто,
+    потому что запрос до нас вообще не доходит."""
+    t = _webhook_tenant()
+    _patch(monkeypatch, [t], _Info("https://old.example/webhook/telegram/7"))
+    m = _Msg("/webhooks")
+    await pc.cmd_webhooks(m)
+    assert "old.example" in m.last, "не показан адрес, куда шлёт Telegram"
+    assert _expected_url(7) in m.last, "не показан ожидаемый адрес"
+    assert "❌" in m.last
+    assert "Перевести на webhook" in m.last, "нет подсказки, что делать"
+
+
+async def test_matching_webhook_is_ok(db, monkeypatch):
+    t = _webhook_tenant()
+    _patch(monkeypatch, [t], _Info(_expected_url(7)))
+    m = _Msg("/webhooks")
+    await pc.cmd_webhooks(m)
+    assert "✅" in m.last and "❌" not in m.last
+
+
+async def test_last_error_from_telegram_is_shown(db, monkeypatch):
+    """Адрес верный, но Telegram не достучался — это тоже причина молчания."""
+    t = _webhook_tenant()
+    _patch(monkeypatch, [t], _Info(_expected_url(7), 12,
+                                   "Connection timed out"))
+    m = _Msg("/webhooks")
+    await pc.cmd_webhooks(m)
+    assert "Connection timed out" in m.last
+    assert "12" in m.last, "не показано, сколько обновлений скопилось"
+
+
+async def test_polling_clubs_are_not_listed(db, monkeypatch):
+    t = _webhook_tenant()
+    t.tg_delivery_mode = "polling"
+    _patch(monkeypatch, [t], _Info(""))
+    m = _Msg("/webhooks")
+    await pc.cmd_webhooks(m)
+    assert "polling" in m.last.lower()
+
+
+async def test_command_is_owner_only():
+    assert await pc.OwnerOnly()(_Msg("/webhooks", uid=STRANGER)) is False

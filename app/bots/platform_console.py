@@ -358,8 +358,92 @@ async def cmd_console(message: Message) -> None:
         "/client &lt;id&gt; — карточка клуба и его нагрузка\n"
         "/load — память, очередь уведомлений, ошибки\n"
         "/logs — журнал ошибок (зашифрованным файлом)\n"
+        "/webhooks — почему бот клуба молчит: сверка адреса вебхука\n"
         "/newclub &lt;название&gt; — завести клуб\n"
         "/extend &lt;id&gt; &lt;дней&gt; — продлить аренду\n\n"
         "<i>Правки и токены — в веб-панели: в переписку секреты не "
         "отправляем.</i>",
         parse_mode="HTML")
+
+
+# ---------- почему бот клуба молчит ----------
+
+@router.message(Command("webhooks"), OwnerOnly())
+async def cmd_webhooks(message: Message) -> None:
+    """Сверяет зарегистрированный в Telegram адрес вебхука с ожидаемым.
+
+    Зачем. Адрес прописывается в Telegram ОДИН РАЗ, в момент переключения
+    режима. Если потом сменить домен (PUBLIC_BASE_URL), Telegram продолжит
+    слать обновления на старый адрес, а бот просто замолчит — ни ошибки,
+    ни записи в логе, потому что до нас запрос уже не доходит.
+
+    Проверка ходит в Bot API, поэтому она ручная, а не на старте: массово
+    дёргать Telegram при каждом запуске нельзя."""
+    from aiogram import Bot
+
+    from app.core import bot_tokens
+    from app.core.config import settings as _s
+    from app.repositories.repo import GlobalRepository
+
+    async with SessionLocal() as session:
+        tenants = await GlobalRepository(session).list_tenants()
+
+    rows, problems = [], 0
+    for t in tenants:
+        if (getattr(t, "tg_delivery_mode", "") or "polling") != "webhook":
+            continue
+        token = bot_tokens.token_of(t, "tg")
+        if not token:
+            rows.append(f"⚠️ <b>#{t.id} {_esc(t.name)}</b>\n"
+                        "    режим webhook, но токена нет")
+            problems += 1
+            continue
+        try:
+            expected = _s.public_url(f"/webhook/telegram/{t.id}")
+        except RuntimeError:
+            rows.append(f"⚠️ <b>#{t.id} {_esc(t.name)}</b>\n"
+                        "    PUBLIC_BASE_URL не задан")
+            problems += 1
+            continue
+
+        bot = Bot(token=token)
+        try:
+            info = await bot.get_webhook_info()
+            actual = info.url or ""
+            pending = getattr(info, "pending_update_count", 0) or 0
+            last_err = getattr(info, "last_error_message", None)
+        except Exception as e:          # noqa: BLE001 — сеть/токен
+            rows.append(f"⚠️ <b>#{t.id} {_esc(t.name)}</b>\n"
+                        f"    Telegram недоступен: {type(e).__name__}")
+            problems += 1
+            continue
+        finally:
+            try:
+                await bot.session.close()
+            except Exception:           # noqa: BLE001
+                pass
+
+        if actual == expected:
+            note = f"✅ <b>#{t.id} {_esc(t.name)}</b>\n    адрес верный"
+            if pending:
+                note += f", в очереди {pending}"
+            if last_err:
+                note += f"\n    последняя ошибка: {_esc(last_err)[:80]}"
+                problems += 1
+            rows.append(note)
+        else:
+            problems += 1
+            rows.append(
+                f"❌ <b>#{t.id} {_esc(t.name)}</b>\n"
+                f"    Telegram шлёт на: {_esc(actual) or '— не задан —'}\n"
+                f"    а нужно: {_esc(expected)}")
+
+    if not rows:
+        await message.answer("Клубов в режиме webhook нет — все на polling, "
+                             "смена домена им не страшна.")
+        return
+    tail = ("\n\nПочинить: в карточке клуба нажмите «Перевести на webhook» "
+            "— адрес перепропишется текущим."
+            if problems else "")
+    await message.answer("<b>Вебхуки клиентских ботов</b>\n\n"
+                         + "\n".join(rows) + tail, parse_mode="HTML")
