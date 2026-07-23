@@ -113,8 +113,34 @@
        Это демо-клуб (любой написавший боту может выбрать роль «тренер» или
        «участник»; данные сбрасываются каждую ночь)</label></p>
 
+    <input type="hidden" name="active_submitted" value="1">
+    <p><label><input type="checkbox" name="is_active" value="1"
+       {% if t.is_active %}checked{% endif %}>
+       Клуб включён (снимите галочку, чтобы бот и страница записи перестали
+       отвечать — данные при этом сохраняются)</label></p>
+
     <p><button class="btn" type="submit">Сохранить</button>
        <a href="/admin/platform" style="margin-left:10px">← к списку</a></p>
+  </form>
+</div>
+
+<div class="card" style="border:1px solid #d33">
+  <h3 style="color:#d33">Опасная зона</h3>
+  <p class="muted">Удаление клуба <b>необратимо</b>. Вместе с ним исчезнут
+    все его занятия, записи, участники, платежи, отзывы и мастера.
+    Восстановить можно будет только из резервной копии.</p>
+  <p class="muted">Если нужно просто «выключить» клиента — снимите галочку
+    «Клуб включён» выше: бот замолчит, а данные останутся.</p>
+
+  <form method="post" action="/admin/platform/{{ t.id }}/delete">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <p><label>Чтобы удалить, введите название клуба точно:
+      <b>{{ t.name }}</b><br>
+      <input name="confirm_name" autocomplete="off" placeholder="{{ t.name }}"
+             style="width:100%;padding:8px"></label></p>
+    <p><button class="btn" type="submit"
+               style="background:#d33;border-color:#d33">
+      Удалить клуб навсегда</button></p>
   </form>
 </div>
 {% endblock %}

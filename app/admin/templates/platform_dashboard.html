@@ -63,6 +63,7 @@
      хранится вне Railway, переживает падение платформы. План восстановления:
      см. DISASTER_RECOVERY.md в репозитории.</p>
   {% if backup_msg %}<p class="tag {{ 'ok' if backup_msg.ok else 'no' }}">{{ backup_msg.message }}</p>{% endif %}
+  {% if deleted_name %}<p class="tag ok">Клуб «{{ deleted_name }}» удалён со всеми данными.</p>{% endif %}
   <form method="post" action="/admin/platform/backup-now">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="btn" type="submit">💾 Создать бэкап сейчас</button>

@@ -473,6 +473,8 @@ async def platform_edit_submit(tenant_id: int, request: Request,
                                admin_tg_id: str = Form(""),
                                admin_vk_id: str = Form(""),
                                is_demo: str = Form(""),
+                               is_active: str = Form(""),
+                               active_submitted: str = Form(""),
                                vertical: str = Form("sport"),
                                cover_url: str = Form(""),
                                about: str = Form(""),
@@ -497,6 +499,17 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     tenant.admin_tg_id = int(admin_tg_id) if admin_tg_id.strip().isdigit() else None
     tenant.admin_vk_id = int(admin_vk_id) if admin_vk_id.strip().isdigit() else None
     tenant.is_demo = bool(is_demo)
+    # Выключение — ОБРАТИМАЯ альтернатива удалению: бот и страница записи
+    # перестают отвечать, но данные клуба остаются на месте. Почти всегда
+    # нужно именно это, а не безвозвратное удаление.
+    #
+    # Меняем состояние ТОЛЬКО если форма действительно показывала этот
+    # переключатель (скрытое поле active_submitted). У снятого чекбокса
+    # браузер не шлёт ничего, и без маркера любой POST на /edit без этого
+    # поля молча уводил бы клуб офлайн — слишком дорогая цена за опечатку
+    # в чужом вызове.
+    if active_submitted:
+        tenant.is_active = bool(is_active)
     from app.core.verticals import VERTICALS
     tenant.vertical = vertical if vertical in VERTICALS else "sport"
     # витрина: обложка попадает в <img src> публичной страницы —
@@ -771,3 +784,73 @@ async def memory_diagnostics(_auth: None = Depends(require_platform_admin)):
         # тяжёлые библиотеки грузятся лениво — видно, поднялись ли они
         "matplotlib_loaded": "matplotlib.pyplot" in sys.modules,
     }
+
+
+# ---------- Удаление клуба ----------
+#
+# Операция НЕОБРАТИМАЯ: вместе с клубом каскадом (ondelete=CASCADE) уходят
+# его тренировки, записи, участники, платежи, отзывы, мастера и веб-клиенты
+# с зашифрованными телефонами. Восстановить можно только из резервной копии.
+#
+# Поэтому здесь два барьера:
+#   * подтверждение НАЗВАНИЕМ — оператор должен напечатать имя клуба точно.
+#     Кнопка «удалить» в списке рядом с «изменить» рано или поздно будет
+#     нажата случайно, а напечатать чужое название по ошибке нельзя;
+#   * рядом всегда доступен обратимый выход — выключение клуба (is_active),
+#     после которого бот и страница молчат, но данные остаются.
+
+@router.post("/{tenant_id}/delete", response_class=HTMLResponse)
+async def platform_delete(tenant_id: int, request: Request,
+                          _auth: None = Depends(require_platform_admin),
+                          _csrf: None = Depends(require_csrf(COOKIE)),
+                          confirm_name: str = Form(""),
+                          session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import delete as _sql_delete
+
+    from app.models.entities import Tenant
+
+    g = GlobalRepository(session)
+    tenant = await g.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+
+    def _err(message: str, code: int = 400):
+        return templates.TemplateResponse(request, "platform_edit.html",
+            _ctx(request, t=tenant, error=message, saved=False,
+                 tg_state=bot_tokens.mask(tenant, "tg"),
+                 vk_state=bot_tokens.mask(tenant, "vk")),
+            status_code=code)
+
+    if confirm_name.strip() != (tenant.name or "").strip():
+        return _err("Удаление не выполнено: введённое название не совпадает "
+                    f"с «{tenant.name}». Клуб на месте.")
+
+    name = tenant.name
+    had_bots = bot_tokens.has_token(tenant, "tg") or bot_tokens.has_token(
+        tenant, "vk")
+    # DELETE одним запросом: дочерние строки убирает сама база по
+    # ondelete=CASCADE. ORM-удаление тянуло бы их все в память ради того же.
+    await session.execute(_sql_delete(Tenant).where(Tenant.id == tenant_id))
+    await session.commit()
+    # аудит: что удалено и когда. Токенов и персональных данных в записи нет.
+    _plat_logger.warning("Оператор удалил клуб id=%s «%s»", tenant_id, name)
+
+    if had_bots:
+        # бот удалённого клуба должен замолчать сразу, не дожидаясь рестарта
+        try:
+            from app.bots import telegram as _tg
+            from app.bots import vk as _vk
+            await _tg.reload_client_bots()
+            await _vk.reload_client_bots()
+        except Exception:       # noqa: BLE001 — клуб уже удалён, это не откат
+            _plat_logger.exception("Клуб %s удалён, но боты не перечитаны",
+                                   tenant_id)
+
+    rows = await _dashboard_rows(request, session)
+    pending = await g.list_pending_reviews()
+    return templates.TemplateResponse(
+        request, "platform_dashboard.html",
+        _ctx(request, tenants=rows, backup_msg=None,
+             deleted_name=name,
+             last_drill=await g.get_state(DRILL_STATE_KEY),
+             pending_reviews_count=len(pending)))
