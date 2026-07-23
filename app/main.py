@@ -103,32 +103,54 @@ async def _scrub_legacy_photo_urls(conn) -> None:
             pass  # колонки/таблицы может не быть в этой редакции
 
 
-async def _assert_client_webhook_config() -> None:
-    """Fail-fast, если в БД уже есть webhook-клиенты без общих настроек."""
+# Проблемы конфигурации клиентских webhook, найденные на старте. Пустой
+# список — всё в порядке. Виден в /health как client_webhooks_ok.
+_WEBHOOK_CONFIG_PROBLEMS: list[str] = []
+
+
+async def _check_client_webhook_config() -> list[str]:
+    """Проверяет, хватает ли общих настроек клубам в режиме webhook.
+
+    Раньше отсюда летел RuntimeError и падал ВЕСЬ старт. Это несоразмерно:
+    форма создания клуба ставит режим webhook по умолчанию, поэтому один
+    заведённый клиент без WEBHOOK_MASTER_SECRET укладывал всю площадку —
+    вместе со всеми остальными клубами, страницами записи и панелью. А
+    Railway при этом показывает лишь «deployment failed» после таймаута
+    healthcheck, без намёка на причину.
+
+    Теперь возвращаем список проблем: старт продолжается, проблема громко
+    уходит в лог и видна в /health. Клиентский webhook такого клуба и так
+    отвечает 503 — сломан только он, а не платформа."""
     from sqlalchemy import func, or_, select
 
     from app.db.engine import SessionLocal
     from app.models.entities import Tenant
 
-    async with SessionLocal() as session:
-        count = (await session.execute(
-            select(func.count()).select_from(Tenant).where(or_(
-                Tenant.tg_delivery_mode == "webhook",
-                Tenant.vk_delivery_mode == "callback",
-            ))
-        )).scalar_one()
+    try:
+        async with SessionLocal() as session:
+            count = (await session.execute(
+                select(func.count()).select_from(Tenant).where(or_(
+                    Tenant.tg_delivery_mode == "webhook",
+                    Tenant.vk_delivery_mode == "callback",
+                ))
+            )).scalar_one()
+    except Exception as e:              # noqa: BLE001 — старт не валим
+        logger.error("Проверка клиентских webhook не выполнена: %s", e)
+        return []
     if not count:
-        return
+        return []
+
+    problems = []
     if len(settings.webhook_master_secret or "") < 32:
-        raise RuntimeError(
-            "В БД есть клиентские webhook, но WEBHOOK_MASTER_SECRET "
-            "не задан или короче 32 символов"
-        )
+        problems.append(
+            f"клубов в режиме webhook: {count}, но WEBHOOK_MASTER_SECRET не "
+            "задан или короче 32 символов — их боты работать не будут")
     base = (settings.public_base_url or "").strip().lower()
     if not base.startswith("https://"):
-        raise RuntimeError(
-            "В БД есть клиентские webhook, но PUBLIC_BASE_URL не использует https://"
-        )
+        problems.append(
+            f"клубов в режиме webhook: {count}, но PUBLIC_BASE_URL не "
+            "начинается с https:// — Telegram такой адрес не примет")
+    return problems
 
 
 @asynccontextmanager
@@ -152,7 +174,9 @@ async def lifespan(app: FastAPI):
         await _scrub_legacy_photo_urls(conn)
     logger.info("Таблицы готовы. БД: %s",
                 "SQLite" if settings.is_sqlite else "PostgreSQL")
-    await _assert_client_webhook_config()
+    _WEBHOOK_CONFIG_PROBLEMS[:] = await _check_client_webhook_config()
+    for _p in _WEBHOOK_CONFIG_PROBLEMS:
+        logger.error("КЛИЕНТСКИЕ WEBHOOK: %s", _p)
 
     # readiness ключей телефонов по РЕАЛЬНЫМ данным. Результат НЕ проглатываем:
     # он влияет на /health (keys_ok=false → 503), а не только пишется в лог.
@@ -381,7 +405,11 @@ async def health(response: Response) -> dict:
             # доставки Telegram ещё не применён и дотягивается в фоне. Если
             # завязать на это 503, недоступность Telegram снова начала бы
             # валить деплой — ровно то, от чего мы уходим.
-            "tg_delivery_synced": _tg_delivery_synced()}
+            "tg_delivery_synced": _tg_delivery_synced(),
+            # Диагностика, НЕ влияющая на статус: сломан бот отдельного
+            # клуба, а не платформа. Завязать сюда 503 значило бы снова
+            # валить деплой из-за настройки одного клиента.
+            "client_webhooks_ok": not _WEBHOOK_CONFIG_PROBLEMS}
     db_ok = True
     try:
         async with engine.connect() as conn:
