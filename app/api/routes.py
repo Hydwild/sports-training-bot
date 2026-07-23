@@ -502,8 +502,21 @@ _RU_MON = ["янв", "фев", "мар", "апр", "мая", "июн",
 # «мастера» (чипы ближайших свободных окон) / «дата и время» (лента дней),
 # фильтр слотов по дню и мастеру. Прогрессивное улучшение: без JS все
 # секции видны подряд, форма записи работает как обычно.
+def _club_js(vc: dict) -> str:
+    """Скрипт страницы записи со словом вертикали.
+
+    Чип фильтра говорит «Мастер: Марина» в салоне, но «Тренер: Алексей» в
+    клубе и «Преподаватель: …» у репетитора — слово подставляем при сборке
+    страницы, а не хардкодим в JS."""
+    word = vc.get("master_word_cap") or "Мастер"
+    # значение уходит в JS-строку: кавычки и слэши экранируем
+    safe = word.replace("\\", "\\\\").replace('"', '\\"')
+    return _CLUB_JS.replace("__MASTER_WORD__", safe)
+
+
 _CLUB_JS = """<script>
 (function(){
+  var MASTER_WORD = "__MASTER_WORD__";
   var home = document.getElementById('scr-home');
   var mastersScr = document.getElementById('scr-masters');
   var slotsScr = document.getElementById('scr-slots');
@@ -526,7 +539,7 @@ _CLUB_JS = """<script>
     });
     if (fchip){
       fchip.style.display = mFilter ? 'inline-flex' : 'none';
-      if (mFilter) fchip.textContent = 'Мастер: ' + mName + ' ✕';
+      if (mFilter) fchip.textContent = MASTER_WORD + ': ' + mName + ' ✕';
     }
   }
   function show(scr){
@@ -1025,7 +1038,8 @@ async def public_club(tenant_id: int, rated: str = "",
             '<div id="scr-home" class="scr">' + ms_strip_html +
             '<div class="menu">'
             f'<button type="button" class="menu-row" data-nav="masters">'
-            f'<span class="ic">{_I_USERS}</span>Выбрать мастера</button>'
+            f'<span class="ic">{_I_USERS}</span>Выбрать '
+            f'{_h.escape(vc["master_word_gen"])}</button>'
             f'<button type="button" class="menu-row" data-nav="slots">'
             f'<span class="ic">{_I_CAL}</span>Выбрать дату и время</button>'
             '</div></div>')
@@ -1094,7 +1108,8 @@ async def public_club(tenant_id: int, rated: str = "",
             '<div id="scr-masters" class="scr">'
             '<div class="backrow"><button type="button" class="backbtn" '
             'data-back aria-label="Назад">←</button>'
-            '<span class="scr-title">Выбрать мастера</span></div>'
+            f'<span class="scr-title">Выбрать '
+            f'{_h.escape(vc["master_word_gen"])}</span></div>'
             + "".join(mcards) + '</div>')
 
         slots_scr = (
@@ -1119,17 +1134,17 @@ async def public_club(tenant_id: int, rated: str = "",
             rated_note = (
                 '<div class="card note">Оценку можно оставить после визита: '
                 f'у вас нет отмеченного посещения у выбранного '
-                f'{_h.escape(vc["master_word"])}а. Отметку ставит '
+                f'{_h.escape(vc["master_word_gen"])}. Отметку ставит '
                 f'{_h.escape(vc["master_word"])} или администратор после '
                 'занятия — если визит был, попросите её проставить.</div>')
         else:
             rated_note = ""
         body = (profile_html + rated_note + home_html + masters_scr
-                + slots_scr + _CLUB_JS)
+                + slots_scr + _club_js(vc))
     else:
         # клубы без мастеров — прежний простой вид (список слотов сразу)
         body = (profile_html + ms_strip_html
-                + (slots_inner + my_form + _CLUB_JS if cards
+                + (slots_inner + my_form + _club_js(vc) if cards
                    else slots_inner + my_form))
     title = tenant.brand_name or tenant.name
     return _PAGE.format(cover=cover_html, eyebrow=_eyebrow(tenant),

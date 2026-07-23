@@ -138,3 +138,80 @@ def test_promo_without_demos_has_no_broken_links(client):
     page = client.get("/promo")
     assert page.status_code == 200
     assert "/club/None" not in page.text
+
+
+# ---------- витрина: три карточки, в каждой обе кнопки ----------
+
+class _FakeTenant:
+    def __init__(self, tid, name, vertical, slug=None, bot=None):
+        self.id, self.name, self.vertical = tid, name, vertical
+        self.slug, self.bot_username, self.brand_name = slug, bot, None
+
+
+def _cards_html() -> str:
+    from app.api.promo_page import render_promo_page
+
+    demos = [
+        _FakeTenant(1, "Демо-клуб", "sport", "demo-sport", "DemoSportBot"),
+        _FakeTenant(2, "Демо-салон", "beauty", "demo-salon", "DemoSalonBot"),
+        _FakeTenant(3, "Демо-репетитор", "tutor", "demo-tutor", "DemoTutorBot"),
+    ]
+    page = render_promo_page(1, demos)
+    start = page.index('<div class="demo-grid">')
+    return page[start:page.index("</div>\n\n", start)]
+
+
+def test_generic_bot_card_is_gone():
+    """Посетитель выбирает не «бота вообще», а свой вид бизнеса."""
+    assert "Демо-бот в Telegram" not in _cards_html()
+
+
+def test_exactly_one_card_per_direction():
+    html = _cards_html()
+    assert html.count('class="demo-card"') == 3
+    for tag in ("Спорт и тренировки", "Салон красоты", "Репетиторы и обучение"):
+        assert tag in html, tag
+
+
+def test_every_card_has_both_buttons():
+    """Кнопка бота и кнопка страницы записи — в каждой карточке."""
+    import re
+
+    html = _cards_html()
+    for card in html.split('<div class="demo-card">')[1:]:
+        assert "Открыть бота" in card, card[:120]
+        assert "Страница записи" in card, card[:120]
+    bots = re.findall(r'href="(https://t\.me/[^"]+)"', html)
+    assert sorted(bots) == ["https://t.me/DemoSalonBot",
+                            "https://t.me/DemoSportBot",
+                            "https://t.me/DemoTutorBot"]
+
+
+def test_fallback_keeps_generic_bot_when_no_demos():
+    """Пока демо не настроены, раздел не должен пустовать."""
+    from app.api.promo_page import render_promo_page
+
+    assert "Демо-бот в Telegram" in render_promo_page(None)
+
+
+# ---------- выбор специалиста по вертикали ----------
+
+@pytest.mark.parametrize("vertical,word", [
+    ("sport", "тренера"), ("beauty", "мастера"), ("tutor", "преподавателя"),
+])
+def test_club_page_picks_the_right_specialist_word(client, vertical, word):
+    """На спортивной и репетиторской странице стоял «выбор мастера»."""
+    import datetime as dt
+
+    tid = _make_club(client, f"Клуб {vertical}")
+    _set(tid, vertical=vertical)
+    client.post(f"/api/tenants/{tid}/masters", headers=H,
+                json={"name": "Специалист", "specialty": "тест"})
+    start = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).isoformat()
+    client.post(f"/api/tenants/{tid}/trainings", headers=H, json={
+        "title": "Слот", "start_at": start, "max_participants": 2})
+
+    page = client.get(f"/club/{tid}").text
+    assert f"Выбрать {word}" in page, f"{vertical}: нет «Выбрать {word}»"
+    if vertical != "beauty":
+        assert "Выбрать мастера" not in page

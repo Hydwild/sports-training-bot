@@ -208,8 +208,10 @@ def test_promo_and_demo_seed():
     with TestClient(app) as c:
         r = c.get("/promo")
         assert r.status_code == 200 and "Боты" in r.text and "для записей" in r.text
+        # В разделе «Живое демо» должен быть хотя бы один вход: общий бот
+        # (пока демо не настроены) либо карточки направлений с их ботами.
         from app.api.promo_page import DEMO_BOT_URL
-        assert DEMO_BOT_URL in r.text
+        assert DEMO_BOT_URL in r.text or "demo-card" in r.text
         tid = c.post("/api/tenants", json={"name": "Демо"},
                      headers=H).json()["id"]
 

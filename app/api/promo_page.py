@@ -47,7 +47,7 @@ _EXTRA_CSS = """
 .price-card h3{font:400 24px/1.3 Georgia,serif;margin:0 0 8px;text-wrap:balance}
 .price-card p{color:var(--muted);font:400 14.5px/1.6 -apple-system,system-ui,sans-serif;
   max-width:44ch;margin:0 auto 24px}
-.demo-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.demo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
 .demo-card{border-radius:20px;padding:24px;text-align:center;
   border:1px solid var(--border);background:var(--surface);box-shadow:var(--shadow);
   display:flex;flex-direction:column;align-items:center}
@@ -57,6 +57,7 @@ _EXTRA_CSS = """
 .demo-card h3{font:400 19px/1.3 Georgia,serif;margin:0 0 8px;text-wrap:balance}
 .demo-card p{color:var(--muted);font:400 13.5px/1.6 -apple-system,system-ui,sans-serif;
   margin:0 0 20px;flex:1}
+.demo-card a+a{margin-top:10px}
 .demo-card .btn-ghost{color:var(--ink);border-color:var(--border)}
 .demo-card .btn-ghost:hover{border-color:var(--gold)}
 @media (max-width:640px){.demo-grid{grid-template-columns:1fr}}
@@ -247,14 +248,6 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
 <p class="section-lead">Можно ничего не устанавливать и не регистрироваться —
   просто нажать и посмотреть.</p>
 <div class="demo-grid">
-  <div class="demo-card primary">
-    <span class="tag">Полный опыт</span>
-    <h3>Демо-бот в Telegram</h3>
-    <p>Откройте бота и выберите роль — «Я тренер» или «Я участник». Можно
-      создавать тренировки, записываться, отмечать явку — всё как в
-      настоящем клубе. Данные сбрасываются каждую ночь.</p>
-    <a class="btn-gold" href=\"""" + DEMO_BOT_URL + """\">Открыть бота →</a>
-  </div>
   <!--DEMO_CLUB_CARD-->
 </div>
 
@@ -270,25 +263,35 @@ _DEMO_CLUB_SLOT = "<!--DEMO_CLUB_CARD-->"
 
 
 def render_promo_page(demo_club_id: int | None, demos: list | None = None) -> str:
-    """demos — список демо-клубов (Tenant) для витрины направлений.
+    """demos — демо-клубы (Tenant) для витрины направлений.
 
-    Одного демо мало: владелец салона, увидев спортивную секцию, решает,
-    что платформа не про него. Поэтому показываем карточку на каждое
-    направление — со ссылкой на ЕГО бота и на ЕГО страницу записи."""
+    Раньше первой шла общая карточка «Демо-бот в Telegram», а направления
+    предлагали только страницу записи. Посетитель выбирает не «бота
+    вообще», а свой вид бизнеса, поэтому теперь карточка на каждое
+    направление и в ней ОБЕ кнопки: бот и страница записи."""
     if demos:
         return PROMO_HTML.replace(_DEMO_CLUB_SLOT, _demo_cards(demos))
-    if demo_club_id is None:
-        return PROMO_HTML.replace(_DEMO_CLUB_SLOT, "")
-    card = (
-        '<div class="demo-card">'
-        '<span class="tag">Быстрый взгляд</span>'
-        '<h3>Страница записи</h3>'
-        '<p>Как видит клуб участник без Telegram и ВК — по прямой ссылке '
-        'или QR-коду в зале.</p>'
-        f'<a class="btn-ghost" href="/club/{demo_club_id}">'
-        'Открыть страницу →</a>'
+    # Демо ещё не настроены: показываем общий бот, чтобы раздел не пустовал.
+    fallback = (
+        '<div class="demo-card primary">'
+        '<span class="tag">Полный опыт</span>'
+        '<h3>Демо-бот в Telegram</h3>'
+        '<p>Откройте бота и выберите роль. Можно создавать записи, '
+        'записываться, отмечать явку — всё как у настоящего клиента. '
+        'Данные сбрасываются каждую ночь.</p>'
+        f'<a class="btn-gold" href="{DEMO_BOT_URL}">Открыть бота →</a>'
         '</div>')
-    return PROMO_HTML.replace(_DEMO_CLUB_SLOT, card)
+    if demo_club_id is not None:
+        fallback += (
+            '<div class="demo-card">'
+            '<span class="tag">Быстрый взгляд</span>'
+            '<h3>Страница записи</h3>'
+            '<p>Как видит клуб участник без Telegram и ВК — по прямой ссылке '
+            'или QR-коду в зале.</p>'
+            f'<a class="btn-ghost" href="/club/{demo_club_id}">'
+            'Открыть страницу →</a>'
+            '</div>')
+    return PROMO_HTML.replace(_DEMO_CLUB_SLOT, fallback)
 
 
 # Что обещает каждое направление — своими словами, а не «бот для записи».
@@ -315,6 +318,8 @@ def _demo_cards(demos: list) -> str:
     for tenant in demos:
         vertical = (getattr(tenant, "vertical", None) or "sport")
         title, pitch = _DEMO_PITCH.get(vertical, _DEMO_PITCH["sport"])
+        # Обе кнопки: бот — основное действие, страница записи — второе.
+        # Кнопка бота появляется, только если у клуба задан @username.
         links = []
         tg = bot_link(tenant)
         if tg:
