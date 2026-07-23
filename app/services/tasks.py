@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 
 from app.db.engine import SessionLocal
+from app.services.card_sync import notify_slot_changed as _sync_cards
 from app.repositories.repo import GlobalRepository
 from app.services.booking import BookingService
 
@@ -480,8 +481,7 @@ async def _run_scheduler() -> None:
                     # карточка в TG-группе обновляется один раз после всех
                     # снятий (не в цикле — не спамим edit_message на гостя)
                     try:
-                        from app.bots import telegram as _tg
-                        await _tg._refresh_group_card(training.tenant_id, training.id)
+                        await _sync_cards(training.tenant_id, training.id)
                     except Exception as e:
                         logger.debug("Не удалось обновить карточку в группе: %s", e)
                 training.guests_expired = True
@@ -526,6 +526,15 @@ async def _daily_maintenance(last_day: list) -> None:
             | ((Outbox.status == "sent") & (Outbox.handled_at.is_(None))
                & (Outbox.created_at < cutoff))))
         await session.commit()
+
+        # Адреса VK-карточек прошедших занятий: обновлять там уже нечего,
+        # а таблица иначе растёт по строке на каждого, кто когда-либо видел
+        # карточку. Занятия удаляют её и каскадом, но занятия живут долго.
+        from app.models.entities import Training as _Tr
+        from app.models.entities import VkCard as _VkCard
+        await session.execute(delete(_VkCard).where(
+            _VkCard.training_id.in_(
+                select(_Tr.id).where(_Tr.start_at < cutoff))))
 
         # отработавшие окна лимита
         from app.api.rate_limit import purge_old_buckets

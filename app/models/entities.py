@@ -589,3 +589,35 @@ class Review(Base):
     approved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow)
+
+
+class VkCard(Base):
+    """Ссылка на отправленную в VK карточку занятия — чтобы её можно было
+    обновить ПОЗЖЕ, из другого канала.
+
+    Зачем нужна отдельная таблица. Telegram хранит id опубликованного в
+    группе сообщения прямо в Training.group_message_id: карточка там одна
+    на занятие. В VK карточка приходит каждому в личку, и адрес сообщения
+    (peer_id + message_id) есть только в момент отправки — во входящем
+    событии. Без сохранения запись, сделанная на сайте или в Telegram, не
+    может найти VK-сообщение, и у человека в переписке навсегда остаётся
+    устаревшее число мест.
+
+    Растёт по одной строке на (человек, занятие); чистится вместе с
+    занятием (CASCADE) и по сроку в суточном обслуживании."""
+    __tablename__ = "vk_cards"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "training_id", "peer_id",
+                         name="uq_vk_card_target"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    training_id: Mapped[int] = mapped_column(
+        ForeignKey("trainings.id", ondelete="CASCADE"), index=True)
+    # peer_id личного диалога совпадает с user_id VK
+    peer_id: Mapped[int] = mapped_column(BigInteger)
+    message_id: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow)

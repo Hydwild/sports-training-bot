@@ -1235,15 +1235,11 @@ async def public_signup(tenant_id: int,
 
 
 async def _notify_group_card_changed(tenant_id: int, training_id: int) -> None:
-    """Запись/отмена с публичной веб-страницы должна обновить ранее
-    опубликованную карточку тренировки в TG-группе клуба (если есть) —
-    иначе список записавшихся там останется устаревшим до следующего
-    нажатия кнопки внутри самой группы."""
-    try:
-        from app.bots import telegram as tg
-        await tg._refresh_group_card(tenant_id, training_id)
-    except Exception:
-        pass  # TG может быть не настроен/недоступен — не критично для веб-записи
+    """Запись/отмена с публичной страницы должна перерисовать уже
+    отправленные карточки занятия — и в TG-группе, и в VK-переписках.
+    Иначе там навсегда остаётся устаревшее число мест."""
+    from app.services.card_sync import notify_slot_changed
+    await notify_slot_changed(tenant_id, training_id)
 
 
 @public_router.post("/club/{tenant_id}/rate", response_class=HTMLResponse)

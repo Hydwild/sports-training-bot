@@ -260,8 +260,11 @@ async def _show_my(user_id: int, group_id=None) -> None:
             card = await views.training_card_plain(svc, training)
             mark = ("✅ Вы записаны" if status == "active"
                     else f"⏳ Вы в очереди (№{position})")
-            await _send(user_id, f"{mark}\n\n{card}",
-                        keyboard=_my_kb_vk(training.id))
+            # send_card, а не _send: адрес сообщения нужно запомнить, иначе
+            # запись с сайта или из Telegram не сможет его обновить
+            await send_card(user_id, tenant.id, training.id,
+                            f"{mark}\n\n{card}",
+                            keyboard=_my_kb_vk(training.id))
         await _send(user_id, "⌨️ Меню внизу 👇", keyboard=_menu_kb(is_admin))
 
 
@@ -285,7 +288,9 @@ async def _show_list(user_id: int, group_id=None) -> None:
         for tr in trainings:
             card = await views.training_card_plain(svc, tr, aliases)
             full = await _is_full(svc, tr)
-            await _send(user_id, card, keyboard=_kb(tr.id, full, is_admin))
+            # адрес карточки запоминаем — её будут обновлять из других каналов
+            await send_card(user_id, tenant.id, tr.id, card,
+                            keyboard=_kb(tr.id, full, is_admin))
         # закрепляем нижнее меню отдельным коротким сообщением
         await _send(user_id, "⌨️ Меню внизу 👇", keyboard=_menu_kb(is_admin))
 
@@ -321,16 +326,14 @@ async def _edit_card(peer_id: int, cmid: int, tid: int, group_id=None,
 
 
 async def _notify_tg_card_changed(tenant_id: int, training_id: int) -> None:
-    """Кросс-платформенно: запись/отмена через VK должна обновить ранее
-    опубликованную карточку тренировки в TG-группе клуба (если есть) —
-    иначе список записавшихся там не узнает о VK-изменениях до следующего
-    нажатия кнопки в самой TG-группе. Обратное не нужно: у VK нет своей
-    "живой" карточки в сообществе — анонс на стене статичен по дизайну."""
-    try:
-        from app.bots import telegram as tg
-        await tg._refresh_group_card(tenant_id, training_id)
-    except Exception as e:
-        logger.debug("Не удалось обновить TG-карточку из VK: %s", e)
+    """Кросс-канальное обновление после изменения из VK.
+
+    Имя историческое: раньше отсюда дёргалась только карточка в TG-группе,
+    потому что своей «живой» карточки у VK не было. Теперь она есть
+    (vk_cards), и обновлять нужно оба канала — иначе у остальных участников
+    в VK-переписке останется старое число мест."""
+    from app.services.card_sync import notify_slot_changed
+    await notify_slot_changed(tenant_id, training_id)
 
 
 async def _do_signup(user_id: int, tid: int, group_id=None) -> str:
@@ -2389,3 +2392,103 @@ async def shutdown() -> None:
         task.cancel()
     _client_tasks.clear()
     await _transport.close()
+
+
+# ─────────── Живое обновление VK-карточек из любого канала ───────────
+#
+# В VK карточка приходит каждому в личку, и адрес сообщения (peer_id +
+# message_id) известен только в момент отправки. Без сохранения запись,
+# сделанная на сайте или в Telegram, не может найти это сообщение — и у
+# человека в переписке навсегда остаётся устаревшее число мест.
+#
+# Поэтому адрес каждой отправленной карточки запоминается (таблица
+# vk_cards), а refresh_cards() переписывает их все.
+
+
+async def _remember_card(tenant_id: int, training_id: int, peer_id: int,
+                         message_id: int | None) -> None:
+    """Запоминает адрес отправленной карточки. Одна строка на (человек,
+    занятие): повторная отправка заменяет адрес, а не плодит записи."""
+    if not message_id:
+        return
+    from sqlalchemy import select
+
+    from app.models.entities import VkCard
+
+    try:
+        async with SessionLocal() as session:
+            stmt = select(VkCard).where(VkCard.tenant_id == tenant_id,
+                                        VkCard.training_id == training_id,
+                                        VkCard.peer_id == peer_id)
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            if row is None:
+                session.add(VkCard(tenant_id=tenant_id,
+                                   training_id=training_id,
+                                   peer_id=peer_id, message_id=message_id))
+            else:
+                row.message_id = message_id
+            await session.commit()
+    except Exception as e:                  # noqa: BLE001
+        # Не смогли запомнить — карточка просто не будет обновляться.
+        # Ронять из-за этого саму отправку нельзя.
+        logger.warning("VK: адрес карточки не сохранён: %s", type(e).__name__)
+
+
+async def send_card(user_id: int, tenant_id: int, training_id: int,
+                    text: str, keyboard: str | None = None) -> None:
+    """Отправляет карточку занятия и запоминает её адрес."""
+    api = (_api_by_tenant.get(tenant_id) if tenant_id is not None else None)
+    if api is None and tenant_id not in _configured_tenants:
+        api = _api()
+    if api is None:
+        raise RuntimeError("VK bot для доставки не настроен")
+    message_id = await api.messages.send(
+        user_id=user_id, message=text, random_id=0, keyboard=keyboard)
+    await _remember_card(tenant_id, training_id, user_id, message_id)
+
+
+async def refresh_cards(tenant_id: int, training_id: int) -> int:
+    """Переписывает все сохранённые VK-карточки занятия. Возвращает, сколько
+    обновлено — ноль это норма: у клуба может не быть VK вовсе."""
+    from sqlalchemy import delete, select
+
+    from app.models.entities import VkCard
+
+    api = _api_by_tenant.get(tenant_id) or _api()
+    if api is None:
+        return 0
+
+    async with SessionLocal() as session:
+        rows = list((await session.execute(
+            select(VkCard).where(VkCard.tenant_id == tenant_id,
+                                 VkCard.training_id == training_id))).scalars())
+        if not rows:
+            return 0
+        tenant = await GlobalRepository(session).get_tenant(tenant_id)
+        svc = BookingService(session, tenant_id,
+                             tz=tenant.timezone if tenant else None)
+        training = await svc.repo.get_training(training_id)
+        if training is None:
+            return 0
+        card = await views.training_card_plain(svc, training)
+        full = await _is_full(svc, training)
+        targets = [(r.id, r.peer_id, r.message_id) for r in rows]
+
+    updated, gone = 0, []
+    for row_id, peer_id, message_id in targets:
+        try:
+            await api.messages.edit(
+                peer_id=peer_id, message_id=message_id, message=card,
+                keyboard=_kb(training_id, full, False))
+            updated += 1
+        except Exception as e:              # noqa: BLE001
+            # Сообщение удалено или слишком старое для правки — адрес
+            # больше не нужен, иначе мы будем дёргать VK впустую вечно.
+            gone.append(row_id)
+            logger.info("VK: карточка %s не обновлена (%s)", row_id,
+                        type(e).__name__)
+    if gone:
+        async with SessionLocal() as session:
+            await session.execute(delete(VkCard).where(VkCard.id.in_(gone)))
+            await session.commit()
+    return updated

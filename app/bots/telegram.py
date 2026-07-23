@@ -538,8 +538,8 @@ async def cb_move_do(query: CallbackQuery) -> None:
     except Exception:
         pass
     await query.answer("Перенесено ✅")
-    await _refresh_group_card(tid, from_id)
-    await _refresh_group_card(tid, to_id)
+    await _sync_slot_cards(tid, from_id)
+    await _sync_slot_cards(tid, to_id)
 
 
 @router.message(F.text == BTN_PROFILE)
@@ -915,7 +915,7 @@ async def cb_signup(query: CallbackQuery) -> None:
         views.signup_result(res, training.title if training else "", vert),
         show_alert=True)
     await _refresh_card(query, train_id, new_card, is_admin, is_full=full)
-    await _refresh_group_card(tid, train_id)
+    await _sync_slot_cards(tid, train_id)
 
 
 async def _refresh_card(query, train_id: int, card: str | None,
@@ -961,7 +961,7 @@ async def cb_cancel(query: CallbackQuery) -> None:
     await query.answer("Запись отменена." if res["cancelled"] else "Вы не были записаны.", show_alert=True)
     if res["cancelled"]:
         await _refresh_card(query, train_id, new_card, is_admin, is_full=full)
-        await _refresh_group_card(tid, train_id)
+        await _sync_slot_cards(tid, train_id)
 
 
 # ---------- Управление тренировкой (админ) ----------
@@ -1130,7 +1130,7 @@ async def edit_value(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("✅ Изменено:\n\n" + card,
                          reply_markup=_kb(tid, True, full), parse_mode="HTML")
-    await _refresh_group_card(tenant_id, tid)
+    await _sync_slot_cards(tenant_id, tid)
 
 
 @router.callback_query(F.data.startswith("gu:"))
@@ -1173,7 +1173,7 @@ async def guest_name(message: Message, state: FSMContext) -> None:
     else:
         await message.answer(vcfg(vert)["signup_closed"])
         return
-    await _refresh_group_card(data["tenant_id"], data["train_id"])
+    await _sync_slot_cards(data["tenant_id"], data["train_id"])
 
 
 async def _admin_guard(message: Message) -> int | None:
@@ -1702,7 +1702,7 @@ async def cb_guest_confirm(query: CallbackQuery) -> None:
     await query.answer("Гость подтверждён." if s else "Не найдено", show_alert=True)
     if s:
         await query.message.edit_text(f"✅ Гость «{s.name}» подтверждён как реально занятый.")
-        await _refresh_group_card(tid, s.training_id)
+        await _sync_slot_cards(tid, s.training_id)
 
 
 @router.callback_query(F.data.startswith("gno:"))
@@ -1721,7 +1721,7 @@ async def cb_guest_reject(query: CallbackQuery) -> None:
     if res.get("promoted"):
         msg += f"\n🎉 Из очереди поднят: {res['promoted'].name}."
     await query.message.edit_text(msg)
-    await _refresh_group_card(tid, res["training_id"])
+    await _sync_slot_cards(tid, res["training_id"])
 
 
 @router.message(Command("attend"))
@@ -2021,6 +2021,16 @@ async def _publish_to_group(tenant_id: int, training_id: int) -> None:
     except Exception as e:
         logger.warning("Не удалось опубликовать тренировку в группу %s: %s",
                        chat_id, e)
+
+
+async def _sync_slot_cards(tenant_id: int, training_id: int) -> None:
+    """Перерисовывает карточки занятия во ВСЕХ каналах (TG и VK).
+
+    Отдельная обёртка нужна, чтобы у изменений из Telegram и с сайта был
+    один и тот же путь: раньше Telegram обновлял только себя, и VK-карточка
+    оставалась устаревшей."""
+    from app.services.card_sync import notify_slot_changed
+    await notify_slot_changed(tenant_id, training_id)
 
 
 async def _refresh_group_card(tenant_id: int, training_id: int) -> None:
