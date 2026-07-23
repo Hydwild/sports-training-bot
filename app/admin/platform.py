@@ -41,9 +41,29 @@ from app.db.engine import get_session
 from app.repositories.repo import GlobalRepository
 
 logger = logging.getLogger("app")
+_plat_logger = logger
 
 # ключ в platform_state: дата последнего успешного restore drill
 DRILL_STATE_KEY = "last_restore_drill"
+
+
+def _token_error_hint(exc: Exception) -> str:
+    """Человеческая причина, почему токен не сохранился.
+
+    Оператор видит форму, а не логи: голое «Internal Server Error» не
+    говорит ни что случилось, ни что делать. Самый частый случай —
+    не задан BOT_TOKEN_ENC_KEY, и тогда токен физически нечем зашифровать.
+    Текст самой ошибки наружу не отдаём: в нём могут быть внутренние
+    подробности, а в логе она есть целиком."""
+    from app.core.keyring import KeyConfigError
+    from app.core.phones import KeyUnavailable
+
+    if isinstance(exc, (KeyUnavailable, KeyConfigError)):
+        return ("не настроен ключ шифрования токенов ботов "
+                "(BOT_TOKEN_ENC_KEY) — задайте его в переменных окружения и "
+                "перезапустите сервис.")
+    return (f"внутренняя ошибка ({type(exc).__name__}), подробности — в "
+            "логах сервиса.")
 
 router = APIRouter(prefix="/admin/platform", tags=["platform-admin"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -405,6 +425,20 @@ async def platform_new_submit(request: Request,
                 _ctx(request, error=f"Клуб «{name}» создан (id={tenant_out.id}), "
                                     f"но бот не подключён полностью: {e.detail}"),
                 status_code=400)
+        except Exception as e:          # noqa: BLE001
+            # Любая другая ошибка (например, не задан BOT_TOKEN_ENC_KEY —
+            # тогда токен физически нечем зашифровать) раньше уходила голым
+            # "Internal Server Error". Оператор не узнавал ни причины, ни
+            # того, что КЛУБ УЖЕ СОЗДАН, и повторял попытку — плодя дубли.
+            _plat_logger.exception(
+                "Клуб id=%s создан, но токен не сохранён", tenant_out.id)
+            return templates.TemplateResponse(request, "platform_new.html",
+                _ctx(request, error=(
+                    f"Клуб «{name}» создан (id={tenant_out.id}), но токен "
+                    f"сохранить не удалось: {_token_error_hint(e)} "
+                    "Повторно создавать клуб НЕ нужно — задайте токен в его "
+                    "карточке.")),
+                status_code=500)
 
     base = settings.public_base_url or str(request.base_url).rstrip("/")
     return templates.TemplateResponse(request, "platform_new_done.html",
@@ -498,6 +532,14 @@ async def platform_edit_submit(tenant_id: int, request: Request,
                  saved=False, tg_state=bot_tokens.mask(tenant, "tg"),
                  vk_state=bot_tokens.mask(tenant, "vk")),
             status_code=400)
+    except Exception as e:              # noqa: BLE001
+        _plat_logger.exception("Токен клуба id=%s не сохранён", tenant_id)
+        return templates.TemplateResponse(request, "platform_edit.html",
+            _ctx(request, t=tenant,
+                 error=f"Токен сохранить не удалось: {_token_error_hint(e)}",
+                 saved=False, tg_state=bot_tokens.mask(tenant, "tg"),
+                 vk_state=bot_tokens.mask(tenant, "vk")),
+            status_code=500)
 
     return templates.TemplateResponse(request, "platform_edit.html",
         _ctx(request, t=tenant, error=None, saved=True,
