@@ -18,6 +18,7 @@ from app.models.entities import Base, Membership, Outbox, Signup, Training
 from app.repositories.repo import GlobalRepository, TenantRepository
 from app.services.booking import BookingService
 from app.services import tasks
+from app.services.demo_content import scenario
 
 
 @pytest_asyncio.fixture
@@ -80,8 +81,9 @@ async def test_demo_tenant_reset_wipes_and_reseeds(monkeypatch, maker):
     async with maker() as s:
         trainings = list((await s.execute(
             select(Training).where(Training.tenant_id == tid))).scalars())
-        assert len(trainings) == len(tasks._DEMO_SEED)
-        assert {t.title for t in trainings} == {i["title"] for i in tasks._DEMO_SEED}
+        assert len(trainings) == len(scenario("sport")["slots"])
+        assert ({t.title for t in trainings}
+                == {i["title"] for i in scenario("sport")["slots"]})
 
         assert not list((await s.execute(
             select(Membership).where(Membership.tenant_id == tid))).scalars())
@@ -120,7 +122,7 @@ async def test_demo_reset_runs_once_per_day(monkeypatch, maker):
     async with maker() as s:
         trainings = list((await s.execute(
             select(Training).where(Training.tenant_id == tid))).scalars())
-        assert len(trainings) == len(tasks._DEMO_SEED)
+        assert len(trainings) == len(scenario("sport")["slots"])
 
 
 async def test_demo_reset_skips_without_demo_tenants(monkeypatch, maker):

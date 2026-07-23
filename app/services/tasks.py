@@ -630,31 +630,9 @@ async def _daily_maintenance(last_day: list) -> None:
 
 # демо-тренировки, создаваемые заново при каждом ночном сбросе (дни/время —
 # относительно момента сброса, чтобы демо всегда выглядело "живым")
-_DEMO_SEED = [
-    {"title": "Вечерняя игра", "days": 1, "hour": 19, "duration_min": 90,
-     "max_participants": 8, "location": "Зал №1", "coach": 0},
-    {"title": "Утренняя тренировка", "days": 2, "hour": 9, "duration_min": 60,
-     "max_participants": 6, "location": "Зал №2", "coach": 1},
-    {"title": "Турнир выходного дня", "days": 5, "hour": 12, "duration_min": 180,
-     "max_participants": 16, "location": "Главный корт", "coach": 0},
-]
-
-# тренеры демо-клуба: витрина должна выглядеть прилично для показа клиентам
-_DEMO_MASTERS = [
-    {"name": "Алексей Морозов", "specialty": "Старший тренер",
-     "bio": "Мастер спорта, опыт 12 лет. Групповые и персональные занятия."},
-    {"name": "Ирина Соколова", "specialty": "Тренер по ОФП",
-     "bio": "Опыт 6 лет, специализация — начинающие и юниоры."},
-]
-
-# витрина демо-клуба (обложка не задаётся — только текст, чтобы не зависеть
-# от внешней картинки)
-_DEMO_PROFILE = {
-    "about": ("Демо-клуб платформы: здесь можно посмотреть, как выглядит "
-              "страница записи. Данные обновляются каждую ночь."),
-    "address": "г. Москва, ул. Спортивная, 1",
-    "contact_phone": "+7 900 000-00-00",
-}
+# Наполнение демо-клубов вынесено в app/services/demo_content.py: у каждой
+# вертикали (спорт / салон / репетитор) свой набор примеров. Витрина должна
+# говорить на языке того, кто пришёл её смотреть.
 
 
 # час (в таймзоне клуба), начиная с которого отправляется утренний дайджест
@@ -747,17 +725,20 @@ async def _demo_reset_daily(last_day: list) -> None:
             from app.models.entities import Master
             await session.execute(
                 _delete(Master).where(Master.tenant_id == t.id))
+            # сценарий по вертикали клуба: спорт / салон / репетитор
+            from app.services.demo_content import scenario
+            demo = scenario(getattr(t, "vertical", None))
             masters = []
-            for m in _DEMO_MASTERS:
+            for m in demo["masters"]:
                 masters.append(await svc.repo.add_master(
                     name=m["name"], specialty=m["specialty"], bio=m["bio"]))
             if not (t.about or "").strip():
-                t.about = _DEMO_PROFILE["about"]
+                t.about = demo["profile"]["about"]
             if not (t.address or "").strip():
-                t.address = _DEMO_PROFILE["address"]
+                t.address = demo["profile"]["address"]
             if not (t.contact_phone or "").strip():
-                t.contact_phone = _DEMO_PROFILE["contact_phone"]
-            for item in _DEMO_SEED:
+                t.contact_phone = demo["profile"]["contact_phone"]
+            for item in demo["slots"]:
                 start_at = (now + dt.timedelta(days=item["days"])).replace(
                     hour=item["hour"], minute=0, second=0, microsecond=0)
                 coach_idx = item.get("coach")

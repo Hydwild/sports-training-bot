@@ -13,8 +13,9 @@
 
     <p><label>Направление бизнеса<br>
       <select name="vertical" style="padding:8px">
-        <option value="sport" {% if t.vertical != 'beauty' %}selected{% endif %}>Спорт и тренировки</option>
+        <option value="sport" {% if t.vertical not in ('beauty', 'tutor') %}selected{% endif %}>Спорт и тренировки</option>
         <option value="beauty" {% if t.vertical == 'beauty' %}selected{% endif %}>Салон красоты</option>
+        <option value="tutor" {% if t.vertical == 'tutor' %}selected{% endif %}>Репетиторы и обучение</option>
       </select></label></p>
 
     <p><label>Часовой пояс<br>

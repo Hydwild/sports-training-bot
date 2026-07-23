@@ -96,8 +96,8 @@ class Tenant(Base):
     # Membership с role=coach) или "участник" — см. app/bots/telegram.py
     # (_resolve_tenant, cmd_start) и app/services/tasks.py (ночной сброс).
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Вертикаль бизнеса: sport | beauty (терминология бота и страницы
-    # записи — см. app/core/verticals.py)
+    # Вертикаль бизнеса: sport | beauty | tutor (терминология бота и
+    # страницы записи — см. app/core/verticals.py)
     vertical: Mapped[str] = mapped_column(String(20), default="sport")
     # Дата (ISO, в таймзоне клуба) последнего утреннего дайджеста админу —
     # маркер «на сегодня уже отправляли» (см. tasks._admin_daily_digest)
