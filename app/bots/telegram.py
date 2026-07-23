@@ -431,8 +431,8 @@ async def btn_my(message: Message) -> None:
         svc = BookingService(session, tid)
         rows = await svc.my_trainings(PLATFORM, message.from_user.id)
         if not rows:
-            await message.answer("📭 Вы не записаны ни на одну предстоящую тренировку.\n"
-                                 "Нажмите «🏸 Тренировки», чтобы записаться."); return
+            vert = await _tenant_vertical(session, tid)
+            await message.answer(vcfg(vert)["no_upcoming"]); return
         as_admin = is_admin and message.chat.type == "private"
         cards = []
         for training, status, position in rows:
@@ -791,7 +791,8 @@ async def cmd_profile(message: Message) -> None:
             await message.answer("Чат не привязан к клубу."); return
         svc = BookingService(session, tid)
         stats = await svc.user_stats(PLATFORM, message.from_user.id)
-    await message.answer(views.profile_card(_name(message), stats))
+        vert = await _tenant_vertical(session, tid)
+    await message.answer(views.profile_card(_name(message), stats, vert))
 
 
 @router.message(Command("stats"))
@@ -889,7 +890,10 @@ async def cb_signup(query: CallbackQuery) -> None:
         as_admin = is_admin and query.message.chat.type == "private"
         new_card = await views.training_card(svc, training, for_admin=as_admin) if training else None
         full = await _is_full(svc, training) if training else False
-    await query.answer(views.signup_result(res, training.title if training else ""), show_alert=True)
+        vert = await _tenant_vertical(session, tid)
+    await query.answer(
+        views.signup_result(res, training.title if training else "", vert),
+        show_alert=True)
     await _refresh_card(query, train_id, new_card, is_admin, is_full=full)
     await _refresh_group_card(tid, train_id)
 
@@ -1138,6 +1142,7 @@ async def guest_name(message: Message, state: FSMContext) -> None:
     async with SessionLocal() as session:
         svc = BookingService(session, data["tenant_id"])
         res = await svc.sign_up_guest(data["train_id"], name, message.from_user.id)
+        vert = await _tenant_vertical(session, data["tenant_id"])
     await state.clear()
     if res.result == "active":
         await message.answer(f"👤 Гость «{name}» записан и занял место.\n"
@@ -1146,7 +1151,7 @@ async def guest_name(message: Message, state: FSMContext) -> None:
         await message.answer(f"👤 Гость «{name}» поставлен в очередь №{res.position}.\n"
                              f"⏳ Требует подтверждения тренером.")
     else:
-        await message.answer("Запись закрыта или тренировка отменена.")
+        await message.answer(vcfg(vert)["signup_closed"])
         return
     await _refresh_group_card(data["tenant_id"], data["train_id"])
 
@@ -1160,12 +1165,21 @@ async def _admin_guard(message: Message) -> int | None:
 
 
 @router.message(Command("new"))
+def _wiz_gen(data: dict) -> str:
+    """Слово для подписей мастера создания — из вертикали, запомненной на
+    первом шаге. Так шаги не ходят в базу повторно."""
+    return vcfg(data.get("vertical"))["event_gen"]
+
+
 async def cmd_new(message: Message, state: FSMContext) -> None:
     tid = await _admin_guard(message)
     if tid is None: return
     await state.update_data(tenant_id=tid)
     await state.set_state(NewTraining.title)
-    await message.answer("Название тренировки?")
+    async with SessionLocal() as _s:
+        vert = await _tenant_vertical(_s, tid)
+    await state.update_data(vertical=vert)      # дальше шаги берут отсюда
+    await message.answer(f"Название {vcfg(vert)['event_gen']}?")
 
 
 @router.message(NewTraining.title)
@@ -1201,7 +1215,7 @@ async def _ask_date(message: Message, state: FSMContext) -> None:
         rows.append(day_row)
     rows.append([InlineKeyboardButton(text="📅 Другая дата", callback_data="nd:manual")])
     await state.set_state(NewTraining.date)
-    await message.answer("📅 Выберите дату тренировки:",
+    await message.answer(f"📅 Выберите дату {_wiz_gen(await state.get_data())}:",
                          reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -1297,7 +1311,7 @@ async def _ask_location(message: Message, state: FSMContext) -> None:
     rows.append([InlineKeyboardButton(text="✏️ Другое место", callback_data="nl:manual")])
     rows.append([InlineKeyboardButton(text="➖ Без места", callback_data="nl:none")])
     await state.set_state(NewTraining.location)
-    await message.answer("📍 Место тренировки:",
+    await message.answer(f"📍 Место {_wiz_gen(await state.get_data())}:",
                          reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -1340,7 +1354,7 @@ async def _ask_duration(message: Message, state: FSMContext) -> None:
         callback_data=f"ndur:{d}") for d in options]
     rows = [row, [InlineKeyboardButton(text="✏️ Другое", callback_data="ndur:manual")]]
     await state.set_state(NewTraining.duration)
-    await message.answer("⏱ Длительность тренировки:",
+    await message.answer(f"⏱ Длительность {_wiz_gen(await state.get_data())}:",
                          reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -1707,7 +1721,8 @@ async def cmd_attend(message: Message) -> None:
         await message.answer("Нет недавних тренировок для отметки."); return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"#{t.id} {t.title}", callback_data=f"al:{t.id}")] for t in recent])
-    await message.answer("Отметить явку/оплату — выберите тренировку:", reply_markup=kb)
+    await message.answer("Отметить явку/оплату — выберите из списка:",
+                         reply_markup=kb)
 
 
 async def _attend_kb(svc, train_id):
@@ -1814,7 +1829,8 @@ async def cmd_setmax(message: Message, state: FSMContext) -> None:
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"#{t.id} {t.title}", callback_data=f"sm:{t.id}")] for t in trainings])
     await state.update_data(tenant_id=tid)
-    await message.answer("Какой тренировке менять лимит?", reply_markup=kb)
+    await message.answer("Где менять лимит? Выберите из списка:",
+                         reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("sm:"))
@@ -1852,7 +1868,8 @@ async def cmd_cancel_training(message: Message) -> None:
         await message.answer("Нет тренировок."); return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"#{t.id} {t.title}", callback_data=f"ct:{t.id}")] for t in trainings])
-    await message.answer("Какую тренировку отменить?", reply_markup=kb)
+    await message.answer("Что отменить? Выберите из списка:",
+                         reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("ct:"))
@@ -1881,7 +1898,8 @@ async def cmd_export(message: Message) -> None:
         await message.answer("Нет тренировок."); return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"#{t.id} {t.title}", callback_data=f"ex:{t.id}")] for t in trainings])
-    await message.answer("Какую тренировку выгрузить?", reply_markup=kb)
+    await message.answer("Что выгрузить? Выберите из списка:",
+                         reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("ex:"))

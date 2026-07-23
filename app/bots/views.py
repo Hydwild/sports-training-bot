@@ -175,20 +175,25 @@ def _label(s, aliases: dict[tuple[str, int], str] | None = None,
     return f"{name}{suffix}"
 
 
-def signup_result(res, title: str) -> str:
+def signup_result(res, title: str, vertical: str | None = None) -> str:
+    from app.core.verticals import vcfg
     return {
         "active": "✅ Вы записаны!",
         "queue": f"⏳ Основной состав заполнен. Очередь №{res.position}. "
                  f"Освободится место — поднимем автоматически.",
         "already": "Вы уже записаны.",
-        "closed": "Запись закрыта или тренировка отменена.",
+        "closed": vcfg(vertical)["signup_closed"],
     }[res.result]
 
 
-def profile_card(name: str, stats: dict) -> str:
+def profile_card(name: str, stats: dict, vertical: str | None = None) -> str:
+    """Карточка участника. Подписи берутся из вертикали: «Наиграно часов»
+    в салоне звучит нелепо."""
+    from app.core.verticals import vcfg
+    vc = vcfg(vertical)
     lines = [f"👤 Профиль: {name}", "",
-             f"✅ Посещено тренировок: {stats['attended']}",
-             f"⏱ Наиграно часов: {stats['hours']}",
+             f"✅ {vc['stat_attended']}: {stats['attended']}",
+             f"⏱ {vc['stat_hours']}: {stats['hours']}",
              f"📋 Всего записей (прошедшие): {stats['signups']}"]
     if stats["missed"]:
         lines.append(f"🚫 Пропущено: {stats['missed']}")

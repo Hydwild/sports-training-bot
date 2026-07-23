@@ -243,3 +243,71 @@ def test_demo_hints_are_not_about_trainings_for_services():
         v = vcfg(vertical)
         assert "тренировк" not in v["demo_coach_hint"].lower()
         assert "тренировк" not in v["demo_client_hint"].lower()
+
+
+# ---------- тексты ответов, а не только кнопки ----------
+
+def test_profile_card_speaks_the_vertical():
+    """Боевая жалоба: кнопки перевели, а ответы остались спортивными —
+    в салоне «Наиграно часов» выглядит нелепо."""
+    from app.bots.views import profile_card
+
+    stats = {"attended": 3, "hours": 4.5, "signups": 5, "missed": 0,
+             "unpaid": 0}
+    assert "Наиграно часов" in profile_card("Тест", stats, "sport")
+
+    salon = profile_card("Тест", stats, "beauty")
+    assert "Состоялось визитов" in salon and "Часов в кресле" in salon
+    assert "тренировок" not in salon
+
+    tutor = profile_card("Тест", stats, "tutor")
+    assert "Посещено занятий" in tutor
+    assert "тренировок" not in tutor and "Наиграно" not in tutor
+
+
+def test_profile_card_without_vertical_is_unchanged():
+    """Обратная совместимость: старый вызов без вертикали — спорт."""
+    from app.bots.views import profile_card
+
+    stats = {"attended": 1, "hours": 1.0, "signups": 1, "missed": 0,
+             "unpaid": 0}
+    assert "Посещено тренировок" in profile_card("Тест", stats)
+
+
+@pytest.mark.parametrize("vertical", ["beauty", "tutor"])
+def test_no_upcoming_message_is_not_about_trainings(vertical):
+    text = vcfg(vertical)["no_upcoming"]
+    assert "тренировк" not in text.lower(), text
+    assert "🏸" not in text, "кнопка спорта в подсказке чужой вертикали"
+
+
+@pytest.mark.parametrize("vertical", ["beauty", "tutor"])
+def test_signup_closed_message_is_not_about_trainings(vertical):
+    from app.bots.views import signup_result
+
+    class _Res:
+        result, position = "closed", 0
+
+    text = signup_result(_Res(), "", vertical)
+    assert "тренировк" not in text.lower(), text
+
+
+def test_signup_closed_default_is_unchanged():
+    from app.bots.views import signup_result
+
+    class _Res:
+        result, position = "closed", 0
+
+    assert signup_result(_Res(), "") == "Запись закрыта или тренировка отменена."
+
+
+@pytest.mark.parametrize("vertical,expected", [
+    ("sport", "тренировки"), ("beauty", "услуги"), ("tutor", "занятия"),
+])
+def test_creation_wizard_asks_in_the_right_words(vertical, expected):
+    """«Название тренировки?» в салоне — тот же дефект, что и в профиле."""
+    from app.bots.telegram import _wiz_gen
+
+    assert _wiz_gen({"vertical": vertical}) == expected
+    # без вертикали (старое состояние мастера) — спорт
+    assert _wiz_gen({}) == "тренировки"

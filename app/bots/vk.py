@@ -252,8 +252,8 @@ async def _show_my(user_id: int, group_id=None) -> None:
         rows = await svc.my_trainings(PLATFORM, user_id)
         is_admin = tenant.admin_vk_id == user_id
         if not rows:
-            await _send(user_id, "📭 Вы не записаны ни на одну тренировку.\n"
-                        "Нажмите «🏸 Тренировки», чтобы записаться.",
+            from app.core.verticals import vcfg as _vcfg
+            await _send(user_id, _vcfg(_ctx_vertical.get())["no_upcoming"],
                         keyboard=_menu_kb(is_admin))
             return
         for training, status, position in rows:
@@ -1837,7 +1837,9 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
             name = await _upsert_vk_user(svc, user_id)
             await session.commit()
             stats = await svc.user_stats(PLATFORM, user_id)
-            await _send(user_id, profile_card(name, stats), keyboard=_menu_kb())
+            await _send(user_id,
+                        profile_card(name, stats, _ctx_vertical.get()),
+                        keyboard=_menu_kb())
     elif text in ("стоп", "отписаться"):
         async with SessionLocal() as session:
             tenant = await _resolve_tenant(session, group_id)
