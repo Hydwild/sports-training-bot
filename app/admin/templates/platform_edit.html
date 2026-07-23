@@ -108,6 +108,21 @@
              placeholder="+7 900 000-00-00" style="width:100%;padding:8px"></label></p>
 
     <h3>Демо</h3>
+    <p><label>Короткий адрес на нашем сайте (необязательно)<br>
+      <input name="slug" placeholder="salon-hortensia"
+             value="{{ t.slug or '' }}" style="width:100%;padding:8px">
+      <span class="muted">Будет открываться как <b>/c/адрес</b> вместо
+        /club/{{ t.id }} — так ссылку удобнее печатать в QR и диктовать.
+        Строчные латинские буквы, цифры и дефис. Старая ссылка
+        /club/{{ t.id }} продолжит работать.</span></label></p>
+
+    <p><label>@username бота клуба (необязательно)<br>
+      <input name="bot_username" placeholder="MyClubBot"
+             value="{{ t.bot_username or '' }}" style="width:100%;padding:8px">
+      <span class="muted">Нужен только чтобы построить ссылку t.me/… —
+        например в витрине направлений на промо-странице. Это не токен.</span>
+      </label></p>
+
     <p><label>Своя ссылка на страницу записи (необязательно)<br>
       <input name="site_url" placeholder="https://ваш-сайт.ру/zapis"
              value="{{ t.site_url or '' }}" style="width:100%;padding:8px">

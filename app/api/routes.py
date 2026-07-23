@@ -826,6 +826,23 @@ font:400 12.5px/1.6 -apple-system,system-ui,sans-serif}}
 </body></html>"""
 
 
+@public_router.get("/c/{slug}")
+async def club_by_slug(slug: str, session: AsyncSession = Depends(get_session)):
+    """Короткий читаемый адрес клуба: /c/salon-hortensia вместо /club/3.
+
+    Ссылку печатают в QR и диктуют по телефону, поэтому она должна читаться.
+    Отвечаем редиректом на /club/<id>, а не дублируем страницу: вся логика
+    записи остаётся на одном маршруте, а старые ссылки и QR-коды по
+    /club/<id> продолжают работать."""
+    from fastapi.responses import RedirectResponse
+
+    tenant = await GlobalRepository(session).get_tenant_by_slug(slug)
+    if tenant is None or not tenant.is_active:
+        # не подсказываем, существует ли такой адрес
+        raise HTTPException(status_code=404, detail="Страница не найдена")
+    return RedirectResponse(f"/club/{tenant.id}", status_code=307)
+
+
 @public_router.get("/club/{tenant_id}", response_class=HTMLResponse)
 async def public_club(tenant_id: int, rated: str = "",
                       session: AsyncSession = Depends(get_session)):
@@ -1679,8 +1696,11 @@ async def promo_page(session: AsyncSession = Depends(get_session)):
     Ссылку на демонстрационную страницу записи берём из БД: показывать
     вместо неё клуб реального заказчика нельзя."""
     from app.api.promo_page import render_promo_page
-    demo_id = await GlobalRepository(session).demo_tenant_id()
-    return render_promo_page(demo_id)
+    g = GlobalRepository(session)
+    demos = await g.list_demo_tenants()
+    # витрина направлений; при единственном демо-клубе — прежняя карточка
+    return render_promo_page(await g.demo_tenant_id(),
+                             demos if len(demos) > 1 else None)
 
 
 @public_router.get("/faq", response_class=HTMLResponse)

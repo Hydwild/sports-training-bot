@@ -108,6 +108,14 @@ class Tenant(Base):
     # Нужен клиентам с собственным сайтом или доменом: именно эта ссылка
     # уходит в QR-код, в кнопку бота и в панель (см. app/core/club_url.py).
     site_url: Mapped[str | None] = mapped_column(String(500))
+    # Короткий читаемый адрес на нашем домене: /c/<slug> вместо /club/<id>.
+    # Ссылку печатают в QR и диктуют по телефону — «/club/3» для этого
+    # не годится. Уникален по площадке.
+    slug: Mapped[str | None] = mapped_column(String(40), unique=True,
+                                             index=True)
+    # @username бота клуба — только чтобы построить ссылку t.me/<username>
+    # (в промо-витрине направлений). Секретом не является, в отличие от токена.
+    bot_username: Mapped[str | None] = mapped_column(String(64))
     about: Mapped[str | None] = mapped_column(String(2000))      # описание
     address: Mapped[str | None] = mapped_column(String(300))
     contact_phone: Mapped[str | None] = mapped_column(String(32))

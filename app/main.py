@@ -67,6 +67,8 @@ async def _ensure_columns(conn) -> None:
         ("tenants", "vk_delivery_mode", "VARCHAR(16) DEFAULT 'longpoll'"),
         ("tenants", "vk_confirmation_code", "VARCHAR(128) DEFAULT ''"),
         ("tenants", "site_url", "VARCHAR(500)"),
+        ("tenants", "slug", "VARCHAR(40)"),
+        ("tenants", "bot_username", "VARCHAR(64)"),
     ]
     for table, column, coltype in wanted:
         try:

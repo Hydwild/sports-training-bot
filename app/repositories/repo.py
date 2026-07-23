@@ -1215,6 +1215,18 @@ class GlobalRepository:
                         bad.append(v)
         return bad
 
+    async def get_tenant_by_slug(self, slug: str):
+        """Клуб по короткому адресу (/c/<slug>)."""
+        stmt = select(Tenant).where(Tenant.slug == (slug or "").strip().lower())
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_demo_tenants(self) -> list[Tenant]:
+        """Демо-клубы для витрины направлений на промо-странице."""
+        stmt = (select(Tenant).where(Tenant.is_demo.is_(True),
+                                     Tenant.is_active.is_(True))
+                .order_by(Tenant.id.asc()))
+        return list((await self.session.execute(stmt)).scalars())
+
     async def demo_tenant_id(self) -> int | None:
         """Клуб-витрина (Tenant.is_demo), на который можно спокойно послать
         любого посетителя. None — если демо-клуба нет."""

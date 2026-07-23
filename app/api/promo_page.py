@@ -269,7 +269,14 @@ PROMO_HTML = ("""<!doctype html><html lang="ru"><head>""" + head_meta(
 _DEMO_CLUB_SLOT = "<!--DEMO_CLUB_CARD-->"
 
 
-def render_promo_page(demo_club_id: int | None) -> str:
+def render_promo_page(demo_club_id: int | None, demos: list | None = None) -> str:
+    """demos — список демо-клубов (Tenant) для витрины направлений.
+
+    Одного демо мало: владелец салона, увидев спортивную секцию, решает,
+    что платформа не про него. Поэтому показываем карточку на каждое
+    направление — со ссылкой на ЕГО бота и на ЕГО страницу записи."""
+    if demos:
+        return PROMO_HTML.replace(_DEMO_CLUB_SLOT, _demo_cards(demos))
     if demo_club_id is None:
         return PROMO_HTML.replace(_DEMO_CLUB_SLOT, "")
     card = (
@@ -282,3 +289,44 @@ def render_promo_page(demo_club_id: int | None) -> str:
         'Открыть страницу →</a>'
         '</div>')
     return PROMO_HTML.replace(_DEMO_CLUB_SLOT, card)
+
+
+# Что обещает каждое направление — своими словами, а не «бот для записи».
+_DEMO_PITCH = {
+    "sport": ("Спорт и тренировки",
+              "Секция или клуб: группы, очередь на занятие, отметка явки "
+              "и оплаты."),
+    "beauty": ("Салон красоты",
+               "Барбер, маникюр, волосы: запись по одному клиенту на время, "
+               "выбор мастера."),
+    "tutor": ("Репетиторы и обучение",
+              "Занятия один на один и группы: расписание, посещения, "
+              "напоминания ученикам."),
+}
+
+
+def _demo_cards(demos: list) -> str:
+    """Карточка на каждое направление: ссылка на бота и на страницу записи."""
+    import html as _h
+
+    from app.core.club_url import bot_link, club_path
+
+    parts = []
+    for tenant in demos:
+        vertical = (getattr(tenant, "vertical", None) or "sport")
+        title, pitch = _DEMO_PITCH.get(vertical, _DEMO_PITCH["sport"])
+        links = []
+        tg = bot_link(tenant)
+        if tg:
+            links.append(f'<a class="btn-gold" href="{_h.escape(tg)}">'
+                         'Открыть бота →</a>')
+        links.append(f'<a class="btn-ghost" href="{_h.escape(club_path(tenant))}">'
+                     'Страница записи →</a>')
+        parts.append(
+            '<div class="demo-card">'
+            f'<span class="tag">{_h.escape(title)}</span>'
+            f'<h3>{_h.escape(tenant.brand_name or tenant.name)}</h3>'
+            f'<p>{_h.escape(pitch)}</p>'
+            + " ".join(links) +
+            '</div>')
+    return "".join(parts)

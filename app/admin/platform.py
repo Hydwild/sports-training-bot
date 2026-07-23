@@ -35,7 +35,12 @@ from app.api.schemas import TenantCreate
 import logging
 
 from app.core import bot_tokens
-from app.core.club_url import club_site_url_or_none, validate_site_url
+from app.core.club_url import (
+    club_site_url_or_none,
+    validate_bot_username,
+    validate_site_url,
+    validate_slug,
+)
 from app.core.config import settings, tenant_suspended
 from app.core.security import NotAuthenticated, csrf_for_request, require_csrf
 from app.db.engine import get_session
@@ -479,6 +484,8 @@ async def platform_edit_submit(tenant_id: int, request: Request,
                                vertical: str = Form("sport"),
                                cover_url: str = Form(""),
                                site_url: str = Form(""),
+                               slug: str = Form(""),
+                               bot_username: str = Form(""),
                                about: str = Form(""),
                                address: str = Form(""),
                                contact_phone: str = Form(""),
@@ -530,12 +537,14 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     # только https и только внешний хост (см. app/core/club_url.py)
     try:
         tenant.site_url = validate_site_url(site_url)
+        tenant.slug = validate_slug(slug)
+        tenant.bot_username = validate_bot_username(bot_username)
     except ValueError as e:
         return templates.TemplateResponse(request, "platform_edit.html",
             _ctx(request, t=tenant, saved=False,
                  tg_state=bot_tokens.mask(tenant, "tg"),
                  vk_state=bot_tokens.mask(tenant, "vk"),
-                 error=f"Ссылка на сайт: {e}"),
+                 error=f"Адрес клуба: {e}"),
             status_code=400)
     tenant.about = about.strip()[:2000] or None
     tenant.address = address.strip()[:300] or None

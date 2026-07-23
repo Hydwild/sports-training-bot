@@ -13,8 +13,61 @@
 """
 from __future__ import annotations
 
+import re
+
 from app.core.config import settings
 from app.core.image_url import MAX_URL_LEN, _host_is_forbidden
+
+# Короткий адрес: строчные латинские буквы, цифры и дефис, 3–40 символов,
+# без дефиса по краям. Читается вслух и печатается в QR.
+SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$")
+
+# Адреса, которые нельзя занимать: они уже что-то значат в наших ссылках
+# либо выглядят как служебные.
+RESERVED_SLUGS = {"club", "admin", "api", "health", "promo", "faq", "reviews",
+                  "static", "webhook", "c", "m", "qr", "login", "logout"}
+
+
+def validate_slug(value: str | None) -> str | None:
+    """Короткий адрес клуба или None. Бросает ValueError с текстом для
+    оператора — он показывается прямо в форме."""
+    v = (value or "").strip().lower().lstrip("/")
+    if not v:
+        return None
+    if v.isdigit():
+        # иначе /c/3 и /club/3 читались бы как одно и то же и путали бы
+        raise ValueError("адрес не может состоять только из цифр")
+    if not SLUG_RE.match(v):
+        raise ValueError(
+            "допустимы строчные латинские буквы, цифры и дефис, "
+            "от 3 до 40 символов (например salon-hortensia)")
+    if v in RESERVED_SLUGS:
+        raise ValueError(f"адрес «{v}» зарезервирован, выберите другой")
+    return v
+
+
+# @username бота: по правилам Telegram — латиница, цифры и подчёркивание,
+# 5–32 символа. Это НЕ секрет (в отличие от токена), нужен только чтобы
+# построить ссылку t.me/<username>.
+BOT_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+
+
+def validate_bot_username(value: str | None) -> str | None:
+    v = (value or "").strip().lstrip("@")
+    if not v:
+        return None
+    if v.startswith("https://t.me/") or v.startswith("t.me/"):
+        v = v.rsplit("/", 1)[-1]
+    if not BOT_USERNAME_RE.match(v):
+        raise ValueError("имя бота — латиница, цифры и подчёркивание, "
+                         "5–32 символа (например MyClubBot)")
+    return v
+
+
+def bot_link(tenant) -> str | None:
+    """Ссылка на бота клуба в Telegram или None, если username не задан."""
+    name = (getattr(tenant, "bot_username", "") or "").strip().lstrip("@")
+    return f"https://t.me/{name}" if name else None
 
 
 def validate_site_url(value: str | None) -> str | None:
@@ -45,7 +98,16 @@ def club_site_url(tenant) -> str:
     custom = (getattr(tenant, "site_url", "") or "").strip()
     if custom:
         return custom
-    return settings.public_url(f"/club/{tenant.id}")
+    return settings.public_url(club_path(tenant))
+
+
+def club_path(tenant) -> str:
+    """Путь страницы записи на НАШЕМ домене: короткий, если задан адрес.
+
+    `/club/<id>` остаётся рабочим всегда — по нему уже сделаны ссылки и
+    QR-коды, ломать их нельзя."""
+    slug = (getattr(tenant, "slug", "") or "").strip()
+    return f"/c/{slug}" if slug else f"/club/{tenant.id}"
 
 
 def club_site_url_or_none(tenant) -> str | None:
