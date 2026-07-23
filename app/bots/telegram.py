@@ -2029,7 +2029,13 @@ async def _refresh_group_card(tenant_id: int, training_id: int) -> None:
     (счётчик мест, очередь, изменённые время/место). Тихо пропускает,
     если карточки в группе нет или сообщение недоступно.
     """
-    if not _bot:
+    # Карточку публиковал бот КОНКРЕТНОГО клуба, и редактировать её может
+    # только он: Telegram не даёт одному боту править сообщения другого.
+    # Раньше здесь всегда брался глобальный бот площадки — у клиентов со
+    # своим ботом счётчик мест в закреплённой карточке замирал навсегда, и
+    # молча, потому что исключение гасилось целиком.
+    bot = _bot_for(tenant_id)
+    if bot is None:
         return
     async with SessionLocal() as session:
         g = GlobalRepository(session)
@@ -2045,13 +2051,19 @@ async def _refresh_group_card(tenant_id: int, training_id: int) -> None:
         msg_id = training.group_message_id
         full = await _is_full(svc, training)
     try:
-        await _bot.edit_message_text(
+        await bot.edit_message_text(
             "📣 <b>Тренировка — запись открыта!</b>\n\n" + card,
             chat_id=chat_id, message_id=msg_id,
             reply_markup=_kb(training_id, is_admin=False, is_full=full),
             parse_mode="HTML")
-    except Exception:
-        pass  # не изменилось / удалено — не критично
+    except Exception as e:              # noqa: BLE001
+        # «message is not modified» — штатный ответ Telegram, когда текст не
+        # поменялся; он приходит часто и в логе не нужен. Всё остальное (нет
+        # прав, сообщение удалено, чужой бот) раньше глохло вместе с ним —
+        # именно поэтому баг с чужим ботом жил незамеченным.
+        if "not modified" not in str(e).lower():
+            logger.warning("Карточка клуба %s не обновлена: %s",
+                           tenant_id, type(e).__name__)
 
 
 # ─── мультиклиент: боты клубов с собственными токенами ───

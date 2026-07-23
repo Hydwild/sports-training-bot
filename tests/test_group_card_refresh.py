@@ -324,3 +324,136 @@ def test_public_web_cancel_refreshes_tg_group_card(monkeypatch):
         assert "отменена" in r.text
 
     assert refreshed == [(tid, train_id)]
+
+
+# ---------- карточку правит бот ЭТОГО клуба ----------
+#
+# Telegram не даёт одному боту редактировать сообщения другого. Раньше
+# обновление всегда шло глобальным ботом площадки: у клиента со своим
+# ботом счётчик мест в закреплённой карточке замирал навсегда — и молча,
+# потому что исключение гасилось целиком (`except Exception: pass`).
+# Заметно это только у клуба со своим ботом И групповым чатом, поэтому на
+# демо в личке дефект не проявлялся.
+
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import StaticPool  # noqa: E402
+
+from app.models.entities import Base, Tenant  # noqa: E402
+
+CHAT_ID = -1001234567890
+
+
+class _StubBot:
+    """Заглушка: помнит, что и кем редактировалось."""
+
+    def __init__(self, fail: Exception | None = None):
+        self.fail = fail
+        self.edits: list[tuple[int, int]] = []
+
+    async def edit_message_text(self, text, chat_id=None, message_id=None,
+                                **kw):
+        if self.fail:
+            raise self.fail
+        self.edits.append((chat_id, message_id))
+
+
+@pytest_asyncio.fixture
+async def maker(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool,
+                                 connect_args={"check_same_thread": False})
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    m = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(tg, "SessionLocal", m)
+    yield m
+    await engine.dispose()
+
+
+async def _club_with_card(maker, chat_id=CHAT_ID) -> tuple[int, int]:
+    async with maker() as s:
+        t = Tenant(name="Клуб со своим ботом", tg_chat_id=chat_id)
+        s.add(t)
+        await s.commit()
+        tid = t.id
+        svc = BookingService(s, tid)
+        tr = await svc.repo.add_training(
+            title="Занятие",
+            start_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1),
+            location="Зал", max_participants=5, duration_min=60,
+            state="published", publish_at=None,
+            created_by_platform="test", created_by_id=0)
+        tr.group_message_id = 777
+        await s.commit()
+        return tid, tr.id
+
+
+async def test_clients_own_bot_edits_the_card(maker, monkeypatch):
+    """Ключевой инвариант: правит бот клуба, а не глобальный."""
+    tid, train_id = await _club_with_card(maker)
+    platform_bot, club_bot = _StubBot(), _StubBot()
+    monkeypatch.setattr(tg, "_bot", platform_bot)
+    monkeypatch.setattr(tg, "_tenant_bots", {tid: club_bot})
+
+    await tg._refresh_group_card(tid, train_id)
+
+    assert club_bot.edits == [(CHAT_ID, 777)], "карточку правил не бот клуба"
+    assert platform_bot.edits == [], "глобальный бот полез в чужой чат"
+
+
+async def test_platform_bot_used_when_club_has_none(maker, monkeypatch):
+    """Клуб без своего бота обслуживает бот площадки — как и раньше."""
+    tid, train_id = await _club_with_card(maker)
+    platform_bot = _StubBot()
+    monkeypatch.setattr(tg, "_bot", platform_bot)
+    monkeypatch.setattr(tg, "_tenant_bots", {})
+
+    await tg._refresh_group_card(tid, train_id)
+    assert platform_bot.edits == [(CHAT_ID, 777)]
+
+
+async def test_no_bot_at_all_is_silent(maker, monkeypatch):
+    tid, train_id = await _club_with_card(maker)
+    monkeypatch.setattr(tg, "_bot", None)
+    monkeypatch.setattr(tg, "_tenant_bots", {})
+    await tg._refresh_group_card(tid, train_id)      # не падает
+
+
+async def test_unchanged_card_is_not_logged(maker, monkeypatch, caplog):
+    """«message is not modified» приходит постоянно — засорять лог нельзя."""
+    tid, train_id = await _club_with_card(maker)
+    bot = _StubBot(fail=RuntimeError("Bad Request: message is not modified"))
+    monkeypatch.setattr(tg, "_bot", None)
+    monkeypatch.setattr(tg, "_tenant_bots", {tid: bot})
+
+    with caplog.at_level("WARNING"):
+        await tg._refresh_group_card(tid, train_id)
+    assert "не обновлена" not in caplog.text
+
+
+async def test_real_failure_is_logged(maker, monkeypatch, caplog):
+    """А «нет прав» или «сообщение удалено» замалчивать нельзя: именно так
+    и жил незамеченным баг с чужим ботом."""
+    tid, train_id = await _club_with_card(maker)
+    bot = _StubBot(fail=RuntimeError("Forbidden: bot is not a member"))
+    monkeypatch.setattr(tg, "_bot", None)
+    monkeypatch.setattr(tg, "_tenant_bots", {tid: bot})
+
+    with caplog.at_level("WARNING"):
+        await tg._refresh_group_card(tid, train_id)
+    assert "не обновлена" in caplog.text and str(tid) in caplog.text
+
+
+@pytest.mark.parametrize("chat_id", [None, -100])
+async def test_club_without_group_chat_is_skipped(maker, monkeypatch, chat_id):
+    """Без группового чата обновлять нечего."""
+    tid, train_id = await _club_with_card(maker, chat_id)
+    bot = _StubBot()
+    monkeypatch.setattr(tg, "_bot", None)
+    monkeypatch.setattr(tg, "_tenant_bots", {tid: bot})
+    await tg._refresh_group_card(tid, train_id)
+    assert bot.edits == []
