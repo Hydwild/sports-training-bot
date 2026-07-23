@@ -419,7 +419,27 @@ async def cb_demo_role(query: CallbackQuery) -> None:
 
 @router.message(F.text.in_(_BTN_LIST_ALL))
 async def btn_list(message: Message) -> None:
-    await cmd_list(message)
+    """Кнопка меню открывает воронку: день → время → специалист.
+
+    Команда /list при этом остаётся плоским списком карточек: она удобна
+    админу, чтобы окинуть взглядом всё сразу, и на неё завязаны сценарии
+    в группах."""
+    async with SessionLocal() as session:
+        tid, _ = await _resolve_tenant(session, message.chat.id,
+                                       message.from_user.id)
+        if tid is None:
+            await message.answer("Чат не привязан к клубу."); return
+        _sus = await _tenant_suspended_msg(session, tid)
+        if _sus:
+            await message.answer(_sus); return
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        vert = getattr(tenant, "vertical", None) if tenant else None
+        svc = BookingService(session, tid,
+                             tz=tenant.timezone if tenant else None)
+        days = await _days_with_free(svc)
+    if not days:
+        await message.answer(vcfg(vert)["web_empty"]); return
+    await message.answer("📅 Выберите день:", reply_markup=_days_kb(days))
 
 
 @router.message(F.text == BTN_MY)
@@ -2699,3 +2719,148 @@ async def btn_back(message: Message) -> None:
         return
     await message.answer("Главное меню:",
                          reply_markup=_menu(is_admin, vertical=vert))
+
+
+# ─────────── Воронка записи: день → время → специалист ───────────
+#
+# Плоский список карточек годится, пока слотов пять. У салона или
+# репетитора окон на неделю десятки, и листать их в чате невозможно. На
+# странице записи такая воронка уже есть — здесь повторяем её шагами:
+# сначала день, потом свободное время этого дня, и только затем карточка,
+# где виден специалист.
+#
+# Дни без свободных мест не прячем, а помечаем: человек должен видеть, что
+# день существует и туда можно встать в очередь, иначе он решит, что клуб
+# в этот день не работает.
+
+_WD_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+async def _free_places(svc, t) -> int:
+    """Свободных мест в слоте. Отрицательных не бывает: сверх лимита —
+    это уже очередь, она считается отдельно."""
+    active = await svc.repo.count_active(t.id)
+    return max(0, (t.max_participants or 0) - active)
+
+
+async def _slots_by_day(svc) -> dict:
+    """{дата в поясе клуба: [слоты по возрастанию времени]}."""
+    out: dict = {}
+    for t in await svc.repo.list_upcoming():
+        day = t.start_at.astimezone(svc.tz).date()
+        out.setdefault(day, []).append(t)
+    for slots in out.values():
+        slots.sort(key=lambda s: s.start_at)
+    return dict(sorted(out.items()))
+
+
+def _day_label(day, free: int) -> str:
+    """«Пт 25.07» и точка, если мест уже нет — только очередь."""
+    mark = "" if free else " ·"
+    return f"{_WD_SHORT[day.weekday()]} {day.day:02d}.{day.month:02d}{mark}"
+
+
+def _days_kb(days: list) -> InlineKeyboardMarkup:
+    rows, row = [], []
+    for day, free in days:
+        row.append(InlineKeyboardButton(text=_day_label(day, free),
+                                        callback_data=f"bd:{day.isoformat()}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _times_kb(svc, slots: list) -> InlineKeyboardMarkup:
+    rows = []
+    for t in slots:
+        free = await _free_places(svc, t)
+        hhmm = t.start_at.astimezone(svc.tz).strftime("%H:%M")
+        tail = f"· {free} св." if free else "· очередь"
+        rows.append([InlineKeyboardButton(
+            text=f"{hhmm} · {t.title} {tail}"[:64],
+            callback_data=f"bt:{t.id}")])
+    rows.append([InlineKeyboardButton(text="← К датам",
+                                      callback_data="bd:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _days_with_free(svc) -> list:
+    """[(дата, сколько свободных мест за день)] — для подписи кнопок."""
+    days = []
+    for day, slots in (await _slots_by_day(svc)).items():
+        free = 0
+        for s in slots:
+            free += await _free_places(svc, s)
+        days.append((day, free))
+    return days
+
+
+@router.callback_query(F.data.startswith("bd:"))
+async def cb_book_day(query: CallbackQuery) -> None:
+    """Шаг 2: свободное время выбранного дня (и возврат к датам)."""
+    import datetime as _dt
+
+    raw = query.data.split(":", 1)[1]
+    async with SessionLocal() as session:
+        tid, _ = await _resolve_tenant(session, query.message.chat.id,
+                                       query.from_user.id)
+        if tid is None:
+            await query.answer("Чат не привязан к клубу.", show_alert=True)
+            return
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        svc = BookingService(session, tid,
+                             tz=tenant.timezone if tenant else None)
+
+        if raw == "back":
+            days = await _days_with_free(svc)
+            await query.answer()
+            await query.message.edit_text("📅 Выберите день:",
+                                          reply_markup=_days_kb(days))
+            return
+
+        try:
+            day = _dt.date.fromisoformat(raw)
+        except ValueError:
+            await query.answer()
+            return
+        slots = (await _slots_by_day(svc)).get(day, [])
+        if not slots:
+            await query.answer("На этот день записи нет", show_alert=True)
+            return
+        kb = await _times_kb(svc, slots)
+    await query.answer()
+    await query.message.edit_text(
+        f"🕒 {_WD_SHORT[day.weekday()]} {day.day:02d}.{day.month:02d} — "
+        "выберите время:", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("bt:"))
+async def cb_book_time(query: CallbackQuery) -> None:
+    """Шаг 3: карточка слота — там же виден специалист и кнопка записи."""
+    try:
+        train_id = int(query.data.split(":", 1)[1])
+    except ValueError:
+        await query.answer()
+        return
+    async with SessionLocal() as session:
+        tid, is_admin = await _resolve_tenant(session, query.message.chat.id,
+                                              query.from_user.id)
+        if tid is None:
+            await query.answer("Чат не привязан к клубу.", show_alert=True)
+            return
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        svc = BookingService(session, tid,
+                             tz=tenant.timezone if tenant else None)
+        t = await svc.repo.get_training(train_id)
+        if t is None:
+            await query.answer("Запись уже недоступна", show_alert=True)
+            return
+        as_admin = is_admin and query.message.chat.type == "private"
+        card = await views.training_card(svc, t, for_admin=as_admin)
+        full = await _is_full(svc, t)
+    await query.answer()
+    await query.message.edit_text(card, reply_markup=_kb(t.id, is_admin, full),
+                                  parse_mode="HTML")
