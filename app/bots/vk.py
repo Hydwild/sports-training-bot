@@ -1763,7 +1763,9 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
             pass
         await _show_list(user_id, group_id)
     elif text in ("список", "тренировки", "🏸 тренировки"):
-        await _show_list(user_id, group_id)
+        # с меню открываем воронку день → время → занятие; плоский список
+        # остаётся на /start и на кнопке «Обновить список»
+        await _vk_open_funnel(user_id, group_id)
     elif text in ("мои записи", "📅 мои записи", "моя тренировка", "мои"):
         await _show_my(user_id, group_id)
     elif text in ("рассылка", "📢 рассылка"):
@@ -1997,6 +1999,11 @@ async def setup() -> None:
             await _handle_text(user_id, "профиль", gid)
         elif action == "create":
             await _start_create(user_id, gid)
+        elif action == "bd":                         # воронка: выбор дня
+            snackbar = await _vk_show_day(peer_id, cmid, gid,
+                                          str(payload.get("d") or ""))
+        elif action == "bt":                         # воронка: выбор времени
+            snackbar = await _vk_show_slot(peer_id, cmid, gid, tid)
         elif action == "bcast":
             await _start_bcast(user_id, gid)
         elif action == "bcast_yes":
@@ -2492,3 +2499,165 @@ async def refresh_cards(tenant_id: int, training_id: int) -> int:
             await session.execute(delete(VkCard).where(VkCard.id.in_(gone)))
             await session.commit()
     return updated
+
+
+# ─────────── Воронка записи в VK: день → время → специалист ───────────
+#
+# Та же логика, что в Telegram, но с поправкой на VK: inline-клавиатура
+# здесь вмещает не больше шести кнопок. Поэтому дней показываем максимум
+# шесть, а времён — пять плюс «назад»; если не поместилось, честно пишем
+# об этом в тексте и отправляем на страницу записи, где ограничения нет.
+
+VK_INLINE_LIMIT = 6                 # жёсткий предел VK для inline-клавиатуры
+_VK_MAX_DAYS = VK_INLINE_LIMIT
+_VK_MAX_TIMES = VK_INLINE_LIMIT - 1  # одну кнопку занимает «← К датам»
+_WD_SHORT_VK = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+async def _vk_free_places(svc, t) -> int:
+    active = await svc.repo.count_active(t.id)
+    return max(0, (t.max_participants or 0) - active)
+
+
+async def _vk_slots_by_day(svc) -> dict:
+    out: dict = {}
+    for t in await svc.repo.list_upcoming():
+        day = t.start_at.astimezone(svc.tz).date()
+        out.setdefault(day, []).append(t)
+    for slots in out.values():
+        slots.sort(key=lambda s: s.start_at)
+    return dict(sorted(out.items()))
+
+
+async def _vk_days_with_free(svc) -> list:
+    days = []
+    for day, slots in (await _vk_slots_by_day(svc)).items():
+        free = 0
+        for s in slots:
+            free += await _vk_free_places(svc, s)
+        days.append((day, free))
+    return days
+
+
+def _vk_days_kb(days: list) -> str:
+    from app.bots.vk_keyboard import Callback, Keyboard, KeyboardButtonColor
+
+    kb = Keyboard(inline=True)
+    for i, (day, free) in enumerate(days[:_VK_MAX_DAYS]):
+        if i and i % 2 == 0:
+            kb.row()
+        mark = "" if free else " ·"
+        kb.add(Callback(
+            f"{_WD_SHORT_VK[day.weekday()]} {day.day:02d}.{day.month:02d}{mark}",
+            payload={"a": "bd", "d": day.isoformat()}),
+            color=KeyboardButtonColor.PRIMARY if free
+            else KeyboardButtonColor.SECONDARY)
+    return kb.get_json()
+
+
+async def _vk_times_kb(svc, slots: list) -> str:
+    from app.bots.vk_keyboard import Callback, Keyboard, KeyboardButtonColor
+
+    kb = Keyboard(inline=True)
+    for i, t in enumerate(slots[:_VK_MAX_TIMES]):
+        if i:
+            kb.row()
+        free = await _vk_free_places(svc, t)
+        hhmm = t.start_at.astimezone(svc.tz).strftime("%H:%M")
+        tail = f"· {free} св." if free else "· очередь"
+        kb.add(Callback(f"{hhmm} · {t.title} {tail}"[:40],
+                        payload={"a": "bt", "tid": t.id}),
+               color=KeyboardButtonColor.PRIMARY if free
+               else KeyboardButtonColor.SECONDARY)
+    kb.row()
+    kb.add(Callback("← К датам", payload={"a": "bd", "d": "back"}))
+    return kb.get_json()
+
+
+def _vk_more_note(shown: int, total: int, tenant) -> str:
+    """Честная приписка, если в клавиатуру влезло не всё."""
+    if total <= shown:
+        return ""
+    from app.core.club_url import club_site_url_or_none
+    url = club_site_url_or_none(tenant)
+    tail = f"\nВсе варианты — на странице записи: {url}" if url else ""
+    return f"\n\n(показаны первые {shown} из {total}){tail}"
+
+
+async def _vk_open_funnel(user_id: int, group_id=None) -> None:
+    """Шаг 1: выбор дня."""
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            await _send(user_id, "Клуб не привязан. Обратитесь к тренеру.")
+            return
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        await _upsert_vk_user(svc, user_id)
+        await session.commit()
+        days = await _vk_days_with_free(svc)
+    if not days:
+        from app.core.verticals import vcfg as _vcfg
+        await _send(user_id, _vcfg(_ctx_vertical.get())["no_upcoming"],
+                    tenant_id=tenant.id)
+        return
+    note = _vk_more_note(min(len(days), _VK_MAX_DAYS), len(days), tenant)
+    await _send(user_id, "📅 Выберите день:" + note,
+                keyboard=_vk_days_kb(days), tenant_id=tenant.id)
+
+
+async def _vk_show_day(peer_id: int, cmid: int, group_id, raw: str) -> str:
+    """Шаг 2: время выбранного дня. Правим то же сообщение, а не шлём новое —
+    иначе диалог захламляется на каждом шаге."""
+    import datetime as _dt
+
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            return "Клуб не привязан"
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        if raw == "back":
+            days = await _vk_days_with_free(svc)
+            text = "📅 Выберите день:" + _vk_more_note(
+                min(len(days), _VK_MAX_DAYS), len(days), tenant)
+            kb = _vk_days_kb(days)
+        else:
+            try:
+                day = _dt.date.fromisoformat(raw)
+            except ValueError:
+                return "Не разобрал дату"
+            slots = (await _vk_slots_by_day(svc)).get(day, [])
+            if not slots:
+                return "На этот день записи нет"
+            text = (f"🕒 {_WD_SHORT_VK[day.weekday()]} "
+                    f"{day.day:02d}.{day.month:02d} — выберите время:"
+                    + _vk_more_note(min(len(slots), _VK_MAX_TIMES),
+                                    len(slots), tenant))
+            kb = await _vk_times_kb(svc, slots)
+    try:
+        await _api().messages.edit(peer_id=peer_id,
+                                   conversation_message_id=cmid,
+                                   message=text, keyboard=kb)
+    except Exception as e:              # noqa: BLE001
+        logger.warning("VK: шаг воронки не отрисован: %s", type(e).__name__)
+    return "Готово"
+
+
+async def _vk_show_slot(peer_id: int, cmid: int, group_id, tid: int) -> str:
+    """Шаг 3: карточка занятия — там же виден специалист и кнопка записи."""
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            return "Клуб не привязан"
+        svc = BookingService(session, tenant.id, tz=tenant.timezone)
+        training = await svc.repo.get_training(tid)
+        if training is None:
+            return "Запись уже недоступна"
+        card = await views.training_card_plain(svc, training)
+        full = await _is_full(svc, training)
+    try:
+        await _api().messages.edit(peer_id=peer_id,
+                                   conversation_message_id=cmid,
+                                   message=card, keyboard=_kb(tid, full, False))
+    except Exception as e:              # noqa: BLE001
+        logger.warning("VK: карточка шага не отрисована: %s", type(e).__name__)
+    return "Готово"
