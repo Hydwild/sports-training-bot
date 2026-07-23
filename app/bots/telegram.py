@@ -256,16 +256,63 @@ class NewMaster(StatesGroup):
     specialty = State()
 
 
-def _demo_role_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
+def _site_row(tenant_id: int, vertical: str | None = None) -> list | None:
+    """Ряд с кнопкой-ссылкой на публичную страницу записи.
+
+    None, если PUBLIC_BASE_URL не настроен: Telegram принимает в кнопке
+    только абсолютный http(s)-адрес, а подставлять host из запроса нельзя —
+    его задаёт клиент."""
+    try:
+        url = settings.public_url(f"/club/{tenant_id}")
+    except RuntimeError:
+        return None
+    label = vcfg(vertical).get("web_eyebrow") or "Страница записи"
+    return [InlineKeyboardButton(text=f"🌐 {label}", url=url)]
+
+
+def _site_kb(tenant_id: int, vertical: str | None = None):
+    row = _site_row(tenant_id, vertical)
+    return InlineKeyboardMarkup(inline_keyboard=[row]) if row else None
+
+
+async def _offer_site(message: Message, tenant_id: int,
+                      vertical: str | None = None,
+                      as_coach: bool = False) -> None:
+    """Предлагает открыть публичную страницу записи.
+
+    Бот показывает продукт со стороны клуба, а половина ценности — в том,
+    как всё выглядит у КЛИЕНТА в браузере: витрина, фото, мастера, выбор
+    времени. Без явной ссылки эту часть демо просто не находят."""
+    kb = _site_kb(tenant_id, vertical)
+    if kb is None:
+        return          # PUBLIC_BASE_URL не настроен — молча пропускаем
+    text = ("🌐 А так ваш клуб видят клиенты в браузере. Там же можно "
+            "записаться — попробуйте, запись сразу появится у вас в боте."
+            if as_coach else
+            "🌐 Записаться можно и на сайте — попробуйте, там видно фото, "
+            "описание и свободное время.")
+    await message.answer(text, reply_markup=kb)
+
+
+def _demo_role_kb(tenant_id: int | None = None,
+                  vertical: str | None = None) -> InlineKeyboardMarkup:
+    rows = [[
         InlineKeyboardButton(text="🎓 Я тренер", callback_data="demo:coach"),
         InlineKeyboardButton(text="🙋 Я участник", callback_data="demo:participant"),
-    ]])
+    ]]
+    # смотреть витрину можно и не выбирая роль: часть посетителей пришла
+    # оценить именно страницу записи, а не бота
+    if tenant_id is not None:
+        site = _site_row(tenant_id, vertical)
+        if site:
+            rows.append(site)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     needs_role_pick = False
+    demo_tid, demo_vert = None, "sport"
     async with SessionLocal() as session:
         tid, is_admin = await _resolve_tenant(session, message.chat.id, message.from_user.id)
         if tid is None:
@@ -283,6 +330,8 @@ async def cmd_start(message: Message) -> None:
             if tenant and tenant.is_demo and not is_admin:
                 existing = await svc.repo.get_membership(message.from_user.id)
                 needs_role_pick = existing is None
+                demo_tid = tid
+                demo_vert = getattr(tenant, "vertical", None) or "sport"
             await session.commit()
         except Exception as e:
             logger.warning("Не удалось обновить профиль при /start: %s", e)
@@ -292,8 +341,10 @@ async def cmd_start(message: Message) -> None:
             "🧪 <b>Демо-версия бота</b>\n\n"
             "Здесь можно попробовать бота и как тренер, и как участник — "
             "выберите роль. Демо-клуб каждую ночь обновляется заново, "
-            "так что можно нажимать что угодно.",
-            reply_markup=_demo_role_kb(), parse_mode="HTML")
+            "так что можно нажимать что угодно.\n\n"
+            "Ниже — ссылка на страницу записи: так это увидят ваши клиенты "
+            "в браузере, записаться можно прямо там.",
+            reply_markup=_demo_role_kb(demo_tid, demo_vert), parse_mode="HTML")
         return
     custom, vert = None, "sport"
     try:
@@ -345,6 +396,7 @@ async def cb_demo_role(query: CallbackQuery) -> None:
             parse_mode="HTML")
         await query.message.answer("👇 Меню тренера:",
                                    reply_markup=_menu(True, vertical=vert))
+        await _offer_site(query.message, tid, vert, as_coach=True)
     else:
         await query.answer("Вы участник демо-клуба ✅")
         await query.message.edit_text(
@@ -352,6 +404,7 @@ async def cb_demo_role(query: CallbackQuery) -> None:
             "смотрите статистику — как обычный клиент клуба.", parse_mode="HTML")
         await query.message.answer("👇 Меню участника:",
                                    reply_markup=_menu(False, vertical=vert))
+        await _offer_site(query.message, tid, vert, as_coach=False)
 
 
 @router.message(F.text.in_(_BTN_LIST_ALL))
@@ -672,6 +725,29 @@ async def rename_value(message: Message, state: FSMContext) -> None:
         await message.answer(f"✅ Участник теперь отображается как «{display}».")
     else:
         await message.answer(f"✅ Возвращено имя из Telegram: «{display}».")
+
+
+@router.message(Command("site"))
+async def cmd_site(message: Message) -> None:
+    """Ссылка на публичную страницу записи этого клуба.
+
+    Полезна не только в демо: участник спрашивает «где записаться без
+    бота», а тренеру нужна ссылка, чтобы дать её клиентам или на печать."""
+    async with SessionLocal() as session:
+        tid, _ = await _resolve_tenant(session, message.chat.id,
+                                       message.from_user.id)
+        if tid is None:
+            await message.answer("Этот чат не привязан к клубу.")
+            return
+        tenant = await GlobalRepository(session).get_tenant(tid)
+    vert = getattr(tenant, "vertical", None) if tenant else None
+    kb = _site_kb(tid, vert)
+    if kb is None:
+        await message.answer(
+            "Публичный адрес не настроен — попросите администратора "
+            "площадки задать PUBLIC_BASE_URL.")
+        return
+    await message.answer("🌐 Страница записи вашего клуба:", reply_markup=kb)
 
 
 @router.message(Command("list"))

@@ -119,7 +119,10 @@ async def test_start_shows_role_picker_on_demo_for_new_visitor():
     text, kw = msg.sent[0]
     assert "Демо-версия" in text
     kb = kw["reply_markup"]
-    datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    # кнопки выбора роли на месте; рядом может быть ссылка на витрину
+    # (её нет, если PUBLIC_BASE_URL не настроен — см. test_bot_site_link)
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row
+             if b.callback_data]
     assert datas == ["demo:coach", "demo:participant"]
 
 
@@ -161,7 +164,9 @@ async def test_cb_demo_coach_creates_membership_and_shows_admin_menu():
         m = await TenantRepository(s, tid).get_membership(4001)
         assert m is not None and m.role == "coach"
     assert any("тренер демо-клуба" in t for t in query.message.edits)
-    assert len(query.message.sent) == 1
+    # меню тренера + приглашение открыть витрину (второе появляется только
+    # при настроенном PUBLIC_BASE_URL — см. test_bot_site_link)
+    assert query.message.sent
 
 
 async def test_cb_demo_participant_does_not_create_membership():
