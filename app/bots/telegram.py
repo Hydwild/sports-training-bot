@@ -417,16 +417,38 @@ async def cb_demo_role(query: CallbackQuery) -> None:
         await _offer_site(query.message, site, vert, as_coach=False)
 
 
+async def _list_flat(message: Message, session, tid: int, tenant,
+                     is_admin: bool = False) -> None:
+    """Плоский список карточек ближайших занятий — историческое поведение
+    бота. Один рендер на /list и на кнопку меню у спорт-клубов."""
+    svc = BookingService(session, tid,
+                         tz=tenant.timezone if tenant else None)
+    trainings = await svc.repo.list_upcoming()
+    if not trainings:
+        await message.answer("Ближайших тренировок нет.")
+        return
+    as_admin = is_admin and message.chat.type == "private"
+    for t in trainings:
+        full = await _is_full(svc, t)
+        await message.answer(
+            await views.training_card(svc, t, for_admin=as_admin),
+            reply_markup=_kb(t.id, is_admin, full),
+            parse_mode="HTML")
+
+
 @router.message(F.text.in_(_BTN_LIST_ALL))
 async def btn_list(message: Message) -> None:
-    """Кнопка меню открывает воронку: день → время → специалист.
+    """Салонам и репетиторам кнопка меню открывает воронку день → время →
+    специалист; тренировкам — привычный плоский список карточек.
 
-    Команда /list при этом остаётся плоским списком карточек: она удобна
-    админу, чтобы окинуть взглядом всё сразу, и на неё завязаны сценарии
+    Команда /list остаётся плоским списком везде: она удобна админу,
+    чтобы окинуть взглядом всё сразу, и на неё завязаны сценарии
     в группах."""
+    from app.core.verticals import uses_funnel
+
     async with SessionLocal() as session:
-        tid, _ = await _resolve_tenant(session, message.chat.id,
-                                       message.from_user.id)
+        tid, is_admin = await _resolve_tenant(session, message.chat.id,
+                                              message.from_user.id)
         if tid is None:
             await message.answer("Чат не привязан к клубу."); return
         _sus = await _tenant_suspended_msg(session, tid)
@@ -434,6 +456,9 @@ async def btn_list(message: Message) -> None:
             await message.answer(_sus); return
         tenant = await GlobalRepository(session).get_tenant(tid)
         vert = getattr(tenant, "vertical", None) if tenant else None
+        if not uses_funnel(vert):
+            await _list_flat(message, session, tid, tenant, is_admin)
+            return
         svc = BookingService(session, tid,
                              tz=tenant.timezone if tenant else None)
         days = await _days_with_free(svc)
@@ -790,17 +815,8 @@ async def cmd_list(message: Message) -> None:
         _sus = await _tenant_suspended_msg(session, tid)
         if _sus:
             await message.answer(_sus); return
-        svc = BookingService(session, tid)
-        trainings = await svc.repo.list_upcoming()
-        if not trainings:
-            await message.answer("Ближайших тренировок нет."); return
-        for t in trainings:
-            full = await _is_full(svc, t)
-            as_admin = is_admin and message.chat.type == "private"
-            await message.answer(
-                await views.training_card(svc, t, for_admin=as_admin),
-                reply_markup=_kb(t.id, is_admin, full),
-                parse_mode="HTML")
+        tenant = await GlobalRepository(session).get_tenant(tid)
+        await _list_flat(message, session, tid, tenant, is_admin)
 
 
 @router.message(Command("profile"))

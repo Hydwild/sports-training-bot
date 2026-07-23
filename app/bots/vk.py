@@ -1763,9 +1763,9 @@ async def _handle_text(user_id: int, text: str, group_id=None) -> None:
             pass
         await _show_list(user_id, group_id)
     elif text in ("список", "тренировки", "🏸 тренировки"):
-        # с меню открываем воронку день → время → занятие; плоский список
-        # остаётся на /start и на кнопке «Обновить список»
-        await _vk_open_funnel(user_id, group_id)
+        # салоны и репетиторы — воронка день → время → занятие;
+        # тренировки остаются плоским списком карточек
+        await _open_booking(user_id, group_id)
     elif text in ("мои записи", "📅 мои записи", "моя тренировка", "мои"):
         await _show_my(user_id, group_id)
     elif text in ("рассылка", "📢 рассылка"):
@@ -1989,7 +1989,7 @@ async def setup() -> None:
                                       payload.get("t"), gid)
             await _send(user_id, snackbar)
         elif action == "list":
-            await _show_list(user_id, gid)
+            await _open_booking(user_id, gid)
         elif action == "refresh":                    # обновить карточку на месте
             await _edit_card(peer_id, cmid, tid, gid, admin_uid=user_id)
             snackbar = "🔄 Список обновлён"
@@ -2603,6 +2603,22 @@ async def _vk_open_funnel(user_id: int, group_id=None) -> None:
     note = _vk_more_note(min(len(days), _VK_MAX_DAYS), len(days), tenant)
     await _send(user_id, "📅 Выберите день:" + note,
                 keyboard=_vk_days_kb(days), tenant_id=tenant.id)
+
+
+async def _open_booking(user_id: int, group_id=None) -> None:
+    """Единственная развилка «воронка или список» — по вертикали клуба."""
+    from app.core.verticals import uses_funnel
+
+    async with SessionLocal() as session:
+        tenant = await _resolve_tenant(session, group_id)
+        if tenant is None:
+            await _send(user_id, "Клуб не привязан. Обратитесь к тренеру.")
+            return
+        funnel = uses_funnel(getattr(tenant, "vertical", None))
+    if funnel:
+        await _vk_open_funnel(user_id, group_id)
+    else:
+        await _show_list(user_id, group_id)
 
 
 async def _vk_show_day(peer_id: int, cmid: int, group_id, raw: str) -> str:

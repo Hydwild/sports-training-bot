@@ -223,3 +223,51 @@ async def test_no_slots_gives_vertical_specific_message(maker):
 
     from app.core.verticals import vcfg
     assert "занятий" in vcfg("tutor")["web_empty"]
+
+
+# ---------- воронка включена не всем ----------
+
+class _Msg:
+    """Минимум от aiogram.Message, который трогает btn_list."""
+
+    class _Chat:
+        id, type = 500, "private"
+
+    class _User:
+        id, full_name, username = 42, "Гость", None
+
+    def __init__(self):
+        self.chat, self.from_user = self._Chat(), self._User()
+        self.answers: list[tuple[str, object]] = []
+
+    async def answer(self, text, reply_markup=None, **kw):
+        self.answers.append((text, reply_markup))
+
+
+async def _press_list(maker, monkeypatch, vertical) -> _Msg:
+    tid = await _club(maker, vertical)
+    await _slot(maker, tid, days=1, hour=10, title="Окно")
+    token = tg._ctx_tenant.set(tid)
+    try:
+        msg = _Msg()
+        await tg.btn_list(msg)
+        return msg
+    finally:
+        tg._ctx_tenant.reset(token)
+
+
+@pytest.mark.parametrize("vertical", ["beauty", "tutor"])
+async def test_menu_opens_funnel_for_salons_and_tutors(maker, monkeypatch,
+                                                       vertical):
+    msg = await _press_list(maker, monkeypatch, vertical)
+    assert [t for t, _ in msg.answers] == ["📅 Выберите день:"]
+
+
+@pytest.mark.parametrize("vertical", ["sport", None])
+async def test_menu_keeps_flat_list_for_sport(maker, monkeypatch, vertical):
+    """Тренировкам воронка не нужна: групповых занятий немного, и свободные
+    места важно видеть сразу, без лишнего шага. None — существующие клубы,
+    заведённые до вертикалей: их поведение меняться не должно."""
+    msg = await _press_list(maker, monkeypatch, vertical)
+    assert all("Выберите день" not in t for t, _ in msg.answers)
+    assert "Окно" in msg.answers[0][0]

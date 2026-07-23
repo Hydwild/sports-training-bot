@@ -8,6 +8,10 @@
 Отдельная сложность VK: inline-клавиатура вмещает всего шесть кнопок. Значит
 воронка обязана честно признаваться, когда показала не всё, а не молча
 терять дни — иначе человек решит, что свободных мест нет.
+
+Воронка включена только салонам и репетиторам. У спорт-клубов групповых
+занятий немного, их важно видеть сразу все вместе со свободными местами —
+там остаётся привычный плоский список.
 """
 import datetime as dt
 import json
@@ -64,9 +68,9 @@ async def api(monkeypatch):
     return a
 
 
-async def _club(maker) -> int:
+async def _club(maker, vertical: str = "beauty") -> int:
     async with maker() as s:
-        t = Tenant(name="Клуб ВК", vk_group_id=GROUP_ID)
+        t = Tenant(name="Клуб ВК", vk_group_id=GROUP_ID, vertical=vertical)
         s.add(t)
         await s.commit()
         return t.id
@@ -253,3 +257,53 @@ async def test_vanished_slot_is_reported_not_crashed(maker, api):
                                     tid=99999)
     assert api.messages.edited == []
     assert "недоступна" in answer
+
+
+# ---------- развилка по вертикали ----------
+
+async def test_salon_menu_opens_the_funnel(maker, api):
+    tid = await _club(maker, "beauty")
+    await _slot(maker, tid, _in_days(1))
+
+    await vk._open_booking(777, GROUP_ID)
+
+    (_, text, kb) = api.messages.sent[0]
+    assert "Выберите день" in text
+    assert [b["payload"]["a"] for b in _buttons(kb)] == ["bd"]
+
+
+async def test_tutor_menu_opens_the_funnel(maker, api):
+    tid = await _club(maker, "tutor")
+    await _slot(maker, tid, _in_days(1))
+
+    await vk._open_booking(777, GROUP_ID)
+
+    assert "Выберите день" in api.messages.sent[0][1]
+
+
+async def test_sport_menu_keeps_the_flat_list(maker, api):
+    """Тренировкам воронку не навязываем: карточки со свободными местами
+    видны сразу, лишний шаг только мешает."""
+    tid = await _club(maker, "sport")
+    for n in (1, 2):
+        await _slot(maker, tid, _in_days(n))
+
+    await vk._open_booking(777, GROUP_ID)
+
+    texts = [m[1] for m in api.messages.sent]
+    assert not any("Выберите день" in t for t in texts)
+    # две карточки занятий плюс напоминание про меню
+    assert len(texts) == 3
+    assert any(b["payload"] == {"a": "su", "tid": 1}
+               for b in _buttons(api.messages.sent[0][2]))
+
+
+async def test_club_without_vertical_is_sport(maker, api):
+    """Все существующие клубы заведены без вертикали — их поведение
+    меняться не должно."""
+    tid = await _club(maker, None)
+    await _slot(maker, tid, _in_days(1))
+
+    await vk._open_booking(777, GROUP_ID)
+
+    assert not any("Выберите день" in m[1] for m in api.messages.sent)
