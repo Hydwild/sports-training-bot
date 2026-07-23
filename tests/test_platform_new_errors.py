@@ -100,3 +100,76 @@ def test_creation_with_valid_key_works(client, monkeypatch):
     r = _create(client, tg_token="111:AAA", tg_delivery_mode="polling")
     assert r.status_code == 200
     assert "Internal Server Error" not in r.text
+
+
+# ---------- занятый короткий адрес ----------
+
+def _save_slug(c, tenant_id: int, slug: str, name: str = "Клуб"):
+    page = c.get(f"/admin/platform/{tenant_id}/edit")
+    m = re.search(r'name="csrf" value="([^"]+)"', page.text)
+    assert m, "форма клуба недоступна"
+    return c.post(f"/admin/platform/{tenant_id}/edit", data={
+        "csrf": m.group(1), "club_name": name, "timezone": "Europe/Moscow",
+        "vertical": "sport", "slug": slug})
+
+
+def _new_club(c, name: str) -> int:
+    return c.post("/api/tenants", json={"name": name},
+                  headers={"x-admin-token": "tok"}).json()["id"]
+
+
+def test_duplicate_slug_explains_itself(client):
+    """Боевой случай: короткий адрес уже занят. Уникальность стоит на
+    уровне БД, и раньше конфликт прилетал оператору голым 500."""
+    a = _new_club(client, "Клуб Первый")
+    b = _new_club(client, "Клуб Второй")
+
+    assert _save_slug(client, a, "zanyatyj-adres").status_code == 200
+    r = _save_slug(client, b, "zanyatyj-adres")
+
+    assert r.status_code == 400, "конфликт ввода — не сбой сервера"
+    text = _plain(r.text)
+    assert "занят" in text
+    assert "Internal Server Error" not in text
+
+
+def test_form_still_works_after_a_conflict(client):
+    """После неудачного commit сессия непригодна: без rollback падал бы уже
+    следующий запрос к ней."""
+    a = _new_club(client, "Клуб Третий")
+    b = _new_club(client, "Клуб Четвёртый")
+    _save_slug(client, a, "adres-treti")
+    _save_slug(client, b, "adres-treti")            # конфликт
+
+    # форма открывается и принимает другой адрес
+    assert client.get(f"/admin/platform/{b}/edit").status_code == 200
+    assert _save_slug(client, b, "adres-chetvyorty").status_code == 200
+
+
+def test_conflict_does_not_change_the_club(client):
+    """Клуб должен остаться прежним, а не сохраниться наполовину."""
+    import asyncio
+
+    a = _new_club(client, "Клуб Пятый")
+    b = _new_club(client, "Клуб Шестой")
+    _save_slug(client, a, "adres-pyaty")
+    _save_slug(client, b, "adres-pyaty", name="Переименованный")
+
+    async def name_of() -> str:
+        from app.db.engine import SessionLocal, engine
+        from app.models.entities import Tenant
+        await engine.dispose()
+        async with SessionLocal() as s:
+            return (await s.get(Tenant, b)).name
+
+    assert asyncio.run(name_of()) == "Клуб Шестой"
+
+
+def test_freeing_a_slug_lets_another_club_take_it(client):
+    a = _new_club(client, "Клуб Седьмой")
+    b = _new_club(client, "Клуб Восьмой")
+    _save_slug(client, a, "obshiy-adres")
+    assert _save_slug(client, b, "obshiy-adres").status_code == 400
+
+    _save_slug(client, a, "")                        # освободили
+    assert _save_slug(client, b, "obshiy-adres").status_code == 200

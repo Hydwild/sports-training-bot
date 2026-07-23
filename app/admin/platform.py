@@ -71,6 +71,25 @@ def _token_error_hint(exc: Exception) -> str:
     return (f"внутренняя ошибка ({type(exc).__name__}), подробности — в "
             "логах сервиса.")
 
+
+def _is_conflict(exc: Exception) -> bool:
+    """Нарушение уникальности — это ошибка ВВОДА, а не сбой сервера."""
+    from sqlalchemy.exc import IntegrityError
+    return isinstance(exc, IntegrityError)
+
+
+def _save_error_hint(exc: Exception) -> str:
+    """Почему не сохранилось — словами оператора.
+
+    Единственное уникальное поле формы — короткий адрес, поэтому конфликт
+    почти наверняка про него. Текст самой ошибки наружу не отдаём: в нём
+    имена таблиц и внутренние подробности, а в логе она есть целиком."""
+    if _is_conflict(exc):
+        return ("такой короткий адрес уже занят другим клубом — придумайте "
+                "другой (например, добавьте город или год).")
+    return (f"внутренняя ошибка ({type(exc).__name__}), подробности — в "
+            "логах сервиса. Клуб не изменён.")
+
 router = APIRouter(prefix="/admin/platform", tags=["platform-admin"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -549,7 +568,24 @@ async def platform_edit_submit(tenant_id: int, request: Request,
     tenant.about = about.strip()[:2000] or None
     tenant.address = address.strip()[:300] or None
     tenant.contact_phone = contact_phone.strip()[:32] or None
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception as e:              # noqa: BLE001
+        # Уникальность короткого адреса стоит на уровне БД, и занятый slug
+        # прилетает сюда как IntegrityError — раньше это давало голый 500,
+        # хотя причина простая и оператор может её исправить сам.
+        # После неудачного commit сессия непригодна: без rollback падает уже
+        # следующий запрос к ней (рендер формы читает клуб).
+        await session.rollback()
+        _plat_logger.warning("Клуб id=%s не сохранён: %s",
+                             tenant_id, type(e).__name__)
+        tenant = await g.get_tenant(tenant_id)
+        return templates.TemplateResponse(request, "platform_edit.html",
+            _ctx(request, t=tenant, saved=False,
+                 tg_state=bot_tokens.mask(tenant, "tg"),
+                 vk_state=bot_tokens.mask(tenant, "vk"),
+                 error=_save_error_hint(e)),
+            status_code=400 if _is_conflict(e) else 500)
 
     try:
         # пустое поле означает «оставить прежний токен», а не «стереть»:
